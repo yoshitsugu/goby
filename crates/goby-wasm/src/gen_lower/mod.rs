@@ -619,10 +619,10 @@ impl std::fmt::Display for GeneralLowerUnsupportedReason {
 
 /// Names from stdlib that have dedicated special lowering in `lower_comp_inner` or
 /// `backend_intrinsic_for` and must NOT be routed as generic `DeclCall` targets.
-/// - `each`, `map`, `graphemes`: handled by special `lower_comp_inner` branches.
+/// - `graphemes`: handled by special `lower_comp_inner` branch.
 /// - `split`: handled by `StringSplit` intrinsic (non-empty sep) or redirected to
 ///   `StringGraphemesList` (empty string literal sep) before reaching the intrinsic path.
-const SPECIALLY_LOWERED_STDLIB_NAMES: &[&str] = &["each", "map", "graphemes", "split"];
+const SPECIALLY_LOWERED_STDLIB_NAMES: &[&str] = &["graphemes", "split"];
 
 fn type_expr_returns_wasm_heap(expr: &TypeExpr) -> bool {
     match expr {
@@ -1351,17 +1351,6 @@ fn collect_decl_call_names(instrs: &[backend_ir::WasmBackendInstr], out: &mut Ha
                     collect_decl_call_names(field, out);
                 }
             }
-            backend_ir::WasmBackendInstr::ListEach {
-                list_instrs,
-                func_instrs,
-            }
-            | backend_ir::WasmBackendInstr::ListMap {
-                list_instrs,
-                func_instrs,
-            } => {
-                collect_decl_call_names(list_instrs, out);
-                collect_decl_call_names(func_instrs, out);
-            }
             backend_ir::WasmBackendInstr::ListReverseFoldPrepend {
                 list_instrs,
                 prefix_element_instrs,
@@ -1371,9 +1360,6 @@ fn collect_decl_call_names(instrs: &[backend_ir::WasmBackendInstr], out: &mut Ha
                 for elem in prefix_element_instrs {
                     collect_decl_call_names(elem, out);
                 }
-            }
-            backend_ir::WasmBackendInstr::ListEachEffect { list_instrs, .. } => {
-                collect_decl_call_names(list_instrs, out);
             }
             _ => {}
         }
@@ -1540,7 +1526,7 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
     // Add stdlib-exported names to known_decls so user-written helpers that call stdlib
     // functions via bare names are lowered correctly.
     // Exclude names that have dedicated special lowering in lower_comp_inner or backend_intrinsic_for
-    // (each, map, graphemes, split) — those must NOT be routed through the generic DeclCall path.
+    // (graphemes, split) — those must NOT be routed through the generic DeclCall path.
     for name in stdlib_export_map.keys() {
         if !SPECIALLY_LOWERED_STDLIB_NAMES.contains(&name.as_str()) {
             known_decls.insert(name.clone());

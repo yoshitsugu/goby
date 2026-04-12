@@ -47,7 +47,8 @@ use crate::gen_lower::value::{
 use crate::grapheme_semantics::collect_extended_grapheme_spans;
 use crate::host_runtime::HostIntrinsicImport;
 use crate::layout::{
-    GLOBAL_RUNTIME_ERROR_OFFSET, RUNTIME_ERROR_MEMORY_EXHAUSTION, RUNTIME_ERROR_NONE,
+    GLOBAL_HEAP_CURSOR_OFFSET, GLOBAL_HOST_BUMP_CURSOR_OFFSET, GLOBAL_RUNTIME_ERROR_OFFSET,
+    RUNTIME_ERROR_MEMORY_EXHAUSTION, RUNTIME_ERROR_NONE,
 };
 use crate::memory_config::{DEFAULT_WASM_MEMORY_CONFIG, WASM_PAGE_BYTES};
 use crate::runtime_env::split_input_lines;
@@ -163,6 +164,23 @@ fn run_wasm_bytes_with_stdin_and_config(
         )
         .map_err(|e| format!("linker register string_concat: {e}"))?;
 
+    let bump_for_join = Arc::clone(&bump);
+    linker
+        .func_wrap(
+            module_name,
+            HostIntrinsicImport::ListJoinString.name(),
+            move |caller: Caller<'_, WasiP1Ctx>, tagged_list: i64, tagged_sep: i64| -> i64 {
+                list_join_string_host(
+                    caller,
+                    tagged_list,
+                    tagged_sep,
+                    &bump_for_join,
+                    memory_config,
+                )
+            },
+        )
+        .map_err(|e| format!("linker register list_join_string: {e}"))?;
+
     let bump_for_graphemes_list = Arc::clone(&bump);
     linker
         .func_wrap(
@@ -188,6 +206,7 @@ fn run_wasm_bytes_with_stdin_and_config(
     let instance = linker
         .instantiate(&mut store, &module)
         .map_err(|e| format!("instantiate: {e}"))?;
+    initialize_host_bump_cursor_slot(&mut store, &instance, memory_config.host_bump_start())?;
 
     let start = instance
         .get_typed_func::<(), ()>(&mut store, "_start")
@@ -357,6 +376,85 @@ fn string_concat_host(
     if write_host_bytes(&mut caller, alloc_ptr + 4, bytes, memory_config).is_err() {
         return tagged_a;
     }
+    encode_string_ptr(alloc_ptr)
+}
+
+fn list_join_string_host(
+    mut caller: Caller<'_, WasiP1Ctx>,
+    tagged_list: i64,
+    tagged_sep: i64,
+    bump: &AtomicU32,
+    memory_config: crate::memory_config::WasmMemoryConfig,
+) -> i64 {
+    let Ok(sep) = read_wasm_string(&mut caller, tagged_sep) else {
+        return tagged_list;
+    };
+    if decode_tag(tagged_list) != TAG_LIST {
+        return tagged_list;
+    }
+    let header_ptr = decode_payload_ptr(tagged_list) as usize;
+    let Ok(total_len_i32) = read_i32_le(&mut caller, header_ptr) else {
+        return tagged_list;
+    };
+    let Ok(n_chunks_i32) = read_i32_le(&mut caller, header_ptr + 4) else {
+        return tagged_list;
+    };
+    let total_len = total_len_i32.max(0) as usize;
+    let n_chunks = n_chunks_i32.max(0) as usize;
+    if total_len == 0 {
+        return encode_string_in_host_bump(&mut caller, "", bump, memory_config)
+            .unwrap_or(tagged_list);
+    }
+
+    let mut parts = Vec::with_capacity(total_len);
+    let mut total_bytes = 0usize;
+    for chunk_idx in 0..n_chunks {
+        let Ok(chunk_ptr_i32) = read_i32_le(&mut caller, header_ptr + 8 + chunk_idx * 4) else {
+            return tagged_list;
+        };
+        let chunk_ptr = chunk_ptr_i32.max(0) as usize;
+        let Ok(chunk_len_i32) = read_i32_le(&mut caller, chunk_ptr) else {
+            return tagged_list;
+        };
+        let chunk_len = chunk_len_i32.max(0) as usize;
+        for item_idx in 0..chunk_len {
+            let Ok(elem) = read_i64_le(&mut caller, chunk_ptr + 4 + item_idx * 8) else {
+                return tagged_list;
+            };
+            let Ok(text) = read_wasm_string(&mut caller, elem) else {
+                return tagged_list;
+            };
+            total_bytes += text.len();
+            parts.push(text);
+        }
+    }
+
+    total_bytes += sep.len().saturating_mul(parts.len().saturating_sub(1));
+    let total_len = 4u32 + u32::try_from(total_bytes).ok().unwrap_or(u32::MAX);
+    let Some(alloc_ptr) = alloc_from_host_bump(&mut caller, bump, total_len, memory_config) else {
+        return tagged_list;
+    };
+    let len_bytes = (total_bytes as i32).to_le_bytes();
+    if write_host_bytes(&mut caller, alloc_ptr, &len_bytes, memory_config).is_err() {
+        return tagged_list;
+    }
+
+    let mut write_ptr = alloc_ptr + 4;
+    for (idx, part) in parts.iter().enumerate() {
+        if idx > 0
+            && write_host_bytes(&mut caller, write_ptr, sep.as_bytes(), memory_config).is_err()
+        {
+            return tagged_list;
+        }
+        if idx > 0 {
+            write_ptr += sep.len() as u32;
+        }
+        if write_host_bytes(&mut caller, write_ptr, part.as_bytes(), memory_config).is_err() {
+            return tagged_list;
+        }
+        write_ptr += part.len() as u32;
+    }
+
     encode_string_ptr(alloc_ptr)
 }
 
@@ -608,6 +706,14 @@ fn alloc_from_host_bump(
     let mut cur = bump.load(Ordering::Relaxed);
     loop {
         let next = cur.checked_add(bytes)?;
+        // Prevent host allocations from crossing into Wasm top-down allocated space.
+        // The Wasm side syncs its current alloc cursor to GLOBAL_HEAP_CURSOR_OFFSET
+        // before host intrinsic calls.
+        let heap_cursor = read_heap_cursor_slot(caller).unwrap_or(0);
+        if heap_cursor > memory_config.host_bump_start() && next > heap_cursor {
+            set_runtime_error_once(caller, RUNTIME_ERROR_MEMORY_EXHAUSTION);
+            return None;
+        }
         // The host bump arena grows upward from the reserved top-of-page region,
         // while the Wasm-owned heap grows downward from the static-string limit.
         // They share the module's linear memory budget, but not a single moving
@@ -617,10 +723,44 @@ fn alloc_from_host_bump(
             return None;
         }
         match bump.compare_exchange_weak(cur, next, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => return Some(cur),
+            Ok(_) => {
+                let _ = write_host_bump_cursor_slot(caller, next);
+                return Some(cur);
+            }
             Err(actual) => cur = actual,
         }
     }
+}
+
+fn read_heap_cursor_slot(caller: &mut Caller<'_, WasiP1Ctx>) -> Option<u32> {
+    let memory = host_memory(caller).ok()?;
+    let mut bytes = [0u8; 4];
+    memory
+        .read(caller, GLOBAL_HEAP_CURSOR_OFFSET as usize, &mut bytes)
+        .ok()?;
+    Some(u32::from_le_bytes(bytes))
+}
+
+fn initialize_host_bump_cursor_slot(
+    store: &mut Store<WasiP1Ctx>,
+    instance: &wasmtime::Instance,
+    cursor: u32,
+) -> Result<(), String> {
+    let Some(memory) = instance.get_memory(&mut *store, "memory") else {
+        return Ok(());
+    };
+    let bytes = cursor.to_le_bytes();
+    memory
+        .write(store, GLOBAL_HOST_BUMP_CURSOR_OFFSET as usize, &bytes)
+        .map_err(|e| format!("init host bump cursor slot: {e}"))
+}
+
+fn write_host_bump_cursor_slot(caller: &mut Caller<'_, WasiP1Ctx>, cursor: u32) -> Result<(), ()> {
+    let memory = host_memory(caller)?;
+    let bytes = cursor.to_le_bytes();
+    memory
+        .write(caller, GLOBAL_HOST_BUMP_CURSOR_OFFSET as usize, &bytes)
+        .map_err(|_| ())
 }
 
 fn read_i32_le(caller: &mut Caller<'_, WasiP1Ctx>, ptr: usize) -> Result<i32, ()> {

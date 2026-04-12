@@ -987,22 +987,21 @@ Used to bind a host-implemented effect handler to an effect type:
 use one of these two forms. Any other Rust-side special-casing (e.g. matching
 on function names in `lower_comp_inner`) is a violation of this policy.
 
-### 7.3 Current Violations (as of 2026-04-07)
+### 7.3 Current Status (updated 2026-04-12)
 
-The following stdlib functions are special-cased in Rust
-(`SPECIALLY_LOWERED_STDLIB_NAMES` in `gen_lower/mod.rs`,
-special branches in `gen_lower/lower.rs`) without any marker in the `.gb` source:
+Traversal-name special-casing cleanup is complete for `list` stdlib helpers.
+Current status:
 
 | Function | Module | Rust special treatment | Policy verdict |
 |---|---|---|---|
-| `each` | `list` | `ListEach`/`ListEachEffect` Wasm instructions | **Violation** — pure Goby recursion works |
-| `map` | `list` | `ListMap` Wasm instruction | **Violation** — pure Goby recursion works |
+| `each` | `list` | derived from `__goby_list_fold` in `stdlib/goby/list.gb` | **Compliant** |
+| `map` | `list` | `__goby_list_map` intrinsic wrapper in `stdlib/goby/list.gb` | **Compliant** |
 | `graphemes` | `string` | `StringGraphemesList` host intrinsic | **Compliant** — body uses `__goby_string_each_grapheme` |
 | `split` (empty sep) | `string` | Redirected to `StringGraphemesList` | **Compliant** — body uses `__goby_` builtins |
 
 ### 7.4 Refactoring Plan
 
-#### Step 1: Remove `each` and `map` special-casing
+#### Step 1: Remove `each` and `map` special-casing (complete, 2026-04-12)
 
 - Remove `"each"` and `"map"` from `SPECIALLY_LOWERED_STDLIB_NAMES`.
 - Remove the `GlobalRef { module="list", name="each"/"map" }` special branches
@@ -1010,10 +1009,10 @@ special branches in `gen_lower/lower.rs`) without any marker in the `.gb` source
 - Remove the corresponding `Var` branches for bare-name calls.
 - Remove `WasmBackendInstr::ListEach`, `ListEachEffect`, `ListMap` variants
   and all emit/support code that references them.
-- Done when: all existing tests pass, and `each`/`map` work correctly via
-  stdlib `.gb` recursion (both lambda callbacks and named-function references).
+- Status: completed. `each`/`map` now route through stdlib wrappers and
+  `BackendIntrinsic::{ListFold,ListMap}` paths.
 
-#### Step 2: Rename `SPECIALLY_LOWERED_STDLIB_NAMES`
+#### Step 2: Rename `SPECIALLY_LOWERED_STDLIB_NAMES` (deferred)
 
 - Rename to `INTRINSIC_STDLIB_NAMES` (or similar) to reflect that it now only
   lists names whose `.gb` bodies contain `__goby_` calls and must not be routed

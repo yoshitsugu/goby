@@ -27,7 +27,7 @@ impl<'m> RuntimeOutputResolver<'m> {
         }
     }
 
-    fn apply_callable_args_out(
+    pub(super) fn apply_callable_args_out(
         &mut self,
         callable: &IntCallable,
         arg_values: &[RuntimeValue],

@@ -556,6 +556,97 @@ impl<'m> RuntimeOutputResolver<'m> {
                     None => None,
                 }
             }
+            "__goby_list_length" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let list = args[0].as_list()?;
+                let len = i64::try_from(list.len()).ok()?;
+                Some(RuntimeValue::Int(len))
+            }
+            "__goby_list_fold" => {
+                if args.len() != 3 {
+                    return None;
+                }
+                let list_items = args[0].as_list()?;
+                let RuntimeValue::Callable(callback) = &args[2] else {
+                    return None;
+                };
+                let mut acc = args[1].clone();
+                let empty_locals = RuntimeLocals::default();
+                let empty_callables = Rc::new(std::collections::HashMap::new());
+                for item in list_items {
+                    let out = self.apply_callable_args_out(
+                        callback,
+                        &[acc, item.clone()],
+                        &empty_locals,
+                        &empty_callables,
+                        evaluators,
+                        depth + 1,
+                    );
+                    match out {
+                        Out::Done(next) => acc = next,
+                        Out::Err(RuntimeError::Abort { .. }) => {
+                            self.mark_runtime_abort();
+                            return None;
+                        }
+                        Out::Suspend(_) | Out::Escape(_) | Out::Err(RuntimeError::Unsupported) => {
+                            return None;
+                        }
+                    }
+                }
+                Some(acc)
+            }
+            "__goby_list_map" => {
+                if args.len() != 2 {
+                    return None;
+                }
+                let list_items = args[0].as_list()?;
+                let RuntimeValue::Callable(callback) = &args[1] else {
+                    return None;
+                };
+                let empty_locals = RuntimeLocals::default();
+                let empty_callables = Rc::new(std::collections::HashMap::new());
+                let mut mapped = Vec::with_capacity(list_items.len());
+                for item in list_items {
+                    let out = self.apply_callable_args_out(
+                        callback,
+                        std::slice::from_ref(item),
+                        &empty_locals,
+                        &empty_callables,
+                        evaluators,
+                        depth + 1,
+                    );
+                    match out {
+                        Out::Done(next) => mapped.push(next),
+                        Out::Err(RuntimeError::Abort { .. }) => {
+                            self.mark_runtime_abort();
+                            return None;
+                        }
+                        Out::Suspend(_) | Out::Escape(_) | Out::Err(RuntimeError::Unsupported) => {
+                            return None;
+                        }
+                    }
+                }
+                Some(RuntimeValue::List(mapped))
+            }
+            "__goby_list_join_string" => {
+                if args.len() != 2 {
+                    return None;
+                }
+                let list_items = args[0].as_list()?;
+                let RuntimeValue::String(sep) = &args[1] else {
+                    return None;
+                };
+                let mut parts = Vec::with_capacity(list_items.len());
+                for item in list_items {
+                    let RuntimeValue::String(text) = item else {
+                        return None;
+                    };
+                    parts.push(text.clone());
+                }
+                Some(RuntimeValue::String(parts.join(sep.as_str())))
+            }
             _ => None,
         }
     }

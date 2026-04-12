@@ -30,6 +30,7 @@ pub(crate) enum HostIntrinsicImport {
     StringEachGraphemeCount,
     StringEachGraphemeState,
     StringConcat,
+    ListJoinString,
     StringGraphemesList,
     StringSplitLines,
 }
@@ -48,6 +49,7 @@ impl HostIntrinsicImport {
             Self::StringEachGraphemeCount => "__goby_string_each_grapheme_count",
             Self::StringEachGraphemeState => "__goby_string_each_grapheme_state",
             Self::StringConcat => "__goby_string_concat",
+            Self::ListJoinString => "__goby_list_join_string",
             Self::StringGraphemesList => "__goby_string_graphemes_list",
             Self::StringSplitLines => "__goby_string_split_lines",
         }
@@ -59,7 +61,7 @@ impl HostIntrinsicImport {
             Self::ValueToString => &[ValType::I64],
             Self::StringEachGraphemeCount => &[ValType::I64],
             Self::StringEachGraphemeState => &[ValType::I64, ValType::I64],
-            Self::StringConcat => &[ValType::I64, ValType::I64],
+            Self::StringConcat | Self::ListJoinString => &[ValType::I64, ValType::I64],
             Self::StringGraphemesList | Self::StringSplitLines => &[ValType::I64],
         }
     }
@@ -70,11 +72,12 @@ impl HostIntrinsicImport {
     }
 }
 
-pub(crate) const HOST_INTRINSIC_IMPORTS: [HostIntrinsicImport; 6] = [
+pub(crate) const HOST_INTRINSIC_IMPORTS: [HostIntrinsicImport; 7] = [
     HostIntrinsicImport::ValueToString,
     HostIntrinsicImport::StringEachGraphemeCount,
     HostIntrinsicImport::StringEachGraphemeState,
     HostIntrinsicImport::StringConcat,
+    HostIntrinsicImport::ListJoinString,
     HostIntrinsicImport::StringGraphemesList,
     HostIntrinsicImport::StringSplitLines,
 ];
@@ -91,6 +94,7 @@ pub(crate) const fn host_import_for_intrinsic(
             Some(HostIntrinsicImport::StringEachGraphemeState)
         }
         BackendIntrinsic::StringConcat => Some(HostIntrinsicImport::StringConcat),
+        BackendIntrinsic::ListJoinString => Some(HostIntrinsicImport::ListJoinString),
         BackendIntrinsic::StringGraphemesList => Some(HostIntrinsicImport::StringGraphemesList),
         BackendIntrinsic::StringSplitLines => Some(HostIntrinsicImport::StringSplitLines),
         BackendIntrinsic::StringSplit

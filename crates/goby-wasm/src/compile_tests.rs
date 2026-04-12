@@ -1734,6 +1734,8 @@ main =
 #[test]
 fn compile_module_general_lowers_qualified_read_with_static_suffixes() {
     let source = r#"
+import goby/list ( each )
+
 main : Unit -> Unit can Print, Read
 main =
   text = Read.read ()
@@ -2116,6 +2118,8 @@ fn runtime_io_general_lowering_split_lines_each_has_fd_read_and_fd_write() {
 #[test]
 fn runtime_io_general_lowering_inline_split_lines_each_compiles() {
     let source = r#"
+import goby/list ( each )
+
 main : Unit -> Unit can Print, Read
 main =
   text = Read.read ()

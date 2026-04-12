@@ -1085,26 +1085,6 @@ fn hoist_declare_locals(
                     .map(|child| hoist_declare_locals(child, decls))
                     .collect(),
             }),
-            WasmBackendInstr::ListEachEffect { list_instrs, op } => {
-                lowered.push(WasmBackendInstr::ListEachEffect {
-                    list_instrs: hoist_declare_locals(list_instrs, decls),
-                    op,
-                });
-            }
-            WasmBackendInstr::ListEach {
-                list_instrs,
-                func_instrs,
-            } => lowered.push(WasmBackendInstr::ListEach {
-                list_instrs: hoist_declare_locals(list_instrs, decls),
-                func_instrs: hoist_declare_locals(func_instrs, decls),
-            }),
-            WasmBackendInstr::ListMap {
-                list_instrs,
-                func_instrs,
-            } => lowered.push(WasmBackendInstr::ListMap {
-                list_instrs: hoist_declare_locals(list_instrs, decls),
-                func_instrs: hoist_declare_locals(func_instrs, decls),
-            }),
             WasmBackendInstr::ListReverseFoldPrepend {
                 list_instrs,
                 item_local,
@@ -1342,7 +1322,13 @@ fn lower_comp_inner(
             {
                 let mut instrs = Vec::new();
                 for arg in args {
-                    instrs.extend(lower_value(arg)?);
+                    instrs.extend(lower_value_as_arg(
+                        arg,
+                        aliases,
+                        bindings,
+                        known_decls,
+                        lambda_decls,
+                    )?);
                 }
                 if args.len() != intrinsic.arity() {
                     return Err(LowerError::UnsupportedForm {
@@ -1355,50 +1341,6 @@ fn lower_comp_inner(
                     });
                 }
                 instrs.push(WasmBackendInstr::Intrinsic { intrinsic });
-                Ok(instrs)
-            } else if let goby_core::ir::ValueExpr::GlobalRef { module, name } = callee.as_ref()
-                && module == "list"
-                && name == "each"
-                && args.len() == 2
-            {
-                // stdlib list.each: check if callback is a Print effect op (fused path)
-                // or a user funcref (indirect call path).
-                let list_instrs = lower_comp_inner(
-                    &CompExpr::Value(args[0].clone()),
-                    false,
-                    aliases,
-                    bindings,
-                    known_decls,
-                    lambda_decls,
-                )?;
-                if let Some(op) = resolve_print_callback(&args[1], aliases) {
-                    Ok(vec![WasmBackendInstr::ListEachEffect { list_instrs, op }])
-                } else {
-                    let func_instrs =
-                        lower_value_as_arg(&args[1], aliases, bindings, known_decls, lambda_decls)?;
-                    Ok(vec![WasmBackendInstr::ListEach {
-                        list_instrs,
-                        func_instrs,
-                    }])
-                }
-            } else if let goby_core::ir::ValueExpr::GlobalRef { module, name } = callee.as_ref()
-                && module == "list"
-                && name == "map"
-                && args.len() == 2
-            {
-                let mut instrs = Vec::new();
-                for arg in args {
-                    instrs.extend(lower_value_as_arg(
-                        arg,
-                        aliases,
-                        bindings,
-                        known_decls,
-                        lambda_decls,
-                    )?);
-                }
-                instrs.push(WasmBackendInstr::Intrinsic {
-                    intrinsic: BackendIntrinsic::ListMap,
-                });
                 Ok(instrs)
             } else if let goby_core::ir::ValueExpr::GlobalRef { module, name } = callee.as_ref()
                 && module == "list"
@@ -1478,52 +1420,6 @@ fn lower_comp_inner(
                         )?);
                     }
                     instrs.push(direct_decl_call_instr(resolved_name, tail_position));
-                    Ok(instrs)
-                } else if (name == "each"
-                    || resolve_global_ref(name, aliases) == Some(("list", "each")))
-                    && args.len() == 2
-                {
-                    // Var resolves to list.each (bare name or alias via `import goby/list (each)`).
-                    let list_instrs = lower_comp_inner(
-                        &CompExpr::Value(args[0].clone()),
-                        false,
-                        aliases,
-                        bindings,
-                        known_decls,
-                        lambda_decls,
-                    )?;
-                    if let Some(op) = resolve_print_callback(&args[1], aliases) {
-                        Ok(vec![WasmBackendInstr::ListEachEffect { list_instrs, op }])
-                    } else {
-                        let func_instrs = lower_value_as_arg(
-                            &args[1],
-                            aliases,
-                            bindings,
-                            known_decls,
-                            lambda_decls,
-                        )?;
-                        Ok(vec![WasmBackendInstr::ListEach {
-                            list_instrs,
-                            func_instrs,
-                        }])
-                    }
-                } else if (name == "map"
-                    || resolve_global_ref(name, aliases) == Some(("list", "map")))
-                    && args.len() == 2
-                {
-                    let mut instrs = Vec::new();
-                    for arg in args {
-                        instrs.extend(lower_value_as_arg(
-                            arg,
-                            aliases,
-                            bindings,
-                            known_decls,
-                            lambda_decls,
-                        )?);
-                    }
-                    instrs.push(WasmBackendInstr::Intrinsic {
-                        intrinsic: BackendIntrinsic::ListMap,
-                    });
                     Ok(instrs)
                 } else if (name == "fold"
                     || resolve_global_ref(name, aliases) == Some(("list", "fold")))
@@ -2344,11 +2240,46 @@ fn lower_value_as_arg(
             });
             Ok(vec![WasmBackendInstr::PushFuncHandle { decl_name }])
         }
+        ValueExpr::Var(name) => {
+            if let Some(BackendEffectOp::Print(op)) =
+                resolve_effect_call_target(&ValueExpr::Var(name.clone()), aliases)
+            {
+                return lower_print_effect_as_arg(op, lambda_decls);
+            }
+            lower_value(v)
+        }
         ValueExpr::Lambda { param, body } => {
             lower_lambda(param, body, aliases, bindings, known_decls, lambda_decls)
         }
+        ValueExpr::GlobalRef { module, name } => {
+            if let Some(BackendEffectOp::Print(op)) = backend_effect_op(module, name) {
+                return lower_print_effect_as_arg(op, lambda_decls);
+            }
+            lower_value(v)
+        }
         other => lower_value(other),
     }
+}
+
+fn lower_print_effect_as_arg(
+    op: BackendPrintOp,
+    lambda_decls: &mut Vec<LambdaAuxDecl>,
+) -> Result<Vec<WasmBackendInstr>, LowerError> {
+    let n = LAMBDA_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+    let decl_name = format!("__print_effect_wrapper_{n}");
+    let param_name = "__x".to_string();
+    lambda_decls.push(LambdaAuxDecl {
+        decl_name: decl_name.clone(),
+        param_names: vec![param_name.clone()],
+        env: CallableEnv::default(),
+        instrs: vec![
+            WasmBackendInstr::LoadLocal { name: param_name },
+            WasmBackendInstr::EffectOp {
+                op: BackendEffectOp::Print(op),
+            },
+        ],
+    });
+    Ok(vec![WasmBackendInstr::PushFuncHandle { decl_name }])
 }
 
 /// Lower a `ValueExpr::Lambda` to backend IR instructions.
@@ -2590,27 +2521,6 @@ fn is_helper_global(
     }
 }
 
-fn resolve_print_callback(
-    callback: &ValueExpr,
-    aliases: &HashMap<String, AliasValue>,
-) -> Option<BackendPrintOp> {
-    match callback {
-        ValueExpr::GlobalRef { module, name } => backend_print_op(module, name),
-        ValueExpr::Var(name) if name == "print" => Some(BackendPrintOp::Print),
-        ValueExpr::Var(name) if name == "println" => Some(BackendPrintOp::Println),
-        ValueExpr::Var(name) => {
-            if let Some(op) = resolve_var_alias(name, aliases)
-                && let Some(print_op) = backend_print_op("Print", op)
-            {
-                return Some(print_op);
-            }
-            let (module, op) = resolve_global_ref(name, aliases)?;
-            backend_print_op(module, op)
-        }
-        _ => None,
-    }
-}
-
 fn resolve_local_name<'a>(
     value: &'a ValueExpr,
     aliases: &'a HashMap<String, AliasValue>,
@@ -2718,6 +2628,7 @@ fn backend_intrinsic_for_bare(name: &str, arg_count: usize) -> Option<BackendInt
             _ => None,
         },
         "__goby_list_push_string" => Some(BackendIntrinsic::ListPushString),
+        "__goby_list_join_string" if arg_count == 2 => Some(BackendIntrinsic::ListJoinString),
         "__goby_string_length" => Some(BackendIntrinsic::StringLength),
         "__goby_list_length" => Some(BackendIntrinsic::ListLength),
         "__goby_list_fold" if arg_count == 3 => Some(BackendIntrinsic::ListFold),
@@ -2728,14 +2639,6 @@ fn backend_intrinsic_for_bare(name: &str, arg_count: usize) -> Option<BackendInt
 
 fn is_effect_pair(module: &str, op: &str) -> bool {
     backend_effect_op(module, op).is_some()
-}
-
-fn backend_print_op(module: &str, op: &str) -> Option<BackendPrintOp> {
-    match (module, op) {
-        ("Print", "print") => Some(BackendPrintOp::Print),
-        ("Print", "println") => Some(BackendPrintOp::Println),
-        _ => None,
-    }
 }
 
 fn backend_effect_op(module: &str, op: &str) -> Option<BackendEffectOp> {
@@ -2751,16 +2654,8 @@ fn backend_effect_op(module: &str, op: &str) -> Option<BackendEffectOp> {
 fn instrs_load_local(instrs: &[WasmBackendInstr], name: &str) -> bool {
     instrs.iter().any(|instr| match instr {
         WasmBackendInstr::LoadLocal { name: local_name } => local_name == name,
-        // Recurse into nested instruction lists so that an alias used only inside
-        // a ListEach/ListMap/If/CaseMatch is not pruned by the alias-elision path.
-        WasmBackendInstr::ListEach {
-            list_instrs,
-            func_instrs,
-        }
-        | WasmBackendInstr::ListMap {
-            list_instrs,
-            func_instrs,
-        } => instrs_load_local(list_instrs, name) || instrs_load_local(func_instrs, name),
+        // Recurse into nested instruction lists so aliases used only inside
+        // nested constructs are not pruned by alias-elision.
         WasmBackendInstr::ListReverseFoldPrepend {
             list_instrs,
             prefix_element_instrs,
@@ -2770,9 +2665,6 @@ fn instrs_load_local(instrs: &[WasmBackendInstr], name: &str) -> bool {
                 || prefix_element_instrs
                     .iter()
                     .any(|instrs| instrs_load_local(instrs, name))
-        }
-        WasmBackendInstr::ListEachEffect { list_instrs, .. } => {
-            instrs_load_local(list_instrs, name)
         }
         WasmBackendInstr::If {
             then_instrs,
@@ -3170,7 +3062,10 @@ build n =
                 ],
             }),
         };
-        let instrs = lower_comp(&comp).expect("split+each should lower through the general path");
+        let known_decls: HashSet<String> = ["each".to_string()].into();
+        let mut lambda_decls = Vec::new();
+        let instrs = lower_comp_collecting_lambdas(&comp, &known_decls, &mut lambda_decls)
+            .expect("split+each should lower through the general path");
         assert!(
             !instrs.iter().any(|i| matches!(i, I::SplitEachPrint { .. })),
             "split+each should no longer emit SplitEachPrint: {instrs:?}"
@@ -3181,7 +3076,10 @@ build n =
                 I::Intrinsic {
                     intrinsic: BackendIntrinsic::StringSplit
                 }
-            )) || instrs.iter().any(|i| matches!(i, I::ListEachEffect { .. })),
+            )) && instrs.iter().any(|i| {
+                matches!(i, I::DeclCall { decl_name } if decl_name == "each")
+                    || matches!(i, I::TailDeclCall { decl_name } if decl_name == "each")
+            }),
             "split+each should include general-path pieces: {instrs:?}"
         );
     }
@@ -3862,8 +3760,8 @@ build n =
 
     // Lambda lowering tests
 
-    /// Lambda with param-only body passed to list.map should lower to
-    /// PushFuncHandle + ListMap (not UnsupportedForm).
+    /// Lambda with param-only body passed to `__goby_list_map` should lower to
+    /// PushFuncHandle + Intrinsic(ListMap) (not UnsupportedForm).
     #[test]
     fn lower_lambda_as_map_callback_param_only() {
         // map [1, 2, 3] (fn x -> x + 1)
@@ -3872,10 +3770,7 @@ build n =
         //   map list (fn x -> x + 1)
         let known_decls: HashSet<String> = HashSet::new();
         let comp = CompExpr::Call {
-            callee: Box::new(ValueExpr::GlobalRef {
-                module: "list".to_string(),
-                name: "map".to_string(),
-            }),
+            callee: Box::new(ValueExpr::Var("__goby_list_map".to_string())),
             args: vec![
                 ValueExpr::ListLit {
                     elements: vec![
@@ -3899,7 +3794,7 @@ build n =
         let result = lower_comp_collecting_lambdas(&comp, &known_decls, &mut lambda_decls);
         assert!(
             result.is_ok(),
-            "Lambda as map callback should lower to PushFuncHandle+ListMap, got: {:?}",
+            "Lambda as map callback should lower to PushFuncHandle+Intrinsic(ListMap), got: {:?}",
             result
         );
         let instrs = result.unwrap();
@@ -3960,10 +3855,7 @@ build n =
         // fn x -> x + base   (where `base` is a free variable captured ByValue)
         let known_decls: HashSet<String> = HashSet::new();
         let comp = CompExpr::Call {
-            callee: Box::new(ValueExpr::GlobalRef {
-                module: "list".to_string(),
-                name: "map".to_string(),
-            }),
+            callee: Box::new(ValueExpr::Var("__goby_list_map".to_string())),
             args: vec![
                 ValueExpr::ListLit {
                     elements: vec![ValueExpr::IntLit(1)],

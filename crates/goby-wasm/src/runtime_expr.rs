@@ -162,13 +162,20 @@ impl<'m> RuntimeOutputResolver<'m> {
             Expr::StringLit(s) => Out::Done(RuntimeValue::String(s.clone())),
             Expr::Var { name, .. } => match locals.get(name) {
                 Some(v) => Out::Done(v),
-                None => match self.eval_zero_arity_decl_value(name, evaluators, depth + 1) {
-                    Some(v) => Out::Done(v),
-                    None if self.runtime_error_is_abort_marker() => Out::Err(RuntimeError::Abort {
-                        kind: "aborted".into(),
-                    }),
-                    None => Out::Err(RuntimeError::Unsupported),
-                },
+                None => {
+                    if let Some(callable) = callables.get(name) {
+                        return Out::Done(RuntimeValue::Callable(Box::new(callable.clone())));
+                    }
+                    match self.eval_zero_arity_decl_value(name, evaluators, depth + 1) {
+                        Some(v) => Out::Done(v),
+                        None if self.runtime_error_is_abort_marker() => {
+                            Out::Err(RuntimeError::Abort {
+                                kind: "aborted".into(),
+                            })
+                        }
+                        None => Out::Err(RuntimeError::Unsupported),
+                    }
+                }
             },
             Expr::Handler { clauses } => Out::Done(RuntimeValue::Handler(
                 self.inline_handler_from_clauses(clauses, locals, callables),

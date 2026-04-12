@@ -83,6 +83,11 @@ pub(crate) enum BackendIntrinsic {
     ListSet,
     ListConcat,
     StringConcat,
+    /// Join a `List String` with a separator string into one string.
+    ///
+    /// Signature: `(tagged_list: i64, tagged_sep: i64) -> i64` (tagged `String`).
+    /// Implemented as a host import to avoid allocating O(n) intermediate strings.
+    ListJoinString,
     /// Collect all Unicode Extended Grapheme Clusters from a string as a tagged list.
     ///
     /// Signature: `(tagged_str: i64) -> i64` (tagged `List String`).
@@ -109,12 +114,20 @@ pub(crate) enum BackendIntrinsic {
     /// `emit_callable_dispatch` with 2 arguments. After the loop, returns the
     /// final accumulator value. Chunk traversal is internal to the runtime and
     /// unreachable from Goby code.
+    ///
+    /// stdlib surface ownership:
+    /// - `fold xs acc f` is a one-line wrapper over this intrinsic.
+    /// - `each xs f` is expressed as a fold that discards its accumulator.
+    /// - prepend callbacks may lower to `ListReverseFoldPrepend` optimization.
     ListFold,
     /// Map over a chunked list: chunk-walk loop + callback dispatch, builds new list.
     ///
     /// Signature: `(tagged_list: i64, func: i64) -> i64`.
     /// The callback `func(elem)` is called for each element via
     /// `emit_callable_dispatch` with 1 argument. Returns a new tagged list.
+    ///
+    /// stdlib surface ownership:
+    /// - `map xs f` is a one-line wrapper over this intrinsic.
     ListMap,
 }
 
@@ -131,6 +144,7 @@ impl BackendIntrinsic {
             BackendIntrinsic::ListSet => 3,
             BackendIntrinsic::ListConcat => 2,
             BackendIntrinsic::StringConcat => 2,
+            BackendIntrinsic::ListJoinString => 2,
             BackendIntrinsic::StringGraphemesList => 1,
             BackendIntrinsic::StringSplitLines => 1,
             BackendIntrinsic::ListLength => 1,
@@ -145,6 +159,7 @@ impl BackendIntrinsic {
             | BackendIntrinsic::StringEachGraphemeCount
             | BackendIntrinsic::StringEachGraphemeState
             | BackendIntrinsic::StringConcat
+            | BackendIntrinsic::ListJoinString
             | BackendIntrinsic::StringGraphemesList
             | BackendIntrinsic::StringSplitLines => IntrinsicExecutionBoundary::HostImport,
             BackendIntrinsic::StringSplit
@@ -404,46 +419,6 @@ pub(crate) enum WasmBackendInstr {
     RecordLit {
         constructor: String,
         field_instrs: Vec<Vec<WasmBackendInstr>>,
-    },
-    /// Fused: iterate a list and call an effect operation on each element (e.g. `Print.println`).
-    ///
-    /// Equivalent to `for item in list: effect.op(item)`.
-    ///
-    /// Lowered from: `Call(GlobalRef("list","each"), [list_expr, GlobalRef(effect, op)])`.
-    /// The result is a tagged Unit.
-    ListEachEffect {
-        list_instrs: Vec<WasmBackendInstr>,
-        op: BackendPrintOp,
-    },
-    /// Iterate a list and call a function for each element (stdlib `list.each`).
-    ///
-    /// # Stack discipline
-    /// Before this instruction:
-    ///   - `list_instrs` evaluates to a tagged List i64 (the source list)
-    ///   - `func_instrs` evaluates to a tagged Func i64 (the callback funcref)
-    ///
-    /// The emitter decodes the list pointer, loops over elements, and calls the
-    /// callback via `call_indirect` for each element.  The callback must have type
-    /// `(i64) -> i64`.  The return value of each call is discarded.
-    /// This instruction pushes a tagged Unit value as its result.
-    ListEach {
-        list_instrs: Vec<WasmBackendInstr>,
-        func_instrs: Vec<WasmBackendInstr>,
-    },
-    /// Map a function over a list and return a new list (stdlib `list.map`).
-    ///
-    /// # Stack discipline
-    /// Before this instruction:
-    ///   - `list_instrs` evaluates to a tagged List i64 (the source list)
-    ///   - `func_instrs` evaluates to a tagged Func i64 (the callback funcref)
-    ///
-    /// The emitter decodes the list pointer, loops over elements, calls the callback
-    /// via `call_indirect` for each element, collects results into a new heap-allocated
-    /// list, and pushes the tagged List pointer of the result.
-    /// The callback must have type `(i64) -> i64`.
-    ListMap {
-        list_instrs: Vec<WasmBackendInstr>,
-        func_instrs: Vec<WasmBackendInstr>,
     },
     /// Specialized left-fold lowering for list-builder callbacks of the form
     /// `fold xs [] (fn acc x -> [prefix..., ..acc])`.

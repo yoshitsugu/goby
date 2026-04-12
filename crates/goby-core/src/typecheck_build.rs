@@ -83,6 +83,15 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
     );
     insert_global_symbol(
         &mut globals,
+        "__goby_list_join_string".to_string(),
+        Ty::Fun {
+            params: vec![Ty::List(Box::new(Ty::Str)), Ty::Str],
+            result: Box::new(Ty::Str),
+        },
+        "runtime intrinsic `__goby_list_join_string`".to_string(),
+    );
+    insert_global_symbol(
+        &mut globals,
         "__goby_embeded_effect_stdout_handler".to_string(),
         Ty::Fun {
             params: vec![Ty::Str],

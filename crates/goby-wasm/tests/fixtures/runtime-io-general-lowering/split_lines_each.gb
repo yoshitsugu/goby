@@ -2,6 +2,8 @@
 # Expected: reads stdin, splits on newlines, and prints each line with a newline.
 # Status: currently passes via general lowering.
 # Note: string.split / each helper-call ABI is required.
+import goby/list ( each )
+
 main : Unit -> Unit can Print, Read
 main =
   text = Read.read ()

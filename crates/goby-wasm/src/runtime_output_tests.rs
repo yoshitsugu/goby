@@ -1376,6 +1376,635 @@ main =
 }
 
 #[test]
+fn list_join_is_non_destructive_when_called_twice_on_same_list() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list ( join )
+
+main : Unit -> Unit can Print
+main =
+  xs = ["a", "b", "c"]
+  println (join xs "-")
+  println (join xs "-")
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let wasm = crate::compile_module(&module).expect("double join should compile");
+    let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+        .expect("double join wasm should execute");
+    assert_eq!(output, "a-b-c\na-b-c\n");
+}
+
+#[test]
+fn list_each_nested_list_set_preserves_row_shape() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list (each, join, length)
+
+apply : List (List String) -> List (Int, Int) -> List (List String)
+apply grid positions =
+  mut updated = grid
+  each positions (fn pos ->
+    updated[pos.1][pos.0] := "."
+    ()
+  )
+  updated
+
+main : Unit -> Unit can Print
+main =
+  grid = [["a", "b", "c"], ["d", "e", "f"]]
+  positions = [(0, 0), (1, 0)]
+  updated = apply grid positions
+  println (join(updated[0], ""))
+  println (join(updated[0], ""))
+  println "${length(updated[0])}"
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let wasm = crate::compile_module(&module).expect("nested list set should compile");
+    let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+        .expect("nested list set wasm should execute");
+    assert_eq!(output, "..c\n..c\n3\n");
+}
+
+#[test]
+fn list_fold_callback_accepts_tuple_second_param_with_negative_ints() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list (fold)
+import goby/stdio
+
+main : Unit -> Unit can Print
+main =
+  neighbor_offsets = [(-1, -1), (0, -1), (1, -1)]
+  s = fold neighbor_offsets 0 (fn total offset ->
+    total + offset.0 + offset.1
+  )
+  println "${s}"
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let wasm = crate::compile_module(&module).expect("fold tuple test should compile");
+    let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+        .expect("fold tuple test should execute");
+    assert_eq!(output, "-3\n");
+}
+
+#[test]
+fn rendering_after_first_prune_preserves_grid_for_second_collect() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let lines = [
+        "..@@.@@@@.",
+        "@@@.@.@.@@",
+        "@@@@@.@.@@",
+        "@.@@@@..@.",
+        "@@.@@@@.@@",
+        ".@@@@@@@.@",
+        ".@.@.@.@@@",
+        "@.@@@.@@@@",
+        ".@@@@@@@@.",
+        "@.@.@@@.@.",
+    ];
+    let grid_literal = lines
+        .iter()
+        .map(|line| {
+            let elems = line
+                .chars()
+                .map(|c| format!("\"{}\"", c))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{elems}]")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        r#"
+import goby/list (each, fold, join, length)
+import goby/stdio
+
+neighbor_threshold : Int
+neighbor_threshold = 4
+
+should_prune_cell : List (List String) -> Int -> Int -> Int -> Int -> Bool can Print
+should_prune_cell grid x y width height =
+  if grid[y][x] == "@"
+    neighbor_offsets = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+    occupied_neighbors =
+      fold neighbor_offsets 0 (fn total offset ->
+        next_y = y + offset.1
+        next_x = x + offset.0
+        if 0 <= next_y && next_y < height && 0 <= next_x && next_x < width
+          if grid[y + offset.1][x + offset.0] == "@"
+            total + 1
+          else
+            total
+        else
+          total
+      )
+    occupied_neighbors < neighbor_threshold
+  else
+    False
+
+collect_prune_positions : List (List String) -> Int -> Int -> Int -> Int -> List (Int, Int) can Print
+collect_prune_positions grid x y width height =
+  if y >= height
+    []
+  else
+    if x >= width
+      collect_prune_positions grid 0 (y + 1) width height
+    else
+      rest = collect_prune_positions grid (x + 1) y width height
+      if should_prune_cell grid x y width height
+        [(x, y), ..rest]
+      else
+        rest
+
+apply_prune_positions : List (List String) -> List (Int, Int) -> List (List String) can Print
+apply_prune_positions grid positions =
+  mut updated = grid
+  each positions (fn pos ->
+    updated[pos.1][pos.0] := "."
+    ()
+  )
+  updated
+
+render_grid : List (List String) -> Unit can Print
+render_grid grid =
+  each grid (fn row ->
+    line = join row ""
+    println line
+  )
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  grid = [{grid_literal}]
+  height = length grid
+  width = length(grid[0])
+  p1 = collect_prune_positions grid 0 0 width height
+  g1 = apply_prune_positions grid p1
+  count1 = length p1
+  println "${{count1}}"
+  render_grid g1
+  p2 = collect_prune_positions g1 0 0 width height
+  count2 = length p2
+  println "${{count2}}"
+"#
+    );
+    let module = parse_module(&source).expect("parse should work");
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("program should execute")
+        .expect("program should emit output");
+    assert!(
+        output.starts_with("13\n") && output.ends_with("12\n"),
+        "expected first prune count 13 and second prune count 12, got {output:?}"
+    );
+}
+
+#[test]
+fn second_collect_without_render_stays_stable() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let lines = [
+        "..@@.@@@@.",
+        "@@@.@.@.@@",
+        "@@@@@.@.@@",
+        "@.@@@@..@.",
+        "@@.@@@@.@@",
+        ".@@@@@@@.@",
+        ".@.@.@.@@@",
+        "@.@@@.@@@@",
+        ".@@@@@@@@.",
+        "@.@.@@@.@.",
+    ];
+    let grid_literal = lines
+        .iter()
+        .map(|line| {
+            let elems = line
+                .chars()
+                .map(|c| format!("\"{}\"", c))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{elems}]")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        r#"
+import goby/list (each, fold, length)
+import goby/stdio
+
+neighbor_threshold : Int
+neighbor_threshold = 4
+
+should_prune_cell : List (List String) -> Int -> Int -> Int -> Int -> Bool can Print
+should_prune_cell grid x y width height =
+  if grid[y][x] == "@"
+    neighbor_offsets = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+    occupied_neighbors =
+      fold neighbor_offsets 0 (fn total offset ->
+        next_y = y + offset.1
+        next_x = x + offset.0
+        if 0 <= next_y && next_y < height && 0 <= next_x && next_x < width
+          if grid[y + offset.1][x + offset.0] == "@"
+            total + 1
+          else
+            total
+        else
+          total
+      )
+    occupied_neighbors < neighbor_threshold
+  else
+    False
+
+collect_prune_positions : List (List String) -> Int -> Int -> Int -> Int -> List (Int, Int) can Print
+collect_prune_positions grid x y width height =
+  if y >= height
+    []
+  else
+    if x >= width
+      collect_prune_positions grid 0 (y + 1) width height
+    else
+      rest = collect_prune_positions grid (x + 1) y width height
+      if should_prune_cell grid x y width height
+        [(x, y), ..rest]
+      else
+        rest
+
+apply_prune_positions : List (List String) -> List (Int, Int) -> List (List String) can Print
+apply_prune_positions grid positions =
+  mut updated = grid
+  each positions (fn pos ->
+    updated[pos.1][pos.0] := "."
+    ()
+  )
+  updated
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  grid = [{grid_literal}]
+  height = length grid
+  width = length(grid[0])
+  p1 = collect_prune_positions grid 0 0 width height
+  g1 = apply_prune_positions grid p1
+  p2 = collect_prune_positions g1 0 0 width height
+  count1 = length p1
+  count2 = length p2
+  println "${{count1}}"
+  println "${{count2}}"
+"#
+    );
+    let module = parse_module(&source).expect("parse should work");
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("program should execute")
+        .expect("program should emit output");
+    assert_eq!(output, "13\n12\n");
+}
+
+#[test]
+fn iterative_grid_pruning_without_render_reaches_total_43() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list (each, fold, length, map)
+import goby/string (graphemes)
+import goby/stdio
+
+neighbor_threshold : Int
+neighbor_threshold = 4
+
+should_prune_cell : List (List String) -> Int -> Int -> Int -> Int -> Bool can Print
+should_prune_cell grid x y width height =
+  if grid[y][x] == "@"
+    neighbor_offsets = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+    occupied_neighbors =
+      fold neighbor_offsets 0 (fn total offset ->
+        next_y = y + offset.1
+        next_x = x + offset.0
+        if 0 <= next_y && next_y < height && 0 <= next_x && next_x < width
+          if grid[y + offset.1][x + offset.0] == "@"
+            total + 1
+          else
+            total
+        else
+          total
+      )
+    occupied_neighbors < neighbor_threshold
+  else
+    False
+
+collect_prune_positions : List (List String) -> Int -> Int -> Int -> Int -> List (Int, Int) can Print
+collect_prune_positions grid x y width height =
+  if y >= height
+    []
+  else
+    if x >= width
+      collect_prune_positions grid 0 (y + 1) width height
+    else
+      rest = collect_prune_positions grid (x + 1) y width height
+      if should_prune_cell grid x y width height
+        [(x, y), ..rest]
+      else
+        rest
+
+apply_prune_positions : List (List String) -> List (Int, Int) -> List (List String) can Print
+apply_prune_positions grid positions =
+  mut updated = grid
+  each positions (fn pos ->
+    updated[pos.1][pos.0] := "."
+    ()
+  )
+  updated
+
+prune_until_stable : List (List String) -> Int -> Int can Print
+prune_until_stable grid total =
+  height = length grid
+  width = length(grid[0])
+  positions = collect_prune_positions grid 0 0 width height
+  count = length positions
+  if count > 0
+    updated = apply_prune_positions grid positions
+    prune_until_stable updated (total + count)
+  else
+    total
+
+main : Unit -> Unit can Print, Read
+main =
+  grid = map (read_lines ()) graphemes
+  total = prune_until_stable grid 0
+  println "${total}"
+"#;
+    let input = "\
+..@@.@@@@.\n\
+@@@.@.@.@@\n\
+@@@@@.@.@@\n\
+@.@@@@..@.\n\
+@@.@@@@.@@\n\
+.@@@@@@@.@\n\
+.@.@.@.@@@\n\
+@.@@@.@@@@\n\
+.@@@@@@@@.\n\
+@.@.@@@.@.\n";
+    let module = parse_module(source).expect("source should parse");
+    let output = execute_runtime_module_with_stdin(&module, Some(input.to_string()))
+        .expect("iterative grid pruning without render should execute");
+    assert_eq!(output.as_deref(), Some("43\n"));
+}
+
+#[test]
+fn collect_prune_positions_on_second_iteration_grid_returns_twelve() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let lines = [
+        ".......@..",
+        ".@@.@.@.@@",
+        "@@@@@...@@",
+        "@.@@@@..@.",
+        ".@.@@@@.@.",
+        ".@@@@@@@.@",
+        ".@.@.@.@@@",
+        "..@@@.@@@@",
+        ".@@@@@@@@.",
+        "....@@@...",
+    ];
+    let grid_literal = lines
+        .iter()
+        .map(|line| {
+            let elems = line
+                .chars()
+                .map(|c| format!("\"{}\"", c))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{elems}]")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        r#"
+import goby/list (fold, length)
+import goby/stdio
+
+neighbor_threshold : Int
+neighbor_threshold = 4
+
+should_prune_cell : List (List String) -> Int -> Int -> Int -> Int -> Bool can Print
+should_prune_cell grid x y width height =
+  if grid[y][x] == "@"
+    neighbor_offsets = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+    occupied_neighbors =
+      fold neighbor_offsets 0 (fn total offset ->
+        next_y = y + offset.1
+        next_x = x + offset.0
+        if 0 <= next_y && next_y < height && 0 <= next_x && next_x < width
+          if grid[y + offset.1][x + offset.0] == "@"
+            total + 1
+          else
+            total
+        else
+          total
+      )
+    occupied_neighbors < neighbor_threshold
+  else
+    False
+
+collect_prune_positions : List (List String) -> Int -> Int -> Int -> Int -> List (Int, Int) can Print
+collect_prune_positions grid x y width height =
+  if y >= height
+    []
+  else
+    if x >= width
+      collect_prune_positions grid 0 (y + 1) width height
+    else
+      rest = collect_prune_positions grid (x + 1) y width height
+      if should_prune_cell grid x y width height
+        [(x, y), ..rest]
+      else
+        rest
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  grid = [{grid_literal}]
+  height = length grid
+  width = length(grid[0])
+  positions = collect_prune_positions grid 0 0 width height
+  count = length positions
+  println "${{count}}"
+"#
+    );
+    let module = parse_module(&source).expect("parse should work");
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("program should execute")
+        .expect("program should emit output");
+    assert_eq!(output, "12\n");
+}
+
+#[test]
+fn index_scan_after_first_prune_counts_fifty_eight_live_cells() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let lines = [
+        "..@@.@@@@.",
+        "@@@.@.@.@@",
+        "@@@@@.@.@@",
+        "@.@@@@..@.",
+        "@@.@@@@.@@",
+        ".@@@@@@@.@",
+        ".@.@.@.@@@",
+        "@.@@@.@@@@",
+        ".@@@@@@@@.",
+        "@.@.@@@.@.",
+    ];
+    let grid_literal = lines
+        .iter()
+        .map(|line| {
+            let elems = line
+                .chars()
+                .map(|c| format!("\"{}\"", c))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("[{elems}]")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        r#"
+import goby/list (each, fold, length)
+import goby/stdio
+
+neighbor_threshold : Int
+neighbor_threshold = 4
+
+should_prune_cell : List (List String) -> Int -> Int -> Int -> Int -> Bool can Print
+should_prune_cell grid x y width height =
+  if grid[y][x] == "@"
+    neighbor_offsets = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+    occupied_neighbors =
+      fold neighbor_offsets 0 (fn total offset ->
+        next_y = y + offset.1
+        next_x = x + offset.0
+        if 0 <= next_y && next_y < height && 0 <= next_x && next_x < width
+          if grid[y + offset.1][x + offset.0] == "@"
+            total + 1
+          else
+            total
+        else
+          total
+      )
+    occupied_neighbors < neighbor_threshold
+  else
+    False
+
+collect_prune_positions : List (List String) -> Int -> Int -> Int -> Int -> List (Int, Int) can Print
+collect_prune_positions grid x y width height =
+  if y >= height
+    []
+  else
+    if x >= width
+      collect_prune_positions grid 0 (y + 1) width height
+    else
+      rest = collect_prune_positions grid (x + 1) y width height
+      if should_prune_cell grid x y width height
+        [(x, y), ..rest]
+      else
+        rest
+
+apply_prune_positions : List (List String) -> List (Int, Int) -> List (List String) can Print
+apply_prune_positions grid positions =
+  mut updated = grid
+  each positions (fn pos ->
+    updated[pos.1][pos.0] := "."
+    ()
+  )
+  updated
+
+count_live : List (List String) -> Int -> Int -> Int -> Int -> Int can Print
+count_live grid x y width height =
+  if y >= height
+    0
+  else
+    if x >= width
+      count_live grid 0 (y + 1) width height
+    else
+      here =
+        if grid[y][x] == "@"
+          1
+        else
+          0
+      here + count_live grid (x + 1) y width height
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  grid = [{grid_literal}]
+  height = length grid
+  width = length(grid[0])
+  p1 = collect_prune_positions grid 0 0 width height
+  g1 = apply_prune_positions grid p1
+  total = count_live g1 0 0 width height
+  println "${{total}}"
+"#
+    );
+    let module = parse_module(&source).expect("parse should work");
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("program should execute")
+        .expect("program should emit output");
+    assert_eq!(output, "58\n");
+}
+
+#[test]
+fn general_lowered_recursive_grid_scan_without_spread_terminates() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/stdio
+
+scan : Int -> Int -> Int -> Int -> Int can Print
+scan x y width height =
+  if y >= height
+    0
+  else
+    if x >= width
+      scan 0 (y + 1) width height
+    else
+      1 + scan (x + 1) y width height
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  total = scan 0 0 10 10
+  println "${total}"
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("scan program should execute");
+    assert_eq!(output.as_deref(), Some("100\n"));
+}
+
+#[test]
+fn general_lowered_recursive_grid_scan_with_spread_terminates() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list (length)
+import goby/stdio
+
+scan : Int -> Int -> Int -> Int -> List (Int, Int) can Print
+scan x y width height =
+  if y >= height
+    []
+  else
+    if x >= width
+      scan 0 (y + 1) width height
+    else
+      rest = scan (x + 1) y width height
+      [(x, y), ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  total = length (scan 0 0 10 10)
+  println "${total}"
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("spread-scan program should execute");
+    assert_eq!(output.as_deref(), Some("100\n"));
+}
+
+#[test]
 fn resolves_runtime_output_for_list_join_single_element() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"

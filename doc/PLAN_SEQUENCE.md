@@ -767,16 +767,12 @@ The following product-direction decisions are already locked for this plan:
     - done when: `cargo test -p goby-wasm` green. All existing map tests pass.
     - checks: `cargo test -p goby-wasm`
 
-  - [ ] **M5-6: Rewrite `each` as Goby code on top of `__goby_list_fold`**
+  - [x] **M5-6: Rewrite `each` as Goby code on top of `__goby_list_fold`** (complete, 2026-04-12)
     - scope:
       - `stdlib/goby/list.gb`: rewrite `each`:
         ```
         each : List a -> (a -> Unit) -> Unit
-        each xs f =
-          __goby_list_fold xs () (fn _ x ->
-            f x
-            ()
-          )
+        each xs f = __goby_list_fold xs () (fn _ x -> f x)
         ```
       - Remove `GlobalRef("list","each")` and `Var("each")` name-match
         branches from the lowerer.
@@ -785,7 +781,7 @@ The following product-direction decisions are already locked for this plan:
       All existing each tests (including effect callbacks) pass.
     - checks: `cargo test -p goby-wasm`
 
-  - [ ] **M5-7: Remove legacy `WasmBackendInstr` variants**
+  - [x] **M5-7: Remove legacy `WasmBackendInstr` variants** (complete, 2026-04-12)
     - scope: after M5-3 through M5-6, the old dedicated backend instructions
       are no longer produced by the lowerer. This step removes the dead code:
       - Remove `WasmBackendInstr::ListEach` and its emit function.
@@ -815,7 +811,7 @@ The following product-direction decisions are already locked for this plan:
     - done when: all cases green.
     - checks: `cargo test -p goby-wasm`
 
-  - [ ] **M5-9: Audit and documentation**
+  - [x] **M5-9: Audit and documentation** (complete, 2026-04-12)
     - scope: record the M5 traversal boundaries in `backend_ir.rs`:
       - `__goby_list_length` → `BackendIntrinsic::ListLength`:
         header `total_len` direct read, O(1).
@@ -829,9 +825,12 @@ The following product-direction decisions are already locked for this plan:
         (fold that discards its accumulator).
       - `fold`: 1-line wrapper around `__goby_list_fold`.
     - done when: doc comments added.
-    - checks: `cargo test -p goby-wasm` (no regressions)
+    - status:
+      - `backend_ir.rs` now documents `ListLength`/`ListFold`/`ListMap` execution
+        boundaries and stdlib ownership (`fold`/`map` wrappers + `each` as fold-derived form).
+    - checks: `cargo test -p goby-wasm` (no new M5 traversal regressions found)
 
-  - [ ] **M5-10: Verification snapshot and M5 completion**
+  - [x] **M5-10: Verification snapshot and M5 completion** (complete, 2026-04-12)
     - scope: record final `cargo test -p goby-wasm` result and compare
       against M5-0 baseline workloads.
       - correctness gate: all M5 regression tests green.
@@ -844,6 +843,14 @@ The following product-direction decisions are already locked for this plan:
           practical scripting success criteria.
       Mark the M5 checkbox as `[x]` in PLAN_SEQUENCE.md with the
       verification snapshot (test count).
+    - latest snapshot (2026-04-12):
+      - `cargo test -p goby-wasm`: `641 passed; 0 failed; 4 ignored`.
+      - additional check: `cargo check` green at repo root.
+      - root-cause fix notes:
+        - direct-call emitter now reloads shared heap state after callees that
+          advance allocation state even when their return value is immediate
+        - `list.join` now routes through `__goby_list_join_string`, avoiding
+          repeated temporary string allocation on the Wasm path
     - done when: all M5 sub-steps are `[x]`.
     - checks: `cargo test -p goby-wasm` green, benchmark comparison recorded,
       PLAN_SEQUENCE.md updated.

@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-11
+Last updated: 2026-04-12
 
 ## Current Focus
 
@@ -132,6 +132,24 @@ M4 completion checkpoint (2026-04-11):
   `doc/LANGUAGE_SPEC.md` (amortized O(1) with chunk-boundary
   O(n/CHUNK_SIZE) header-copy cost under bump allocation).
 - `doc/PLAN_SEQUENCE.md` now marks M4 complete; next focus is M5.
+
+M5 traversal-boundary checkpoint (2026-04-12):
+- M5-6 complete: `stdlib/goby/list.gb` now defines
+  `each xs f = __goby_list_fold xs () (fn _ x -> f x)`.
+- M5-7 complete: removed legacy dedicated traversal instructions
+  (`ListEach`, `ListEachEffect`, `ListMap`) from general-lowering backend IR
+  and emitter dispatch. `SPECIALLY_LOWERED_STDLIB_NAMES` now excludes `each`/`map`
+  (remaining: `graphemes`, `split`).
+- M5-9 complete: `backend_ir.rs` intrinsic docs now explicitly capture
+  `ListLength`/`ListFold`/`ListMap` ownership and stdlib wrapper boundaries.
+- Root-cause follow-up complete:
+  - direct-call codegen now reloads shared heap state after heap-using callees,
+    even when their return value is immediate
+  - `list.join` now uses `__goby_list_join_string`, avoiding repeated temporary
+    Wasm-string allocation during render-heavy loops
+- Verification snapshot:
+  - `cargo test -p goby-wasm`: `641 passed; 0 failed; 4 ignored`
+  - `cargo check`: green at repo root
 
 ## Recently Completed
 

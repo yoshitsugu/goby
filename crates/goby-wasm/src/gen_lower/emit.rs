@@ -27,8 +27,8 @@ use crate::host_runtime::{
     host_import_for_intrinsic,
 };
 use crate::layout::{
-    GLOBAL_HEAP_CURSOR_OFFSET, GLOBAL_RUNTIME_ERROR_OFFSET, MemoryLayout,
-    RUNTIME_ERROR_MEMORY_EXHAUSTION,
+    GLOBAL_HEAP_CURSOR_OFFSET, GLOBAL_HEAP_FLOOR_OFFSET, GLOBAL_HOST_BUMP_CURSOR_OFFSET,
+    GLOBAL_RUNTIME_ERROR_OFFSET, MemoryLayout, RUNTIME_ERROR_MEMORY_EXHAUSTION,
 };
 use crate::memory_config::{DEFAULT_WASM_MEMORY_CONFIG, WASM_PAGE_BYTES};
 
@@ -243,6 +243,9 @@ struct EmitContext {
     /// Map from declaration name to whether the result may reference
     /// Wasm-owned heap allocations that must survive after the call returns.
     decl_returns_wasm_heap: HashMap<String, bool>,
+    /// Map from declaration name to whether executing the callee may advance
+    /// the shared heap state even when its return value is immediate.
+    decl_uses_heap: HashMap<String, bool>,
     /// Map from declaration name to funcref table slot index (for `PushFuncHandle`).
     /// Slot 0 = first aux decl, slot 1 = second aux decl, etc.
     decl_table_slots: HashMap<String, u32>,
@@ -291,6 +294,7 @@ impl EmitContext {
     fn with_module_tables(
         decl_func_indices: HashMap<String, u32>,
         decl_returns_wasm_heap: HashMap<String, bool>,
+        decl_uses_heap: HashMap<String, bool>,
         decl_table_slots: HashMap<String, u32>,
         indirect_call_type_idx_1: Option<u32>,
         indirect_call_type_idx_2: Option<u32>,
@@ -302,6 +306,7 @@ impl EmitContext {
             next_local: 0,
             decl_func_indices,
             decl_returns_wasm_heap,
+            decl_uses_heap,
             decl_table_slots,
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
@@ -340,6 +345,17 @@ impl EmitContext {
             .ok_or_else(|| CodegenError {
                 message: format!(
                     "gen_lower/emit: missing return ownership for declaration '{decl_name}'"
+                ),
+            })
+    }
+
+    fn decl_uses_heap(&self, decl_name: &str) -> Result<bool, CodegenError> {
+        self.decl_uses_heap
+            .get(decl_name)
+            .copied()
+            .ok_or_else(|| CodegenError {
+                message: format!(
+                    "gen_lower/emit: missing heap-usage metadata for declaration '{decl_name}'"
                 ),
             })
     }
@@ -486,20 +502,6 @@ pub(crate) fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBacken
                     result.extend(collect_all_instrs(field));
                 }
             }
-            WasmBackendInstr::ListEachEffect { list_instrs, .. } => {
-                result.extend(collect_all_instrs(list_instrs));
-            }
-            WasmBackendInstr::ListEach {
-                list_instrs,
-                func_instrs,
-            }
-            | WasmBackendInstr::ListMap {
-                list_instrs,
-                func_instrs,
-            } => {
-                result.extend(collect_all_instrs(list_instrs));
-                result.extend(collect_all_instrs(func_instrs));
-            }
             WasmBackendInstr::ListReverseFoldPrepend {
                 list_instrs,
                 prefix_element_instrs,
@@ -547,8 +549,6 @@ pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                 | WasmBackendInstr::ListBuilderFinish { .. }
                 | WasmBackendInstr::TupleLit { .. }
                 | WasmBackendInstr::RecordLit { .. }
-                | WasmBackendInstr::ListEach { .. }
-                | WasmBackendInstr::ListMap { .. }
                 | WasmBackendInstr::ListReverseFoldPrepend { .. }
                 | WasmBackendInstr::CreateClosure { .. }
                 | WasmBackendInstr::AllocMutableCell { .. }
@@ -663,7 +663,6 @@ fn needs_scratch_state(instrs: &[WasmBackendInstr]) -> bool {
 
     collect_all_instrs(instrs).iter().any(|instr| match instr {
         WasmBackendInstr::BinOp { op } => matches!(op, IrBinOp::Eq),
-        WasmBackendInstr::ListEachEffect { .. } => true,
         WasmBackendInstr::Intrinsic {
             intrinsic:
                 BackendIntrinsic::ListGet
@@ -763,18 +762,6 @@ fn required_heap_base_spill_count_instr(instr: &WasmBackendInstr) -> u32 {
                 .max()
                 .unwrap_or(0)
         }
-        WasmBackendInstr::ListEachEffect { list_instrs, .. } => {
-            required_heap_base_spill_count(list_instrs)
-        }
-        WasmBackendInstr::ListEach {
-            list_instrs,
-            func_instrs,
-        }
-        | WasmBackendInstr::ListMap {
-            list_instrs,
-            func_instrs,
-        } => required_heap_base_spill_count(list_instrs)
-            .max(required_heap_base_spill_count(func_instrs)),
         WasmBackendInstr::ListReverseFoldPrepend {
             list_instrs,
             prefix_element_instrs,
@@ -811,8 +798,6 @@ fn required_i64_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
     let all = collect_all_instrs(instrs);
     let needs_scratch = all.iter().any(|i| match i {
         WasmBackendInstr::Intrinsic { .. }
-        | WasmBackendInstr::ListEach { .. }
-        | WasmBackendInstr::ListMap { .. }
         | WasmBackendInstr::ListReverseFoldPrepend { .. }
         | WasmBackendInstr::ListBuilderPush { .. }
         | WasmBackendInstr::IndirectCall { .. } => true,
@@ -936,12 +921,6 @@ fn needs_newline_data(instrs: &[WasmBackendInstr]) -> bool {
                 op: BackendPrintOp::Println,
                 ..
             }
-        ) || matches!(
-            i,
-            WasmBackendInstr::ListEachEffect {
-                op: BackendPrintOp::Println,
-                ..
-            }
         )
     })
 }
@@ -1028,23 +1007,42 @@ fn initialize_helper_state_locals(
             align: 2,
             memory_index: 0,
         }));
+        function.instruction(&Instruction::I32Const(GLOBAL_HEAP_FLOOR_OFFSET as i32));
+        function.instruction(&Instruction::I32Const(initial_floor));
+        function.instruction(&Instruction::I32Store(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
         function.instruction(&Instruction::I32Const(GLOBAL_HEAP_CURSOR_OFFSET as i32));
+        function.instruction(&Instruction::I32Load(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::LocalSet(alloc_cursor_local));
+        function.instruction(&Instruction::I32Const(GLOBAL_HEAP_FLOOR_OFFSET as i32));
         function.instruction(&Instruction::I32Load(MemArg {
             offset: 0,
             align: 2,
             memory_index: 0,
         }));
     } else {
-        // aux decls load the current global cursor (may have been advanced by caller).
+        // aux decls load the current global cursor/floor (may have been advanced by caller).
         function.instruction(&Instruction::I32Const(GLOBAL_HEAP_CURSOR_OFFSET as i32));
         function.instruction(&Instruction::I32Load(MemArg {
             offset: 0,
             align: 2,
             memory_index: 0,
         }));
+        function.instruction(&Instruction::LocalSet(alloc_cursor_local));
+        function.instruction(&Instruction::I32Const(GLOBAL_HEAP_FLOOR_OFFSET as i32));
+        function.instruction(&Instruction::I32Load(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
     }
-    function.instruction(&Instruction::LocalSet(alloc_cursor_local));
-    function.instruction(&Instruction::I32Const(initial_floor));
     function.instruction(&Instruction::LocalSet(heap_floor_local));
     Ok(())
 }
@@ -1195,15 +1193,12 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         })
         .collect();
 
-    // Detect which IndirectCall arities are used, and also whether ListEach/ListMap
-    // (which use arity-1 indirect call internally) are present.
+    // Detect which IndirectCall arities are used by emitted instructions/intrinsics.
     let uses_indirect_call_1 = all_slices_iter().any(|slice| {
         collect_all_instrs(slice).iter().any(|i| {
             matches!(
                 i,
                 WasmBackendInstr::IndirectCall { arity: 1 }
-                    | WasmBackendInstr::ListEach { .. }
-                    | WasmBackendInstr::ListMap { .. }
                     | WasmBackendInstr::Intrinsic {
                         intrinsic: BackendIntrinsic::ListMap
                     }
@@ -1216,8 +1211,6 @@ pub(crate) fn emit_general_module_with_aux_and_options(
                 i,
                 WasmBackendInstr::IndirectCall { arity: 2 }
                     | WasmBackendInstr::IndirectCall { arity: 1 }
-                    | WasmBackendInstr::ListEach { .. }
-                    | WasmBackendInstr::ListMap { .. }
                     | WasmBackendInstr::Intrinsic {
                         intrinsic: BackendIntrinsic::ListFold
                     }
@@ -1327,6 +1320,10 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         .iter()
         .map(|decl| (decl.decl_name.clone(), decl.returns_wasm_heap))
         .collect();
+    let decl_uses_heap: HashMap<String, bool> = aux_decls
+        .iter()
+        .map(|decl| (decl.decl_name.clone(), needs_helper_state(&decl.instrs)))
+        .collect();
 
     // Build decl_name → table slot index for PushFuncHandle resolution.
     // Table slot N corresponds to aux decl N (0-based); main is excluded from the table.
@@ -1393,6 +1390,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         let mut ctx = EmitContext::with_module_tables(
             decl_func_indices.clone(),
             decl_returns_wasm_heap.clone(),
+            decl_uses_heap.clone(),
             decl_table_slots.clone(),
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
@@ -1475,6 +1473,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         let mut ctx = EmitContext::with_module_tables(
             decl_func_indices.clone(),
             decl_returns_wasm_heap.clone(),
+            decl_uses_heap.clone(),
             decl_table_slots.clone(),
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
@@ -1507,6 +1506,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             aux_decls,
             &decl_func_indices,
             &decl_returns_wasm_heap,
+            &decl_uses_heap,
             &decl_table_slots,
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
@@ -1822,11 +1822,13 @@ fn emit_instrs_with_heap_depth(
             WasmBackendInstr::DeclCall { decl_name } => {
                 let func_idx = ctx.decl_func_idx(decl_name)?;
                 let returns_wasm_heap = ctx.decl_returns_wasm_heap(decl_name)?;
+                let callee_uses_heap = ctx.decl_uses_heap(decl_name)?;
                 emit_heap_aware_direct_call(
                     function,
                     func_idx,
                     helper_state.as_ref(),
                     returns_wasm_heap,
+                    callee_uses_heap,
                 );
             }
 
@@ -1867,11 +1869,13 @@ fn emit_instrs_with_heap_depth(
                 _ => {
                     let func_idx = ctx.decl_func_idx(decl_name)?;
                     let returns_wasm_heap = ctx.decl_returns_wasm_heap(decl_name)?;
+                    let callee_uses_heap = ctx.decl_uses_heap(decl_name)?;
                     emit_heap_aware_direct_call(
                         function,
                         func_idx,
                         helper_state.as_ref(),
                         returns_wasm_heap,
+                        callee_uses_heap,
                     );
                 }
             },
@@ -2616,102 +2620,6 @@ fn emit_instrs_with_heap_depth(
                 )?;
             }
 
-            WasmBackendInstr::ListEachEffect { list_instrs, op } => {
-                emit_instrs(
-                    function,
-                    ctx,
-                    list_instrs,
-                    layout,
-                    named_i64_count,
-                    helper_i64_scratch_count,
-                    i32_base,
-                    static_strings,
-                    options,
-                    function_returns_i64,
-                    self_tail_loop_depth,
-                )?;
-                emit_list_each_effect(
-                    function,
-                    op.append_newline(),
-                    i32_base,
-                    iovec_offset,
-                    nread_offset,
-                    newline_ptr,
-                );
-            }
-
-            WasmBackendInstr::ListEach {
-                list_instrs,
-                func_instrs,
-            } => {
-                let hs = require_heap_state(helper_state, "ListEach")?;
-                let type_idx = ctx.indirect_call_type_idx(1)?;
-                let closure_type_idx = ctx.indirect_call_type_idx(2)?;
-                emit_instrs(
-                    function,
-                    ctx,
-                    list_instrs,
-                    layout,
-                    named_i64_count,
-                    helper_i64_scratch_count,
-                    i32_base,
-                    static_strings,
-                    options,
-                    function_returns_i64,
-                    self_tail_loop_depth,
-                )?;
-                emit_instrs(
-                    function,
-                    ctx,
-                    func_instrs,
-                    layout,
-                    named_i64_count,
-                    helper_i64_scratch_count,
-                    i32_base,
-                    static_strings,
-                    options,
-                    function_returns_i64,
-                    self_tail_loop_depth,
-                )?;
-                emit_list_each(function, &hs, type_idx, closure_type_idx);
-            }
-
-            WasmBackendInstr::ListMap {
-                list_instrs,
-                func_instrs,
-            } => {
-                let hs = require_heap_state(helper_state, "ListMap")?;
-                let type_idx = ctx.indirect_call_type_idx(1)?;
-                let closure_type_idx = ctx.indirect_call_type_idx(2)?;
-                emit_instrs(
-                    function,
-                    ctx,
-                    list_instrs,
-                    layout,
-                    named_i64_count,
-                    helper_i64_scratch_count,
-                    i32_base,
-                    static_strings,
-                    options,
-                    function_returns_i64,
-                    self_tail_loop_depth,
-                )?;
-                emit_instrs(
-                    function,
-                    ctx,
-                    func_instrs,
-                    layout,
-                    named_i64_count,
-                    helper_i64_scratch_count,
-                    i32_base,
-                    static_strings,
-                    options,
-                    function_returns_i64,
-                    self_tail_loop_depth,
-                )?;
-                emit_list_map(function, &hs, type_idx, closure_type_idx)?;
-            }
-
             WasmBackendInstr::ListReverseFoldPrepend {
                 list_instrs,
                 item_local,
@@ -3054,8 +2962,12 @@ fn emit_helper_call(
         | BackendIntrinsic::StringEachGraphemeCount
         | BackendIntrinsic::StringEachGraphemeState
         | BackendIntrinsic::StringConcat
+        | BackendIntrinsic::ListJoinString
         | BackendIntrinsic::StringGraphemesList
         | BackendIntrinsic::StringSplitLines => {
+            if let Some(hs) = heap_state {
+                emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
+            }
             let host_import = host_import_for_intrinsic(intrinsic).ok_or_else(|| CodegenError {
                 message: format!(
                     "gen_lower/emit: missing host import mapping for intrinsic '{intrinsic:?}'"
@@ -3125,7 +3037,7 @@ fn emit_helper_call(
             })?;
             let type_idx = ctx.indirect_call_type_idx(1)?;
             let closure_type_idx = ctx.indirect_call_type_idx(2)?;
-            emit_list_map(function, &hs, type_idx, closure_type_idx)
+            emit_list_map(function, hs, type_idx, closure_type_idx)
         }
     }?;
     let _ = (ctx, i32_base);
@@ -3317,7 +3229,9 @@ fn emit_function_body(
     }
     if has_heap && emit_epilogue_cursor_sync {
         let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
+        let heap_floor_local = i32_base + HELPER_HEAP_FLOOR_OFFSET;
         emit_sync_cursor_to_global(function, alloc_cursor_local);
+        emit_sync_floor_to_global(function, heap_floor_local);
     }
     function.instruction(&Instruction::End);
     ctx.tail_call_mode = None;
@@ -3331,6 +3245,7 @@ fn emit_tail_call_group_dispatcher(
     aux_decls: &[AuxDecl],
     decl_func_indices: &HashMap<String, u32>,
     decl_returns_wasm_heap: &HashMap<String, bool>,
+    decl_uses_heap: &HashMap<String, bool>,
     decl_table_slots: &HashMap<String, u32>,
     indirect_call_type_idx_1: Option<u32>,
     indirect_call_type_idx_2: Option<u32>,
@@ -3400,6 +3315,7 @@ fn emit_tail_call_group_dispatcher(
         &named_local_bases,
         decl_func_indices,
         decl_returns_wasm_heap,
+        decl_uses_heap,
         decl_table_slots,
         indirect_call_type_idx_1,
         indirect_call_type_idx_2,
@@ -3417,7 +3333,9 @@ fn emit_tail_call_group_dispatcher(
     function.instruction(&Instruction::End);
     if needs_heap {
         let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
+        let heap_floor_local = i32_base + HELPER_HEAP_FLOOR_OFFSET;
         emit_sync_cursor_to_global(&mut function, alloc_cursor_local);
+        emit_sync_floor_to_global(&mut function, heap_floor_local);
     }
     function.instruction(&Instruction::End);
     code.function(&function);
@@ -3432,6 +3350,7 @@ fn emit_tail_call_group_dispatch_chain(
     named_local_bases: &HashMap<String, u32>,
     decl_func_indices: &HashMap<String, u32>,
     decl_returns_wasm_heap: &HashMap<String, bool>,
+    decl_uses_heap: &HashMap<String, bool>,
     decl_table_slots: &HashMap<String, u32>,
     indirect_call_type_idx_1: Option<u32>,
     indirect_call_type_idx_2: Option<u32>,
@@ -3469,6 +3388,7 @@ fn emit_tail_call_group_dispatch_chain(
     let mut ctx = EmitContext::with_module_tables(
         decl_func_indices.clone(),
         decl_returns_wasm_heap.clone(),
+        decl_uses_heap.clone(),
         decl_table_slots.clone(),
         indirect_call_type_idx_1,
         indirect_call_type_idx_2,
@@ -3514,6 +3434,7 @@ fn emit_tail_call_group_dispatch_chain(
             named_local_bases,
             decl_func_indices,
             decl_returns_wasm_heap,
+            decl_uses_heap,
             decl_table_slots,
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
@@ -3544,16 +3465,21 @@ fn emit_heap_aware_direct_call(
     func_idx: u32,
     helper_state: Option<&HeapEmitState>,
     returns_wasm_heap: bool,
+    callee_uses_heap: bool,
 ) {
     if let Some(hs) = helper_state {
         emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
+        emit_sync_floor_to_global(function, hs.heap_floor_local);
     }
     function.instruction(&Instruction::Call(func_idx));
     if let Some(hs) = helper_state {
         emit_return_if_runtime_error(function, hs);
     }
-    if returns_wasm_heap && let Some(hs) = helper_state {
+    if (returns_wasm_heap || callee_uses_heap)
+        && let Some(hs) = helper_state
+    {
         emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
+        emit_sync_floor_from_global(function, hs.heap_floor_local);
     }
 }
 
@@ -3586,6 +3512,16 @@ fn emit_sync_cursor_to_global(function: &mut Function, alloc_cursor_local: u32) 
     }));
 }
 
+fn emit_sync_floor_to_global(function: &mut Function, heap_floor_local: u32) {
+    function.instruction(&Instruction::I32Const(GLOBAL_HEAP_FLOOR_OFFSET as i32));
+    function.instruction(&Instruction::LocalGet(heap_floor_local));
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+}
+
 /// Emit `i32.const GLOBAL_HEAP_CURSOR_OFFSET; i32.load; local.set alloc_cursor_local`
 /// to reload the alloc cursor from the global slot after a `call_indirect`.
 fn emit_sync_cursor_from_global(function: &mut Function, alloc_cursor_local: u32) {
@@ -3596,6 +3532,16 @@ fn emit_sync_cursor_from_global(function: &mut Function, alloc_cursor_local: u32
         memory_index: 0,
     }));
     function.instruction(&Instruction::LocalSet(alloc_cursor_local));
+}
+
+fn emit_sync_floor_from_global(function: &mut Function, heap_floor_local: u32) {
+    function.instruction(&Instruction::I32Const(GLOBAL_HEAP_FLOOR_OFFSET as i32));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(heap_floor_local));
 }
 
 /// Emit a `call_indirect` dispatch that handles both plain funcrefs and capturing closures.
@@ -3629,6 +3575,7 @@ fn emit_callable_dispatch(
     function.instruction(&Instruction::I64Eq);
     if let Some(hs) = hs {
         emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
+        emit_sync_floor_to_global(function, hs.heap_floor_local);
     }
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
         wasm_encoder::ValType::I64,
@@ -3668,6 +3615,7 @@ fn emit_callable_dispatch(
     function.instruction(&Instruction::End);
     if let Some(hs) = hs {
         emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
+        emit_sync_floor_from_global(function, hs.heap_floor_local);
     }
 }
 
@@ -3783,6 +3731,23 @@ fn emit_alloc_from_top(
     function.instruction(&Instruction::I32Const(HOST_BUMP_RESERVED_BYTES as i32));
     function.instruction(&Instruction::I32Sub);
     function.instruction(&Instruction::LocalSet(helper_state.heap_floor_local));
+    // If host bump already advanced beyond this floor, keep floor at host cursor.
+    function.instruction(&Instruction::I32Const(
+        GLOBAL_HOST_BUMP_CURSOR_OFFSET as i32,
+    ));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(result_local));
+    function.instruction(&Instruction::LocalGet(helper_state.heap_floor_local));
+    function.instruction(&Instruction::LocalGet(result_local));
+    function.instruction(&Instruction::I32LtU);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(result_local));
+    function.instruction(&Instruction::LocalSet(helper_state.heap_floor_local));
+    function.instruction(&Instruction::End);
 
     // Rebase cursor to the current dynamic top-of-heap slice after growth:
     //   alloc_cursor = memory.size * WASM_PAGE_BYTES - HOST_BUMP_RESERVED_BYTES
@@ -4698,8 +4663,8 @@ fn emit_list_fold_helper(
     indirect_call_type_idx: u32,
     closure_call_type_idx: u32,
 ) -> Result<(), CodegenError> {
-    let s_func = hs.scratch.i64_base;     // i64: func handle
-    let s_acc = hs.scratch.i64_base + 1;  // i64: accumulator
+    let s_func = hs.scratch.i64_base; // i64: func handle
+    let s_acc = hs.scratch.i64_base + 1; // i64: accumulator
     let s_elem = hs.scratch.i64_base + 2; // i64: current element (reuse slot)
     let s_header_ptr = hs.scratch.i32_base + HS_LIST_PTR;
     let s_n_chunks = hs.scratch.i32_base + HS_ITEM_COUNT;
@@ -6438,131 +6403,6 @@ fn emit_split_each_print(
     function.instruction(&Instruction::I64Const(encode_unit()));
 }
 
-/// Emit `list.each`: for each element in a chunked list, call a funcref.
-///
-/// Stack before: `[..., list_tagged: i64, func_tagged: i64]`
-/// Stack after:  `[..., unit: i64]`
-///
-/// Chunked Sequence walk: outer loop over chunks (i32 chunk_idx), inner loop over items.
-fn emit_list_each(
-    function: &mut Function,
-    hs: &HeapEmitState,
-    indirect_call_type_idx: u32,
-    closure_call_type_idx: u32,
-) {
-    let s_func = hs.scratch.i64_base; // i64: func handle
-    let s_elem = hs.scratch.i64_base + 1; // i64: current element
-    let s_header_ptr = hs.scratch.i32_base + HS_LIST_PTR; // header ptr
-    let s_n_chunks = hs.scratch.i32_base + HS_ITEM_COUNT; // n_chunks
-    let s_chunk_idx = hs.scratch.i32_base + HS_ITER; // outer loop: chunk index
-    let s_chunk_ptr = hs.scratch.i32_base + HS_AUX_PTR; // current chunk ptr
-    let s_chunk_len = hs.scratch.i32_base + HS_ALLOC_SIZE; // current chunk len
-    let s_item_iter = hs.scratch.i32_base + HS_TEXT_PTR; // inner loop: item index within chunk
-
-    // Stack: [list_tagged, func_tagged]
-    function.instruction(&Instruction::LocalSet(s_func));
-    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
-    function.instruction(&Instruction::I64And);
-    function.instruction(&Instruction::I32WrapI64);
-    function.instruction(&Instruction::LocalSet(s_header_ptr));
-
-    // n_chunks = header[4]
-    function.instruction(&Instruction::LocalGet(s_header_ptr));
-    function.instruction(&Instruction::I32Load(MemArg {
-        offset: header_n_chunks_offset() as u64,
-        align: 2,
-        memory_index: 0,
-    }));
-    function.instruction(&Instruction::LocalSet(s_n_chunks));
-
-    // chunk_idx = 0
-    function.instruction(&Instruction::I32Const(0));
-    function.instruction(&Instruction::LocalSet(s_chunk_idx));
-
-    // Outer loop: for chunk_idx in 0..n_chunks
-    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
-    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
-    function.instruction(&Instruction::LocalGet(s_chunk_idx));
-    function.instruction(&Instruction::LocalGet(s_n_chunks));
-    function.instruction(&Instruction::I32GeU);
-    function.instruction(&Instruction::BrIf(1));
-
-    // chunk_ptr = header[8 + chunk_idx*4]
-    function.instruction(&Instruction::LocalGet(s_header_ptr));
-    function.instruction(&Instruction::LocalGet(s_chunk_idx));
-    function.instruction(&Instruction::I32Const(4));
-    function.instruction(&Instruction::I32Mul);
-    function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Load(MemArg {
-        offset: header_chunk_ptr_offset(0) as u64,
-        align: 2,
-        memory_index: 0,
-    }));
-    function.instruction(&Instruction::LocalSet(s_chunk_ptr));
-    // chunk_len = chunk[0]
-    function.instruction(&Instruction::LocalGet(s_chunk_ptr));
-    function.instruction(&Instruction::I32Load(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    function.instruction(&Instruction::LocalSet(s_chunk_len));
-    // item_iter = 0
-    function.instruction(&Instruction::I32Const(0));
-    function.instruction(&Instruction::LocalSet(s_item_iter));
-
-    // Inner loop: for item_iter in 0..chunk_len
-    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
-    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
-    function.instruction(&Instruction::LocalGet(s_item_iter));
-    function.instruction(&Instruction::LocalGet(s_chunk_len));
-    function.instruction(&Instruction::I32GeU);
-    function.instruction(&Instruction::BrIf(1));
-
-    // elem = chunk[4 + item_iter * 8]
-    function.instruction(&Instruction::LocalGet(s_chunk_ptr));
-    function.instruction(&Instruction::LocalGet(s_item_iter));
-    function.instruction(&Instruction::I32Const(8));
-    function.instruction(&Instruction::I32Mul);
-    function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I64Load(MemArg {
-        offset: chunk_item_offset(0) as u64,
-        align: 3,
-        memory_index: 0,
-    }));
-    function.instruction(&Instruction::LocalSet(s_elem));
-
-    emit_callable_dispatch(
-        function,
-        s_func,
-        &[s_elem],
-        indirect_call_type_idx,
-        closure_call_type_idx,
-        Some(hs),
-    );
-    function.instruction(&Instruction::LocalSet(s_elem));
-    emit_return_if_runtime_error(function, hs);
-
-    function.instruction(&Instruction::LocalGet(s_item_iter));
-    function.instruction(&Instruction::I32Const(1));
-    function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::LocalSet(s_item_iter));
-    function.instruction(&Instruction::Br(0));
-    function.instruction(&Instruction::End); // end inner loop
-    function.instruction(&Instruction::End); // end inner block
-
-    // chunk_idx += 1
-    function.instruction(&Instruction::LocalGet(s_chunk_idx));
-    function.instruction(&Instruction::I32Const(1));
-    function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::LocalSet(s_chunk_idx));
-    function.instruction(&Instruction::Br(0));
-    function.instruction(&Instruction::End); // end outer loop
-    function.instruction(&Instruction::End); // end outer block
-
-    function.instruction(&Instruction::I64Const(encode_unit()));
-}
-
 /// Emit `list.map`: for each element in a chunked list, call a funcref and collect into a
 /// new chunked list of the same structure.
 ///
@@ -7049,199 +6889,6 @@ fn emit_list_reverse_fold_prepend(
 
     emit_push_tagged_ptr(function, s_dst_header, TAG_LIST);
     Ok(())
-}
-
-/// Emit `list.each` with an effect callback (fused `ListEachEffect`).
-///
-/// Stack before: `[..., list_tagged: i64]`
-/// Stack after:  `[..., unit: i64]`
-///
-/// Iterates the list, printing each tagged-string element via fd_write.
-/// I32 scratch slots: offset 0 (ptr_local for Print), HS_LIST_PTR (8), HS_ITEM_COUNT (6),
-/// HS_ITER (10).
-fn emit_list_each_effect(
-    function: &mut Function,
-    append_newline: bool,
-    i32_base: u32,
-    iovec_offset: i32,
-    nread_offset: i32,
-    newline_ptr: i32,
-) {
-    // Chunked Sequence walk for print-effect loop.
-    let ptr_local = i32_base + HS_TEXT_LEN; // str_ptr (for fd_write)
-    let s_header_ptr = i32_base + HS_LIST_PTR; // list header ptr
-    let s_n_chunks = i32_base + HS_ITEM_COUNT; // n_chunks
-    let s_chunk_idx = i32_base + HS_ITER; // outer loop counter
-    let s_chunk_ptr = i32_base + HS_AUX_PTR; // current chunk ptr
-    let s_chunk_len = i32_base + HS_ALLOC_SIZE; // current chunk len
-    let s_item_iter = i32_base + HS_TEXT_PTR; // inner loop counter
-
-    // Stack: [list_tagged]
-    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
-    function.instruction(&Instruction::I64And);
-    function.instruction(&Instruction::I32WrapI64);
-    function.instruction(&Instruction::LocalSet(s_header_ptr));
-
-    // n_chunks = header[4]
-    function.instruction(&Instruction::LocalGet(s_header_ptr));
-    function.instruction(&Instruction::I32Load(MemArg {
-        offset: header_n_chunks_offset() as u64,
-        align: 2,
-        memory_index: 0,
-    }));
-    function.instruction(&Instruction::LocalSet(s_n_chunks));
-
-    // if n_chunks == 0: skip
-    function.instruction(&Instruction::LocalGet(s_n_chunks));
-    function.instruction(&Instruction::I32Eqz);
-    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-    function.instruction(&Instruction::Else);
-
-    // chunk_idx = 0
-    function.instruction(&Instruction::I32Const(0));
-    function.instruction(&Instruction::LocalSet(s_chunk_idx));
-
-    // Outer loop: for chunk_idx in 0..n_chunks
-    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
-    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
-    function.instruction(&Instruction::LocalGet(s_chunk_idx));
-    function.instruction(&Instruction::LocalGet(s_n_chunks));
-    function.instruction(&Instruction::I32GeU);
-    function.instruction(&Instruction::BrIf(1));
-
-    // chunk_ptr = header[8 + chunk_idx*4]
-    function.instruction(&Instruction::LocalGet(s_header_ptr));
-    function.instruction(&Instruction::LocalGet(s_chunk_idx));
-    function.instruction(&Instruction::I32Const(4));
-    function.instruction(&Instruction::I32Mul);
-    function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Load(MemArg {
-        offset: header_chunk_ptr_offset(0) as u64,
-        align: 2,
-        memory_index: 0,
-    }));
-    function.instruction(&Instruction::LocalSet(s_chunk_ptr));
-    // chunk_len = chunk[0]
-    function.instruction(&Instruction::LocalGet(s_chunk_ptr));
-    function.instruction(&Instruction::I32Load(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    function.instruction(&Instruction::LocalSet(s_chunk_len));
-    // item_iter = 0
-    function.instruction(&Instruction::I32Const(0));
-    function.instruction(&Instruction::LocalSet(s_item_iter));
-
-    // Inner loop: for item_iter in 0..chunk_len
-    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
-    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
-    function.instruction(&Instruction::LocalGet(s_item_iter));
-    function.instruction(&Instruction::LocalGet(s_chunk_len));
-    function.instruction(&Instruction::I32GeU);
-    function.instruction(&Instruction::BrIf(1));
-
-    // elem = chunk[4 + item_iter*8] (tagged-i64 string)
-    function.instruction(&Instruction::LocalGet(s_chunk_ptr));
-    function.instruction(&Instruction::LocalGet(s_item_iter));
-    function.instruction(&Instruction::I32Const(8));
-    function.instruction(&Instruction::I32Mul);
-    function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I64Load(MemArg {
-        offset: chunk_item_offset(0) as u64,
-        align: 3,
-        memory_index: 0,
-    }));
-    // Decode tagged string ptr (lower 32 bits)
-    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
-    function.instruction(&Instruction::I64And);
-    function.instruction(&Instruction::I32WrapI64);
-    function.instruction(&Instruction::LocalSet(ptr_local));
-
-    // iovec[0] = ptr_local + 4 (data bytes)
-    function.instruction(&Instruction::I32Const(iovec_offset));
-    function.instruction(&Instruction::LocalGet(ptr_local));
-    function.instruction(&Instruction::I32Const(4));
-    function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Store(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    // iovec[1] = mem[ptr_local] (length)
-    function.instruction(&Instruction::I32Const(iovec_offset + 4));
-    function.instruction(&Instruction::LocalGet(ptr_local));
-    function.instruction(&Instruction::I32Load(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    function.instruction(&Instruction::I32Store(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    // fd_write(1, iovec_offset, 1, nread_offset)
-    function.instruction(&Instruction::I32Const(1));
-    function.instruction(&Instruction::I32Const(iovec_offset));
-    function.instruction(&Instruction::I32Const(1));
-    function.instruction(&Instruction::I32Const(nread_offset));
-    function.instruction(&Instruction::Call(FD_WRITE_IDX));
-    function.instruction(&Instruction::Drop);
-
-    if append_newline {
-        function.instruction(&Instruction::I32Const(newline_ptr));
-        function.instruction(&Instruction::I32Const(10));
-        function.instruction(&Instruction::I32Store8(MemArg {
-            offset: 0,
-            align: 0,
-            memory_index: 0,
-        }));
-        function.instruction(&Instruction::I32Const(iovec_offset));
-        function.instruction(&Instruction::I32Const(newline_ptr));
-        function.instruction(&Instruction::I32Store(MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        }));
-        function.instruction(&Instruction::I32Const(iovec_offset + 4));
-        function.instruction(&Instruction::I32Const(1));
-        function.instruction(&Instruction::I32Store(MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        }));
-        function.instruction(&Instruction::I32Const(1));
-        function.instruction(&Instruction::I32Const(iovec_offset));
-        function.instruction(&Instruction::I32Const(1));
-        function.instruction(&Instruction::I32Const(nread_offset));
-        function.instruction(&Instruction::Call(FD_WRITE_IDX));
-        function.instruction(&Instruction::Drop);
-    }
-
-    // item_iter += 1
-    function.instruction(&Instruction::LocalGet(s_item_iter));
-    function.instruction(&Instruction::I32Const(1));
-    function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::LocalSet(s_item_iter));
-    function.instruction(&Instruction::Br(0)); // continue inner loop
-
-    function.instruction(&Instruction::End); // end inner loop
-    function.instruction(&Instruction::End); // end inner block
-
-    // chunk_idx += 1
-    function.instruction(&Instruction::LocalGet(s_chunk_idx));
-    function.instruction(&Instruction::I32Const(1));
-    function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::LocalSet(s_chunk_idx));
-    function.instruction(&Instruction::Br(0)); // continue outer loop
-
-    function.instruction(&Instruction::End); // end outer loop
-    function.instruction(&Instruction::End); // end outer block
-    function.instruction(&Instruction::End); // end else (n_chunks != 0)
-
-    // Result: tagged Unit
-    function.instruction(&Instruction::I64Const(encode_unit()));
 }
 
 /// Emit a `CaseMatch` instruction: scrutinee into scratch, then an if/else arm chain.
