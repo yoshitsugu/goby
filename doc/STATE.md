@@ -4,22 +4,19 @@ Last updated: 2026-04-13
 
 ## Current Focus
 
-Next slice: **Sequence-backed List M6 follow-up** (`doc/PLAN_SEQUENCE.md`) —
-continue shared-boundary optimization while closing the remaining trap root
-cause on point/nested immutable update workloads.
+Next slice: **Sequence-backed List M7-1 baseline capture**
+(`doc/PLAN_SEQUENCE.md`) — lock baseline numbers for callback vs
+iterator/effect traversal on the same logical workload.
 
-M6 context:
-- Sequence-backed List M0–M5 are complete as of 2026-04-12.
+M7 kickoff context:
+- Sequence-backed List M0–M6 are complete as of 2026-04-13.
 - Candidate B (Chunked Sequence) remains the locked direction in
   `doc/PLAN_SEQUENCE.md §8`.
-- Traversal boundaries are now explicit and M5 is fully closed:
-  - `length` / `fold` / `map` use explicit `__goby_*` boundaries;
-  - `each` is Goby code derived from `__goby_list_fold`;
-  - M5-8 runtime regressions now lock fold/each/map execution plus
-    `ListReverseFoldPrepend` coexistence for both public `fold` and direct
-    `__goby_list_fold` entrypoints;
-  - `cargo test -p goby-wasm` was green at the latest recorded M5 snapshot
-    (`641 passed; 0 failed; 4 ignored`).
+- M7-0 is now locked in `doc/PLAN_SEQUENCE.md`:
+  - target surface: `goby/iterator` `iterator.yield` handled via `with ... in ...`;
+  - representative example: `examples/list_iterator_effect.gb`;
+  - positioning: iterator/effect traversal is experimental-but-supported in M7,
+    while callback-style `list.each` remains the recommended default.
 
 TCO contract reminder (stable, no action needed):
 - generic TCO is published and locked in `doc/LANGUAGE_SPEC.md`.
@@ -31,12 +28,13 @@ TCO contract reminder (stable, no action needed):
 
 Immediate next steps:
 
-- **Sequence M6-5 (final gate)**: record benchmark snapshot and mark M6 complete.
-  - M6-3 and M6-4 are now closed (see M6-3/4 checkpoint below).
-  - Run `cargo test -p goby-wasm m6_0_baseline_index_update_workloads -- --ignored --nocapture`
-    to capture updated point-update and nested-update numbers.
-  - Reconcile end-to-end indexed-read numbers against the locked 5x M6-5 practical gate.
-  - Mark M6 checkbox `[x]` in PLAN_SEQUENCE.md with final snapshot.
+- **Sequence M7-1**: capture baseline against the locked M7-0 surface.
+  - Reuse one logical fixture/workload for:
+    - `each` with pure callback,
+    - `each` with effect callback,
+    - `examples/list_iterator_effect.gb`-aligned iterator/effect shape.
+  - Record benchmark command + numbers in `doc/PLAN_SEQUENCE.md` M7 section.
+  - Run `cargo test -p goby-wasm` as the correctness gate.
 
 Checkpoint update (2026-04-10, later slice):
 - `goby-wasm` Candidate B migration advanced substantially in

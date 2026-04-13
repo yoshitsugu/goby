@@ -552,9 +552,24 @@ The following product-direction decisions are already locked for this plan:
   These must be described as stable compiler/runtime boundaries, not as a
   list of current implementation hooks.
 
+  **M7-0 lock snapshot (2026-04-13):**
+  - locked surface entrypoint/syntax:
+    - `goby/iterator` `iterator.yield : a -> b -> (Bool, b)` handled via
+      `with ... in ...` is the M7 iterator/effect traversal surface.
+    - producer code traverses `List` and calls `iterator.yield` for each
+      element.
+  - representative example (for M7-1/M7-3/M7-5 continuity):
+    - `examples/list_iterator_effect.gb`
+    - shape: list producer + `iterator.yield` handler demonstrating source
+      order and early stop (`resume (False, state)`).
+  - positioning lock for this milestone:
+    - this iterator/effect surface is **experimental-but-supported** in M7.
+    - callback-style `list.each` remains the recommended default traversal
+      surface until M7 verification closes.
+
   ### M7 Implementation Steps
 
-  - [ ] **M7-0: Lock the target iterator/effect surface**
+  - [x] **M7-0: Lock the target iterator/effect surface**
     - scope:
       - choose the exact user-facing traversal entrypoint or syntax to carry
         through M7;

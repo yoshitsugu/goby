@@ -1,0 +1,24 @@
+import goby/iterator as iterator
+
+emit_each : List String -> Unit can Iterator
+emit_each xs = case xs
+  [] -> ()
+  [head, ..tail] ->
+    step = iterator.yield head ()
+    if step.0
+      emit_each tail
+    else
+      ()
+
+main : Unit -> Unit can Print
+main =
+  values = ["alpha", "beta", "gamma"]
+  with
+    iterator.yield value _ ->
+      println "iter:${value}"
+      if value == "beta"
+        resume (False, ())
+      else
+        resume (True, ())
+  in
+    emit_each values

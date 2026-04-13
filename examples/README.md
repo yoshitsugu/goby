@@ -57,6 +57,13 @@ This directory contains small Goby programs grouped by purpose.
     - `tick:c`
     - `3`
     - `1`
+- `list_iterator_effect.gb`: M7 iterator/effect traversal lock sample
+  - demonstrates:
+    - list producer calling `iterator.yield` in source order
+    - early stop from handler via `resume (False, ())`
+  - emits:
+    - `iter:alpha`
+    - `iter:beta`
 
 ## Current Stdlib Surface
 
