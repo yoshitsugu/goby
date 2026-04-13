@@ -407,6 +407,11 @@ fn identity_k() -> Build {
     Rc::new(|value, _names| Ok(CompExpr::Value(value)))
 }
 
+// M7-2 ownership note:
+// this rewrite owns "yielding" at IR/lowering time by mapping a handled
+// operation invocation onto the active handler clause body and continuation
+// bridge (`k`/`resume_k`). It does not own collection stepping order itself;
+// order comes from the caller-side traversal shape (e.g. list fold / producer recursion).
 fn rewrite_handled_op_invocation(
     effect_name: Option<&str>,
     op_name: &str,

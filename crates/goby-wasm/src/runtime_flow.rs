@@ -18,6 +18,13 @@ pub(crate) struct Continuation {
 
 #[derive(Clone)]
 pub(crate) struct ResumeToken {
+    // M7-2 ownership note:
+    // runtime owns handler interaction semantics here:
+    // - one-shot consumption (`consumed`),
+    // - resume state progression (`Pending` -> `Resumed`/`Suspended`),
+    // - continuation handoff (`cont`).
+    // This is the enforcement point for resume/handler behavior, independent
+    // from collection-specific traversal order.
     pub(crate) continuation: Continuation,
     pub(crate) state: HandlerContinuationState,
     pub(crate) cont: Option<Cont>,

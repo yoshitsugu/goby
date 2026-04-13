@@ -104,6 +104,11 @@ pub(crate) fn try_emit_native_module_with_handoff(
         .style_for("main")
         .unwrap_or(LoweringStyle::EffectBoundary);
     if main_style != LoweringStyle::DirectStyle {
+        // M7-2 ownership note:
+        // effect execution mode selection is owned here (compiler handoff),
+        // while traversal stepping/consumption remains in source-lowered
+        // program structure (e.g. list.each / producer recursion) on top of
+        // the shared M5 traversal family.
         let selection = select_effect_execution_mode(main_style, &lowering_plan, &handler_legality);
         let main_requirement = lowering_plan.evidence_requirement_for("main").map(|req| {
             MainEvidenceRequirementSummary {

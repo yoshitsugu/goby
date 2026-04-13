@@ -4,9 +4,9 @@ Last updated: 2026-04-13
 
 ## Current Focus
 
-Next slice: **Sequence-backed List M7-1 baseline capture**
-(`doc/PLAN_SEQUENCE.md`) — define lowering ownership boundaries for stepping /
-yielding / consumption / handler interaction on top of the M7-1 baseline.
+Next slice: **Sequence-backed List M7-3 generic execution path**
+(`doc/PLAN_SEQUENCE.md`) — implement the generic iterator/effect execution path
+for the locked M7 surface on explicit boundaries.
 
 M7 kickoff context:
 - Sequence-backed List M0–M6 are complete as of 2026-04-13.
@@ -25,6 +25,11 @@ M7 kickoff context:
     - `each-effect-callback-3`: `p50=1010us`, `p95=1168us`
     - `iterator-effect-yield-3`: `p50=1234us`, `p95=1319us`
   - all fixtures resolved output `"6"` (`ok_runs=13`, `none_runs=0`).
+- M7-2 ownership split is now locked in `doc/PLAN_SEQUENCE.md` and mirrored in
+  code comments:
+  - stepping/consumption: traversal-producing source shape + M5 fold family;
+  - yielding: handler-lowering rewrite boundary;
+  - handler interaction: runtime continuation token/state machinery.
 
 TCO contract reminder (stable, no action needed):
 - generic TCO is published and locked in `doc/LANGUAGE_SPEC.md`.
@@ -36,13 +41,11 @@ TCO contract reminder (stable, no action needed):
 
 Immediate next steps:
 
-- **Sequence M7-2**: define iterator/effect lowering ownership.
-  - Lock compiler/runtime ownership split for stepping, yielding, consumption,
-    and handler interaction.
-  - Map those ownership boundaries onto the M5 traversal family and document
-    where order/single-pass/resume semantics are enforced.
-  - Mirror the ownership split in owning module comments and keep
-    `cargo test -p goby-wasm` green.
+- **Sequence M7-3**: implement generic iterator/effect execution path.
+  - Route the locked iterator/effect traversal shape through explicit forms.
+  - Add/refresh regression tests for order, handler nesting, and resume
+    interaction on the generic path.
+  - Keep `cargo test -p goby-wasm` green and avoid stdlib-name magic.
 
 Checkpoint update (2026-04-10, later slice):
 - `goby-wasm` Candidate B migration advanced substantially in

@@ -605,7 +605,7 @@ The following product-direction decisions are already locked for this plan:
   - correctness snapshot:
     - all three fixtures resolved output `"6"` with `ok_runs=13`, `none_runs=0`.
 
-  - [ ] **M7-2: Define iterator/effect lowering ownership**
+  - [x] **M7-2: Define iterator/effect lowering ownership**
     - scope:
       - specify which layer owns stepping, yielding, consumption, and handler
         interaction;
@@ -622,6 +622,41 @@ The following product-direction decisions are already locked for this plan:
     - done when: the ownership split is written in PLAN_SEQUENCE.md and
       mirrored in code comments for the owning modules.
     - checks: `cargo test -p goby-wasm`
+
+  **M7-2 ownership lock snapshot (2026-04-13):**
+  - ownership split:
+    - stepping:
+      - owned by traversal-producing source/lowered structure (for M7-0 this is
+        list producer recursion / `list.each`-style source shape), not by
+        effect dispatch internals.
+    - yielding:
+      - owned by effect-handler lowering at handled-op rewrite boundaries
+        (`CompExpr::PerformEffect` / handled call -> rewritten clause body +
+        continuation bridge).
+    - consumption:
+      - owned by traversal consumer shape (`list.each` callback path over
+        `__goby_list_fold`, or M7-0 producer recursion that threads handler
+        state).
+    - handler interaction:
+      - owned by runtime continuation state/token machinery (`ResumeToken`,
+        handler continuation state progression, one-shot consume checks).
+  - forms and mapping to M5 traversal boundary:
+    - callback traversal keeps using the shared M5 `ListFold` family
+      (`list.each` = Goby surface over `__goby_list_fold`);
+    - iterator/effect traversal does not add stdlib-name magic paths; it uses
+      existing effect forms (`PerformEffect` / `WithHandler` / `Resume`) and
+      handler-lowering/runtime continuation machinery.
+  - intended user-facing style and status (re-affirmed):
+    - M7 iterator/effect traversal style remains **experimental-but-supported**
+      in this milestone;
+    - callback-style `each` remains the recommended default until M7 closes.
+  - semantics enforcement points:
+    - element order + single-pass behavior:
+      enforced by producer traversal structure (`[head, ..tail]` progression /
+      fold order) and preserved through M5 fold boundary.
+    - resume/handler semantics:
+      enforced in runtime continuation token state (pending/resumed/suspended +
+      one-shot consume guard).
 
   - [ ] **M7-3: Implement the generic iterator/effect execution path**
     - scope:

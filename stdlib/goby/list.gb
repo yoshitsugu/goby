@@ -2,6 +2,9 @@ join : List String -> String -> String
 join values sep = __goby_list_join_string values sep
 
 each : List a -> (a -> Unit) -> Unit
+# M7-2 ownership note:
+# stepping/consumption for callback-style traversal stays on this public fold-based
+# shape (`__goby_list_fold`), not in symbol-name-magic runtime branches.
 each xs f =
   __goby_list_fold xs () (fn _ x -> f x)
 
