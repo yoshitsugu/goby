@@ -1,0 +1,37 @@
+import goby/list (set, get)
+
+# list.set: functional immutable point update.
+# Returns a new list with element at index i replaced by value v.
+# The original list is unchanged (immutable semantics).
+
+# Build a list 1..n (head-prepend style)
+build : Int -> List Int
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+# Functional accumulator: apply n updates, each replacing xs[j] with i
+scan_updates : List Int -> Int -> List Int
+scan_updates xs i =
+  if i >= 5
+    xs
+  else
+    j = (i * 3) % 5
+    next = set xs j i
+    scan_updates next (i + 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = Read.read ()
+  xs = build 5                   # [5, 4, 3, 2, 1]
+  updated = scan_updates xs 0    # apply 5 point updates
+  # Read back results via list.get
+  v0 = get updated 0
+  v1 = get updated 1
+  v2 = get updated 2
+  v3 = get updated 3
+  v4 = get updated 4
+  Print.println "${v0} ${v1} ${v2} ${v3} ${v4}"

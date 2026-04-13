@@ -14,3 +14,12 @@ length xs = __goby_list_length xs
 # Left fold. The callback receives the accumulator first: f acc elem.
 fold : List a -> b -> (b -> a -> b) -> b
 fold xs acc f = __goby_list_fold xs acc f
+
+# Immutable point update. Returns a new list with element at index i replaced by v.
+# Chunk-local: only the touched chunk is copied; the header pointer table is shallow-copied.
+# Out-of-bounds or negative index aborts the program.
+# Note: `get` is a compiler builtin (resolved in ir_lower via try_lower_pure_list_get_value)
+# and has no .gb definition. `set` requires a stdlib wrapper because new-list construction
+# (copying chunks and the header) is unreachable from pure Goby code.
+set : List a -> Int -> a -> List a
+set xs i v = __goby_list_set xs i v

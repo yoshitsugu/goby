@@ -72,8 +72,7 @@ syntax/semantics.
   - negative or out-of-bounds index aborts the program (`RuntimeError::Abort`)
   - no negative-index shorthand (e.g. `xs[-1]` aborts rather than wrapping)
   - chaining syntax is supported: `xs[0][1]` indexes into the result of `xs[0]`
-    (current runtime limitation: chained indexing only works if intermediate results
-    are `Int` or `String` values; `List (List T)` is not yet a representable runtime value)
+    including nested `List (List a)` values (e.g. `grid[y][x]`)
   - precedence: `expr[expr]` binds tighter than whitespace function application —
     `f xs[0]` parses as `f (xs[0])`
   - performance: see the `List` framing note above and `doc/PLAN_SEQUENCE.md`
@@ -333,6 +332,15 @@ syntax/semantics.
       in all execution paths until effect propagation through HOFs is formally designed.
   - `length : List a -> Int`
     - returns the number of elements in the list.
+  - `get : List a -> Int -> a`
+    - returns the element at zero-based index i.
+    - negative or out-of-bounds index aborts the program.
+    - note: surface syntax `xs[i]` lowers to the same intrinsic boundary.
+  - `set : List a -> Int -> a -> List a`
+    - immutable point update: returns a new list with element at index i replaced by v.
+    - only the touched chunk is copied (O(CHUNK_SIZE)); the header pointer table is
+      shallow-copied (O(n_chunks)). Negative or out-of-bounds index aborts the program.
+    - intended for functional-style update without `mut` bindings.
 - Stdlib `goby/string` currently provides:
   - `length : String -> Int`
   - `split : String -> String -> List String`

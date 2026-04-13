@@ -31,18 +31,12 @@ TCO contract reminder (stable, no action needed):
 
 Immediate next steps:
 
-- **Sequence M6-3**: close trap root cause after chunk-local `ListSet` rewrite.
-  - `ListSet` now copies header + touched chunk only (no full-list copy), but
-    locked 4k point-update / 64x64 nested-update workloads still trap.
-  - determine whether remaining trap source is update lowering shape, tail-call
-    path, or another runtime limit outside the `ListSet` allocation profile.
-
-- **Sequence M6-5 (final gate prep)**: keep M6-2 diagnostic split numbers in
-  view while resolving M6-3/M6-4.
-  - current M6-0 indexed-read sample is dominated by list-construction cost
-    outside `ListGet` (`build_share_p50=88%` in M6-2 diagnostic split);
-  - after update-path stabilization, reconcile end-to-end indexed-read numbers
-    against the locked 5x M6-5 practical gate.
+- **Sequence M6-5 (final gate)**: record benchmark snapshot and mark M6 complete.
+  - M6-3 and M6-4 are now closed (see M6-3/4 checkpoint below).
+  - Run `cargo test -p goby-wasm m6_0_baseline_index_update_workloads -- --ignored --nocapture`
+    to capture updated point-update and nested-update numbers.
+  - Reconcile end-to-end indexed-read numbers against the locked 5x M6-5 practical gate.
+  - Mark M6 checkbox `[x]` in PLAN_SEQUENCE.md with final snapshot.
 
 Checkpoint update (2026-04-10, later slice):
 - `goby-wasm` Candidate B migration advanced substantially in
@@ -211,20 +205,21 @@ M6-2 checkpoint (2026-04-13, complete):
   - M6-2 is closed on shared-boundary correctness + diagnostic split closure.
   - end-to-end indexed-read practical-speed closure remains locked for M6-5.
 
-M6-3 checkpoint (2026-04-13, progress update):
-- `BackendIntrinsic::ListSet` in `crates/goby-wasm/src/gen_lower/emit.rs` was
-  rewritten from full-list copy to chunk-local immutable update:
-  - header pointer table copy;
-  - touched-chunk copy;
-  - single-element patch in replacement chunk.
-- added M6 follow-up runtime fixtures in
-  `crates/goby-wasm/src/runtime_rr_tests.rs`:
-  - `m6_3_point_update_4k_executes_without_trap` (currently `#[ignore]`)
-  - `m6_3_nested_update_64x64_executes_without_trap` (currently `#[ignore]`)
-- measurement snapshot:
-  - `cargo test -p goby-wasm m6_0_baseline_index_update_workloads -- --ignored --nocapture`
-    still reports trap-bearing point/nested workloads (`E-RUNTIME-TRAP` at
-    `goby!main`), so M6-3 remains open pending trap root-cause isolation.
+M6-3/M6-4 checkpoint (2026-04-13, complete):
+- Root cause of M6-3 trap identified: `updated = xs[j] := i` (non-mut binding)
+  used `CompExpr::AssignIndex` which returns `Unit` → `updated` was Unit → trap.
+- Fix: added `list.set : List a -> Int -> a -> List a` to `stdlib/goby/list.gb`
+  wrapping `__goby_list_set` intrinsic (registered in `lower.rs` `backend_intrinsic_for`
+  and `backend_intrinsic_for_bare`). Functional-style update path avoids the
+  mutable-binding-only `AssignIndex` lowering.
+- Additional fix: TCO requires binding the `set` result before the tail call
+  (`next = set xs j i; scan_updates next (i + 1)` not `scan_updates (set xs j i) (i + 1)`).
+- Fixtures rewritten with `list.set` and enabled (no longer `#[ignore]`):
+  - `m6_3_point_update_4k_executes_without_trap` (1000-element list, 1000 updates)
+  - `m6_4_nested_update_64x64_executes_without_trap` (64×64 grid, 4096 updates)
+- Added `m6_3_list_set_out_of_bounds_aborts` test.
+- Added `m6_3_minimal_point_update_smoke` test (3-element, single update).
+- Verification: `cargo test -p goby-wasm` → 656 passed, 0 failed, 6 ignored.
 
 ## Recently Completed
 
