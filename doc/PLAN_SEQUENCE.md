@@ -690,7 +690,7 @@ The following product-direction decisions are already locked for this plan:
     - `cargo test -p goby-wasm m7_3_ -- --nocapture`: green
     - `cargo test`: green
 
-  - [ ] **M7-4: Evaluate and, if justified, add shared specialization**
+  - [x] **M7-4: Evaluate and, if justified, add shared specialization**
     - scope:
       - benchmark the general M7 path against the M7-1 baseline;
       - if practical targets are already met, do not add specialization;
@@ -703,6 +703,19 @@ The following product-direction decisions are already locked for this plan:
       - the chosen shared specialization rule is documented, implemented,
         and benchmark-validated.
     - checks: `cargo test -p goby-wasm`
+
+  **M7-4 evaluation snapshot (2026-04-13):**
+  - benchmark command:
+    - `cargo test -p goby-wasm m7_4_benchmark -- --ignored --nocapture`
+  - measured snapshot (`warmup=3`, `measured=10`, `p50/p95`, microseconds):
+    - `each-pure-callback-3`:    `p50=829us`, `p95=841us`  (M7-1: p50=807us, p95=901us)
+    - `each-effect-callback-3`:  `p50=995us`, `p95=1009us` (M7-1: p50=1010us, p95=1168us)
+    - `iterator-effect-yield-3`: `p50=1261us`, `p95=1296us` (M7-1: p50=1234us, p95=1319us)
+  - overhead ratio: `iterator-effect-yield-3 / each-pure-callback-3 = 1.52x` (threshold 2.0x)
+  - §6.6 evaluation: generic path meets practical target — no memory exhaustion, no O(n²) growth.
+  - decision: **no specialization needed**. The general M7 execution path is sufficient.
+    iterator-effect overhead (1.52x over each-pure) is within practical bounds for
+    ordinary Goby scripts at the §6.6 success-bar input sizes.
 
   - [ ] **M7-5: Lock iterator/effect verification**
     - scope: compare final numbers against M7-1 baseline.

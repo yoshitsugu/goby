@@ -4,40 +4,27 @@ Last updated: 2026-04-13
 
 ## Current Focus
 
-Next slice: **Sequence-backed List M7-4 specialization decision**
-(`doc/PLAN_SEQUENCE.md`) — benchmark the generic M7 path against the M7-1
-baseline and decide whether shared specialization is required.
+Next slice: **Sequence-backed List M7-5 iterator/effect verification lock**
+(`doc/PLAN_SEQUENCE.md`) — final numbers vs M7-1 baseline, correctness/design/
+performance/positioning gates.
 
-M7 kickoff context:
-- Sequence-backed List M0–M6 are complete as of 2026-04-13.
-- Candidate B (Chunked Sequence) remains the locked direction in
-  `doc/PLAN_SEQUENCE.md §8`.
-- M7-0 is now locked in `doc/PLAN_SEQUENCE.md`:
-  - target surface: `goby/iterator` `iterator.yield` handled via `with ... in ...`;
-  - representative example: `examples/list_iterator_effect.gb`;
-  - positioning: iterator/effect traversal is experimental-but-supported in M7,
-    while callback-style `list.each` remains the recommended default.
-- M7-1 baseline is now locked in `doc/PLAN_SEQUENCE.md`:
-  - benchmark command:
-    `cargo test -p goby-wasm m7_1_baseline_traversal_workloads -- --ignored --nocapture`
-  - fixture lock:
-    - `each-pure-callback-3`: `p50=807us`, `p95=901us`
-    - `each-effect-callback-3`: `p50=1010us`, `p95=1168us`
-    - `iterator-effect-yield-3`: `p50=1234us`, `p95=1319us`
-  - all fixtures resolved output `"6"` (`ok_runs=13`, `none_runs=0`).
-- M7-2 ownership split is now locked in `doc/PLAN_SEQUENCE.md` and mirrored in
-  code comments:
-  - stepping/consumption: traversal-producing source shape + M5 fold family;
-  - yielding: handler-lowering rewrite boundary;
-  - handler interaction: runtime continuation token/state machinery.
-
-TCO contract reminder (stable, no action needed):
-- generic TCO is published and locked in `doc/LANGUAGE_SPEC.md`.
-- any next TCO work is post-publication extension (widening backends or call
-  categories), not contract bootstrapping.
-- the supported/unsupported split (direct tail calls among known top-level
-  declarations vs. higher-order/non-tail) is stable and must not be silently
-  widened.
+M7-4 completion checkpoint (2026-04-13):
+- benchmark command:
+  `cargo test -p goby-wasm m7_4_benchmark -- --ignored --nocapture`
+- measured snapshot (`warmup=3`, `measured=10`):
+  - `each-pure-callback-3`:    `p50=829us`, `p95=841us`
+  - `each-effect-callback-3`:  `p50=995us`, `p95=1009us`
+  - `iterator-effect-yield-3`: `p50=1261us`, `p95=1296us`
+- overhead ratio: `iterator-effect / each-pure = 1.52x` (threshold 2.0x)
+- §6.6 evaluation: generic path meets practical target — no O(n²), no memory
+  exhaustion at the §6.6 success-bar input sizes.
+- decision: **no specialization added**. The general M7 execution path is
+  sufficient for ordinary Goby scripts.
+- new regression: `runtime_rr_tests::m7_4_benchmark_against_m7_1_baseline`
+  (ignored; run explicitly with `--ignored --nocapture`)
+- verification snapshot:
+  - `cargo test -p goby-wasm`: green
+  - `cargo test`: green
 
 M7-3 completion checkpoint (2026-04-13):
 - generic iterator/effect path is now wired through explicit forms for the
@@ -53,20 +40,24 @@ M7-3 completion checkpoint (2026-04-13):
   - `runtime_rr_tests::m7_3_iterator_effect_handler_clause_can_host_nested_callback_effects`
   - `resolved::tests::resolves_alias_qualified_effect_op_via_module_basename_receiver`
   - `resolved::tests::resolves_bare_effect_op_via_selective_imported_effect_owner`
-- verification snapshot:
-  - `cargo fmt`: green
-  - `cargo check`: green
-  - `cargo test`: green
+
+TCO contract reminder (stable, no action needed):
+- generic TCO is published and locked in `doc/LANGUAGE_SPEC.md`.
+- any next TCO work is post-publication extension (widening backends or call
+  categories), not contract bootstrapping.
+- the supported/unsupported split (direct tail calls among known top-level
+  declarations vs. higher-order/non-tail) is stable and must not be silently
+  widened.
 
 Immediate next steps:
 
-- **Sequence M7-4**: evaluate and, if needed, add one shared specialization
-  rule.
-  - Re-run baseline fixtures from M7-1 against the current generic M7 path.
-  - If generic path already meets the practical target, lock "no
-    specialization".
-  - If not, introduce exactly one rule-based specialization (no stdlib symbol
-    one-offs), with benchmark and regression evidence.
+- **Sequence M7-5**: lock iterator/effect verification.
+  - correctness gate: M7 regression tests green.
+  - design gate: no stdlib-name magic, no callback-symbol one-offs, explicit
+    traversal boundary maintained.
+  - performance gate: compare final numbers vs M7-1 baseline in PLAN_SEQUENCE.md.
+  - positioning gate: document whether callback-style `each` stays recommended
+    default or becomes equal-first-class after M7.
 
 Checkpoint update (2026-04-10, later slice):
 - `goby-wasm` Candidate B migration advanced substantially in

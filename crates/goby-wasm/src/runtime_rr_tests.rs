@@ -2082,3 +2082,156 @@ main =
         nested_update_last_err
     );
 }
+
+/// M7-4 benchmark: compare general M7 iterator/effect path against M7-1 baseline.
+/// Uses the same fixture names and input sizes locked in M7-1.
+/// M7-1 baseline snapshot (2026-04-13):
+///   each-pure-callback-3:    p50=807us, p95=901us
+///   each-effect-callback-3:  p50=1010us, p95=1168us
+///   iterator-effect-yield-3: p50=1234us, p95=1319us
+#[test]
+#[ignore = "M7-4 benchmark comparison; run explicitly with --ignored --nocapture"]
+fn m7_4_benchmark_against_m7_1_baseline() {
+    let warmup_runs = 3usize;
+    let measured_runs = 10usize;
+
+    // --- each-pure-callback-3 ---
+    let each_pure_source = r#"
+import goby/list ( each )
+import goby/stdio
+
+main : Unit -> Unit can Print
+main =
+  xs = [1, 2, 3]
+  mut total = 0
+  each xs (fn x ->
+    total := total + x
+  )
+  print "${total}"
+"#;
+    let each_pure_module =
+        parse_module(each_pure_source).expect("M7-4 each-pure source should parse");
+    let (each_pure_p50, each_pure_p95, each_pure_ok, each_pure_none, each_pure_last_ok) =
+        measure_runtime_output_resolve_micros(&each_pure_module, warmup_runs, measured_runs);
+    assert_eq!(each_pure_none, 0, "M7-4 each-pure should resolve");
+    assert_eq!(each_pure_last_ok.as_deref(), Some("6"));
+    eprintln!(
+        "[M7-4][each-pure-callback-3] p50={}us p95={}us ok_runs={} none_runs={} output={}",
+        each_pure_p50,
+        each_pure_p95,
+        each_pure_ok,
+        each_pure_none,
+        each_pure_last_ok.unwrap_or_default().trim_end(),
+    );
+    eprintln!(
+        "[M7-4][each-pure-callback-3] vs M7-1 baseline: p50 807us -> {}us, p95 901us -> {}us",
+        each_pure_p50, each_pure_p95
+    );
+
+    // --- each-effect-callback-3 ---
+    let each_effect_source = r#"
+import goby/list ( each )
+import goby/stdio
+
+main : Unit -> Unit can Print
+main =
+  xs = [1, 2, 3]
+  mut total = 0
+  each xs (fn x ->
+    total := total + x
+    print ""
+  )
+  print "${total}"
+"#;
+    let each_effect_module =
+        parse_module(each_effect_source).expect("M7-4 each-effect source should parse");
+    let (each_effect_p50, each_effect_p95, each_effect_ok, each_effect_none, each_effect_last_ok) =
+        measure_runtime_output_resolve_micros(&each_effect_module, warmup_runs, measured_runs);
+    assert_eq!(each_effect_none, 0, "M7-4 each-effect should resolve");
+    assert_eq!(each_effect_last_ok.as_deref(), Some("6"));
+    eprintln!(
+        "[M7-4][each-effect-callback-3] p50={}us p95={}us ok_runs={} none_runs={} output={}",
+        each_effect_p50,
+        each_effect_p95,
+        each_effect_ok,
+        each_effect_none,
+        each_effect_last_ok.unwrap_or_default().trim_end(),
+    );
+    eprintln!(
+        "[M7-4][each-effect-callback-3] vs M7-1 baseline: p50 1010us -> {}us, p95 1168us -> {}us",
+        each_effect_p50, each_effect_p95
+    );
+
+    // --- iterator-effect-yield-3 ---
+    let iterator_effect_source = r#"
+import goby/iterator ( Iterator )
+import goby/stdio
+
+emit_each : List Int -> Int -> Int can Iterator
+emit_each xs state = case xs
+  [] -> state
+  [head, ..tail] ->
+    step = yield head state
+    if step.0
+      emit_each tail step.1
+    else
+      step.1
+
+main : Unit -> Unit can Print
+main =
+  xs = [1, 2, 3]
+  total = with
+    yield value state ->
+      resume (True, state + value)
+  in
+    emit_each xs 0
+  print "${total}"
+"#;
+    let iterator_effect_module =
+        parse_module(iterator_effect_source).expect("M7-4 iterator-effect source should parse");
+    let (
+        iterator_effect_p50,
+        iterator_effect_p95,
+        iterator_effect_ok,
+        iterator_effect_none,
+        iterator_effect_last_ok,
+    ) = measure_runtime_output_resolve_micros(&iterator_effect_module, warmup_runs, measured_runs);
+    assert_eq!(iterator_effect_none, 0, "M7-4 iterator-effect should resolve");
+    assert_eq!(iterator_effect_last_ok.as_deref(), Some("6"));
+    eprintln!(
+        "[M7-4][iterator-effect-yield-3] p50={}us p95={}us ok_runs={} none_runs={} output={}",
+        iterator_effect_p50,
+        iterator_effect_p95,
+        iterator_effect_ok,
+        iterator_effect_none,
+        iterator_effect_last_ok
+            .clone()
+            .unwrap_or_default()
+            .trim_end(),
+    );
+    eprintln!(
+        "[M7-4][iterator-effect-yield-3] vs M7-1 baseline: p50 1234us -> {}us, p95 1319us -> {}us",
+        iterator_effect_p50, iterator_effect_p95
+    );
+
+    // §6.6 success bar evaluation:
+    // iterator-effect overhead relative to each-pure (2x threshold for "practical")
+    let overhead_ratio = iterator_effect_p50 as f64 / each_pure_p50.max(1) as f64;
+    eprintln!(
+        "[M7-4][evaluation] iterator-effect/each-pure overhead ratio: {:.2}x (threshold: 2.0x)",
+        overhead_ratio
+    );
+    // Soft assertion: warn if overhead exceeds 2x but don't fail the test.
+    // The §6.6 bar is O(n²)-free/no-memory-exhaustion, not a strict µs target.
+    if overhead_ratio > 2.0 {
+        eprintln!(
+            "[M7-4][WARNING] overhead ratio {:.2}x exceeds 2.0x — consider specialization",
+            overhead_ratio
+        );
+    } else {
+        eprintln!(
+            "[M7-4][OK] generic path meets practical target (ratio {:.2}x <= 2.0x)",
+            overhead_ratio
+        );
+    }
+}
