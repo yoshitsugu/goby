@@ -5,8 +5,8 @@ Last updated: 2026-04-13
 ## Current Focus
 
 Next slice: **Sequence-backed List M7-1 baseline capture**
-(`doc/PLAN_SEQUENCE.md`) — lock baseline numbers for callback vs
-iterator/effect traversal on the same logical workload.
+(`doc/PLAN_SEQUENCE.md`) — define lowering ownership boundaries for stepping /
+yielding / consumption / handler interaction on top of the M7-1 baseline.
 
 M7 kickoff context:
 - Sequence-backed List M0–M6 are complete as of 2026-04-13.
@@ -17,6 +17,14 @@ M7 kickoff context:
   - representative example: `examples/list_iterator_effect.gb`;
   - positioning: iterator/effect traversal is experimental-but-supported in M7,
     while callback-style `list.each` remains the recommended default.
+- M7-1 baseline is now locked in `doc/PLAN_SEQUENCE.md`:
+  - benchmark command:
+    `cargo test -p goby-wasm m7_1_baseline_traversal_workloads -- --ignored --nocapture`
+  - fixture lock:
+    - `each-pure-callback-3`: `p50=807us`, `p95=901us`
+    - `each-effect-callback-3`: `p50=1010us`, `p95=1168us`
+    - `iterator-effect-yield-3`: `p50=1234us`, `p95=1319us`
+  - all fixtures resolved output `"6"` (`ok_runs=13`, `none_runs=0`).
 
 TCO contract reminder (stable, no action needed):
 - generic TCO is published and locked in `doc/LANGUAGE_SPEC.md`.
@@ -28,13 +36,13 @@ TCO contract reminder (stable, no action needed):
 
 Immediate next steps:
 
-- **Sequence M7-1**: capture baseline against the locked M7-0 surface.
-  - Reuse one logical fixture/workload for:
-    - `each` with pure callback,
-    - `each` with effect callback,
-    - `examples/list_iterator_effect.gb`-aligned iterator/effect shape.
-  - Record benchmark command + numbers in `doc/PLAN_SEQUENCE.md` M7 section.
-  - Run `cargo test -p goby-wasm` as the correctness gate.
+- **Sequence M7-2**: define iterator/effect lowering ownership.
+  - Lock compiler/runtime ownership split for stepping, yielding, consumption,
+    and handler interaction.
+  - Map those ownership boundaries onto the M5 traversal family and document
+    where order/single-pass/resume semantics are enforced.
+  - Mirror the ownership split in owning module comments and keep
+    `cargo test -p goby-wasm` green.
 
 Checkpoint update (2026-04-10, later slice):
 - `goby-wasm` Candidate B migration advanced substantially in

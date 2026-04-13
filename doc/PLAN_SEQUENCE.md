@@ -581,7 +581,7 @@ The following product-direction decisions are already locked for this plan:
     - done when: the named surface and example are recorded in this section.
     - checks: docs/examples updated consistently.
 
-  - [ ] **M7-1: Capture traversal baseline against the locked surface**
+  - [x] **M7-1: Capture traversal baseline against the locked surface**
     - scope: record baseline numbers and behavior for:
       - `each` with pure callback,
       - `each` with effect callback,
@@ -590,6 +590,20 @@ The following product-direction decisions are already locked for this plan:
     - checks: benchmark command + `cargo test -p goby-wasm`
     - lock:
       - the same fixture names and input sizes must be reused for M7-4/M7-5.
+
+  **M7-1 baseline snapshot (2026-04-13):**
+  - benchmark command:
+    - `cargo test -p goby-wasm m7_1_baseline_traversal_workloads -- --ignored --nocapture`
+  - fixture lock (reuse as-is for M7-4/M7-5):
+    - `each-pure-callback-3`: `List Int` sum workload over `[1, 2, 3]`.
+    - `each-effect-callback-3`: same sum workload + per-element `print ""`.
+    - `iterator-effect-yield-3`: same sum workload via `Iterator.yield` + `with` handler.
+  - measured snapshot (`warmup=3`, `measured=10`, `p50/p95`, microseconds):
+    - `each-pure-callback-3`: `p50=807us`, `p95=901us`
+    - `each-effect-callback-3`: `p50=1010us`, `p95=1168us`
+    - `iterator-effect-yield-3`: `p50=1234us`, `p95=1319us`
+  - correctness snapshot:
+    - all three fixtures resolved output `"6"` with `ok_runs=13`, `none_runs=0`.
 
   - [ ] **M7-2: Define iterator/effect lowering ownership**
     - scope:

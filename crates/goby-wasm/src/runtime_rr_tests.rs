@@ -4,7 +4,7 @@ use crate::memory_config::DEFAULT_WASM_MEMORY_CONFIG;
 use crate::wasm_exec::run_wasm_bytes_with_stdin_for_tests;
 use crate::{
     RuntimeIoExecutionKind, compile_module, execute_runtime_module_with_stdin,
-    runtime_io_execution_kind,
+    resolve_module_runtime_output, runtime_io_execution_kind,
 };
 
 const SELF_TAIL_RECURSION_SOURCE: &str = r#"
@@ -588,6 +588,46 @@ fn measure_wasm_exec_micros(
     let p50 = samples[(n - 1) * 50 / 100];
     let p95 = samples[(n - 1) * 95 / 100];
     (p50, p95, ok_runs, err_runs, last_ok, last_err)
+}
+
+fn measure_runtime_output_resolve_micros(
+    module: &goby_core::Module,
+    warmup_runs: usize,
+    measured_runs: usize,
+) -> (u128, u128, usize, usize, Option<String>) {
+    let mut ok_runs = 0usize;
+    let mut none_runs = 0usize;
+    let mut last_ok = None;
+    for _ in 0..warmup_runs {
+        match resolve_module_runtime_output(module) {
+            Some(text) => {
+                ok_runs += 1;
+                last_ok = Some(text);
+            }
+            None => {
+                none_runs += 1;
+            }
+        }
+    }
+    let mut samples = Vec::with_capacity(measured_runs);
+    for _ in 0..measured_runs {
+        let start = std::time::Instant::now();
+        match resolve_module_runtime_output(module) {
+            Some(text) => {
+                ok_runs += 1;
+                last_ok = Some(text);
+            }
+            None => {
+                none_runs += 1;
+            }
+        }
+        samples.push(start.elapsed().as_micros());
+    }
+    samples.sort_unstable();
+    let n = samples.len();
+    let p50 = samples[(n - 1) * 50 / 100];
+    let p95 = samples[(n - 1) * 95 / 100];
+    (p50, p95, ok_runs, none_runs, last_ok)
 }
 
 fn compile_general_lowered_wasm(source: &str) -> Vec<u8> {
@@ -1615,6 +1655,131 @@ main =
         "[M6-0][aoc-style-iterative-grid-pruning-after-render] p50={}us p95={}us ok_runs={} err_runs={} final_total=43 err={:?}",
         aoc_style_p50, aoc_style_p95, aoc_style_ok, aoc_style_err, aoc_style_last_err
     );
+}
+
+/// M7-1 baseline snapshot for traversal shape comparison.
+/// Compares:
+/// - list.each with pure callback,
+/// - list.each with effect callback,
+/// - iterator.yield-based traversal on the same list/sum workload.
+#[test]
+#[ignore = "M7-1 baseline snapshot command; run explicitly with --ignored --nocapture"]
+fn m7_1_baseline_traversal_workloads() {
+    let warmup_runs = 3usize;
+    let measured_runs = 10usize;
+
+    let each_pure_source = r#"
+import goby/list ( each )
+import goby/stdio
+
+main : Unit -> Unit can Print
+main =
+  xs = [1, 2, 3]
+  mut total = 0
+  each xs (fn x ->
+    total := total + x
+  )
+  print "${total}"
+"#;
+    let each_pure_module =
+        parse_module(each_pure_source).expect("M7-1 each-pure source should parse");
+    let (each_pure_p50, each_pure_p95, each_pure_ok, each_pure_none, each_pure_last_ok) =
+        measure_runtime_output_resolve_micros(&each_pure_module, warmup_runs, measured_runs);
+    assert_eq!(
+        each_pure_none, 0,
+        "M7-1 each-pure baseline should resolve runtime output"
+    );
+    assert_eq!(each_pure_last_ok.as_deref(), Some("6"));
+    eprintln!(
+        "[M7-1][each-pure-callback-3] p50={}us p95={}us ok_runs={} none_runs={} output={}",
+        each_pure_p50,
+        each_pure_p95,
+        each_pure_ok,
+        each_pure_none,
+        each_pure_last_ok.unwrap_or_default().trim_end(),
+    );
+
+    let each_effect_source = r#"
+import goby/list ( each )
+import goby/stdio
+
+main : Unit -> Unit can Print
+main =
+  xs = [1, 2, 3]
+  mut total = 0
+  each xs (fn x ->
+    total := total + x
+    print ""
+  )
+  print "${total}"
+"#;
+    let each_effect_module =
+        parse_module(each_effect_source).expect("M7-1 each-effect source should parse");
+    let (each_effect_p50, each_effect_p95, each_effect_ok, each_effect_none, each_effect_last_ok) =
+        measure_runtime_output_resolve_micros(&each_effect_module, warmup_runs, measured_runs);
+    assert_eq!(
+        each_effect_none, 0,
+        "M7-1 each-effect baseline should resolve runtime output"
+    );
+    assert_eq!(each_effect_last_ok.as_deref(), Some("6"));
+    eprintln!(
+        "[M7-1][each-effect-callback-3] p50={}us p95={}us ok_runs={} none_runs={} output={}",
+        each_effect_p50,
+        each_effect_p95,
+        each_effect_ok,
+        each_effect_none,
+        each_effect_last_ok.unwrap_or_default().trim_end(),
+    );
+
+    let iterator_effect_source = r#"
+import goby/iterator ( Iterator )
+import goby/stdio
+
+emit_each : List Int -> Int -> Int can Iterator
+emit_each xs state = case xs
+  [] -> state
+  [head, ..tail] ->
+    step = yield head state
+    if step.0
+      emit_each tail step.1
+    else
+      step.1
+
+main : Unit -> Unit can Print
+main =
+  xs = [1, 2, 3]
+  total = with
+    yield value state ->
+      resume (True, state + value)
+  in
+    emit_each xs 0
+  print "${total}"
+"#;
+    let iterator_effect_module =
+        parse_module(iterator_effect_source).expect("M7-1 iterator-effect source should parse");
+    let (
+        iterator_effect_p50,
+        iterator_effect_p95,
+        iterator_effect_ok,
+        iterator_effect_none,
+        iterator_effect_last_ok,
+    ) = measure_runtime_output_resolve_micros(&iterator_effect_module, warmup_runs, measured_runs);
+    eprintln!(
+        "[M7-1][iterator-effect-yield-3] p50={}us p95={}us ok_runs={} none_runs={} output={}",
+        iterator_effect_p50,
+        iterator_effect_p95,
+        iterator_effect_ok,
+        iterator_effect_none,
+        iterator_effect_last_ok
+            .clone()
+            .unwrap_or_default()
+            .trim_end(),
+    );
+    assert_eq!(
+        iterator_effect_none, 0,
+        "M7-1 iterator-effect baseline should resolve runtime output"
+    );
+    assert_eq!(iterator_effect_last_ok.as_deref(), Some("6"));
 }
 
 #[test]
