@@ -782,7 +782,7 @@ The following product-direction decisions are already locked for this plan:
   - If effect-oriented traversal cannot meet the practical target honestly,
     stop and revise the plan instead of hiding costs behind magical lowering.
 
-- [ ] **M8: Publish the new `List` contract**
+- [x] **M8: Publish the new `List` contract** (complete, 2026-04-14)
   
   ### M8 Goal
 
@@ -794,7 +794,7 @@ The following product-direction decisions are already locked for this plan:
 
   ### M8 Implementation Steps
 
-  - [ ] **M8-0: Audit every user-facing `List` explanation**
+  - [x] **M8-0: Audit every user-facing `List` explanation**
     - scope:
       - audit `README.md`, `doc/LANGUAGE_SPEC.md`, `doc/PLAN.md`,
         `doc/PLAN_SEQUENCE.md`, and representative `examples/*.gb`;
@@ -803,8 +803,14 @@ The following product-direction decisions are already locked for this plan:
       - identify every place where `List` practicality or traversal style is
         stated differently.
     - done when: this plan lists the files that define the public contract.
+    - M8-0 publication set (locked):
+      - `README.md` (high-level product positioning)
+      - `doc/LANGUAGE_SPEC.md` (authoritative surface contract + caveats)
+      - `doc/PLAN.md` (explicit-boundary policy status and debt framing)
+      - `doc/PLAN_SEQUENCE.md` (sequence plan milestones and closure criteria)
+      - `examples/README.md` + representative example sources
 
-  - [ ] **M8-1: Publish the final `List` positioning**
+  - [x] **M8-1: Publish the final `List` positioning**
     - scope:
       - lock the wording for what Goby means by:
         - the default ordered collection,
@@ -817,7 +823,7 @@ The following product-direction decisions are already locked for this plan:
     - done when: the wording is aligned across README/spec/plan without
       contradiction.
 
-  - [ ] **M8-2: Publish representative examples**
+  - [x] **M8-2: Publish representative examples**
     - scope: add or refresh examples showing:
       - ordinary indexed access on `List`;
       - functional update via the intended public surface;
@@ -826,8 +832,17 @@ The following product-direction decisions are already locked for this plan:
       - one workload shape that previously exposed the old linked-list runtime
         boundary and now has an honest recommended form.
     - done when: examples are referenced from docs and match the final wording.
+    - locked examples:
+      - indexed access: `examples/list_index.gb`
+      - functional immutable update: `examples/list_set.gb`
+      - multi-chunk list-pattern decomposition:
+        `examples/list_pattern_multichunk.gb`
+      - M7 iterator/effect traversal style:
+        `examples/list_iterator_effect.gb`
+      - update-heavy workload shape with recommended public update surface:
+        `examples/list_set.gb`
 
-  - [ ] **M8-3: Resolve or carve out remaining explicit-boundary debt**
+  - [x] **M8-3: Resolve or carve out remaining explicit-boundary debt**
     - scope:
       - either align remaining string traversal magic (`graphemes` / `split`)
         to the same explicit-boundary policy;
@@ -838,14 +853,45 @@ The following product-direction decisions are already locked for this plan:
           yet for `string`.
     - done when: there is no ambiguity about whether the explicit-boundary
       story is fully closed or intentionally partial.
+    - M8 decision:
+      - explicit-boundary policy is published as complete for `List`;
+      - `string.graphemes` / `string.split` alignment remains temporary debt;
+      - named follow-up milestone `M9` tracks this debt explicitly.
 
-  - [ ] **M8-4: Lock the final publication snapshot**
+  - [x] **M8-4: Lock the final publication snapshot**
     - scope:
       - verify examples, spec text, and roadmap wording agree with the shipped
         implementation and measured claims;
       - record the final verification snapshot and mark this plan complete.
     - done when: final wording, examples, and remaining debt are all locked in
       one documented snapshot.
+    - verification snapshot (2026-04-14):
+      - docs/examples updated and cross-referenced:
+        - `README.md`
+        - `doc/LANGUAGE_SPEC.md`
+        - `doc/PLAN.md`
+        - `doc/PLAN_SEQUENCE.md`
+        - `examples/README.md`
+        - `examples/list_pattern_multichunk.gb`
+      - quality gate:
+        - `cargo fmt`: green
+        - `cargo check`: green
+        - `cargo test`: green
+          - `goby-cli`: `25 passed`
+          - `goby-cli integration`: `52 passed`
+          - `goby-core`: `696 passed, 2 ignored`
+          - `goby-wasm`: `658 passed, 9 ignored`
+          - `wasm exports/smoke`: `62 passed, 2 ignored`
+
+- [ ] **M9: Align string traversal explicit-boundary policy (follow-up debt)**
+  - scope:
+    - remove remaining string traversal name-list wiring (`graphemes` /
+      `split`) where feasible;
+    - or replace it with the same explicit lowerer/runtime boundary style used
+      for `List`.
+  - rationale:
+    - M8 intentionally closes publication for `List` while keeping string
+      traversal debt explicit and non-hidden.
 
 ## 10. Open Questions (and Resolved Decisions)
 

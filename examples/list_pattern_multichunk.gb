@@ -1,0 +1,29 @@
+import goby/int as int
+
+# Build [n, n-1, ..., 1].
+build_desc : Int -> List Int
+build_desc n =
+  if n == 0
+    []
+  else
+    [n, ..build_desc (n - 1)]
+
+# Repeatedly decompose with [_, ..tail] and return the current head when i == 0.
+# With CHUNK_SIZE=32, `peel_head_after xs 32` crosses the first chunk boundary.
+peel_head_after : List Int -> Int -> Int
+peel_head_after xs i =
+  if i == 0
+    case xs
+      [head, .._] -> head
+      _ -> -1
+  else
+    case xs
+      [_, ..tail] -> peel_head_after tail (i - 1)
+      _ -> -1
+
+main : Unit -> Unit can Print
+main =
+  xs = build_desc 40
+  head0 = peel_head_after xs 0
+  head32 = peel_head_after xs 32
+  println "${int.to_string head0},${int.to_string head32}"

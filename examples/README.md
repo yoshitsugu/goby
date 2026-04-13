@@ -17,6 +17,9 @@ This directory contains small Goby programs grouped by purpose.
 - `to_string.gb`: `int.to_string` sample for explicit `Int` to `String` conversion
 - `string_graphemes.gb`: `string.graphemes` sample returning Unicode grapheme clusters
 - `list_case.gb`: list `case` pattern sample (`[]`, `[1]`, `[4, ..]`, `[a, ..b]`, `[_, _]`, `_`)
+- `list_index.gb`: ordinary indexed access sample (`xs[i]`)
+- `list_set.gb`: functional immutable point-update sample (`list.set`)
+- `list_pattern_multichunk.gb`: repeated list-pattern decomposition across the first chunk boundary
 - `list_spread.gb`: expression-side list spread sample (`[1, ..xs]`, `[1, ..map xs f]`)
 - `operators.gb`: arithmetic / comparison / equality / boolean operator sample
 - `case_arm_block.gb`: `case` arm block sample (`pattern ->` + indented block body)

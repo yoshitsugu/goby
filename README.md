@@ -49,6 +49,11 @@ If `wasmtime` is not installed, install it first so `goby run` can execute gener
 
 - Functional-first language design.
 - All data is immutable by default.
+- `List` is the default ordered collection surface. The runtime is free to use
+  a sequence-backed representation, and the intended practical operations for
+  ordinary scripts are indexed read (`xs[i]` / `list.get`), immutable point
+  update (`list.set`), callback-style traversal (`list.each`), and list
+  pattern matching (`[]`, `[x, ..rest]`, exact-length forms).
 - Built-in effect system.
 - Statically typed.
 - On the documented compiled Wasm path, Goby now has generic TCO for

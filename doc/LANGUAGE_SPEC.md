@@ -1,7 +1,7 @@
 # Goby Language Specification (Current)
 
 Status: active
-Last updated: 2026-04-11
+Last updated: 2026-04-14
 
 This file is the current language-spec source of truth for user-visible Goby
 syntax/semantics.
@@ -49,18 +49,27 @@ syntax/semantics.
 ## 3. Expressions and Statements
 
 - Literals: `Int`, `String`, `Bool` (`True` / `False`), list, tuple.
-- `List` is Goby's default ordered collection surface. The runtime representation
-  is not guaranteed to be a linked list; the direction is locked toward a
-  sequence-backed internal form (see `doc/PLAN_SEQUENCE.md`). List-pattern forms
-  are treated as sequence views — that is, pattern matching operates on
-  positional structure without exposing or assuming a linked-list node layout.
-  Honest performance framing for current chunked representation:
-  - indexed read remains practical for ordinary scripts;
-  - repeated head-tail extraction (`[x, ..rest]`) is amortized O(1) per step,
-    with chunk-boundary steps costing O(n/CHUNK_SIZE) due to header-copy work
-    under the current bump allocator;
-  - list-pattern forms remain ordinary source-level constructs, but repeated
-    decomposition is not currently promised as strict O(1) worst-case.
+- `List` contract (published M8):
+  - `List` is Goby's default ordered collection surface.
+  - Runtime representation is intentionally not specified as a linked-list
+    identity; the current direction is sequence-backed (see
+    `doc/PLAN_SEQUENCE.md`).
+  - practical indexed read is part of the intended ordinary-script contract:
+    `xs[i]` and `list.get`.
+  - practical immutable point update is part of the intended ordinary-script
+    contract: `list.set`.
+  - practical traversal contract:
+    - `list.each` is the recommended default style.
+    - `goby/iterator` (`with ... in ...`) is experimental-but-supported for
+      explicit early-stop/state-threading flows.
+  - list-pattern matching (`[]`, `[x, ..rest]`, exact-length forms) is a
+    first-class surface feature; list patterns are sequence views over
+    positional structure, not exposure of node layout.
+  - honest performance framing for current chunked representation:
+    - repeated head-tail extraction (`[x, ..rest]`) is amortized O(1) per step;
+    - chunk-boundary steps can cost O(n/CHUNK_SIZE) due to header-copy work
+      under the current bump allocator;
+    - repeated decomposition is therefore not promised as strict O(1) worst-case.
 - List literal spread (expression side):
   - `[a, b, ..xs]` (zero or more prefix elements + one trailing spread segment)
   - spread segment is expression-only syntax and must be trailing
@@ -358,8 +367,13 @@ syntax/semantics.
     - `(False, state)` stops iteration early; the returned state is the
       result of the `with ... in ...` expression.
     - Representative example: `examples/list_iterator_effect.gb`.
-  - This positioning is current as of M7 and may be revised if iterator/effect
-    traversal matures to become fully recommended in a future milestone.
+- **Representative List examples (published M8):**
+  - ordinary indexed access: `examples/list_index.gb`
+  - functional immutable point update: `examples/list_set.gb`
+  - multi-chunk list-pattern matching: `examples/list_pattern_multichunk.gb`
+  - iterator/effect traversal style: `examples/list_iterator_effect.gb`
+  - update-heavy workload shape using the recommended public update surface:
+    `examples/list_set.gb`
 - Stdlib `goby/string` currently provides:
   - `length : String -> Int`
   - `split : String -> String -> List String`
@@ -372,6 +386,10 @@ syntax/semantics.
   - 1-arg form (`__goby_string_each_grapheme value`) threads implicit `Unit` state.
   - 2-arg form (`__goby_string_each_grapheme value initial_state`) threads explicit state.
   - `(False, state)` stops iteration early; `(True, state)` continues.
+- Explicit-boundary policy note:
+  - The explicit-boundary policy is complete for `List`.
+  - `string.graphemes` / `string.split` boundary alignment is tracked as
+    temporary debt in `doc/PLAN_SEQUENCE.md` follow-up milestone `M9`.
 - Stdlib `goby/int` provides `parse : String -> Int can StringParseError`.
   - accepted form: optional leading `-` followed by one or more ASCII digits.
   - invalid input delegates to `StringParseError.invalid_integer : String -> Int`.

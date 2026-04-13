@@ -987,7 +987,7 @@ Used to bind a host-implemented effect handler to an effect type:
 use one of these two forms. Any other Rust-side special-casing (e.g. matching
 on function names in `lower_comp_inner`) is a violation of this policy.
 
-### 7.3 Current Status (updated 2026-04-12)
+### 7.3 Current Status (updated 2026-04-14)
 
 Traversal-name special-casing cleanup is complete for `list` stdlib helpers.
 Current status:
@@ -998,6 +998,13 @@ Current status:
 | `map` | `list` | `__goby_list_map` intrinsic wrapper in `stdlib/goby/list.gb` | **Compliant** |
 | `graphemes` | `string` | `StringGraphemesList` host intrinsic | **Compliant** — body uses `__goby_string_each_grapheme` |
 | `split` (empty sep) | `string` | Redirected to `StringGraphemesList` | **Compliant** — body uses `__goby_` builtins |
+
+Publication note (M8, 2026-04-14):
+- Explicit-boundary policy is now published as complete for `List` traversal,
+  indexing, and update surfaces.
+- `string.graphemes` / `string.split` still rely on temporary name-list wiring
+  (`SPECIALLY_LOWERED_STDLIB_NAMES`) and are tracked as explicit temporary debt
+  in `doc/PLAN_SEQUENCE.md` follow-up milestone `M9`.
 
 ### 7.4 Refactoring Plan
 

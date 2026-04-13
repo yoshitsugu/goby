@@ -1,12 +1,29 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-13
+Last updated: 2026-04-14
 
 ## Current Focus
 
-Next slice: **Sequence-backed List M8: Publish the new `List` contract**
-(`doc/PLAN_SEQUENCE.md`) — close the product/documentation loop; lock the
-final public contract for `List` after M0–M7 implementation work.
+Next slice: **Sequence-backed List M9: Align string traversal explicit-boundary
+policy** (`doc/PLAN_SEQUENCE.md`) — close the remaining explicit-boundary debt
+for `string.graphemes` / `string.split` after M8 publication.
+
+M8 completion checkpoint (2026-04-14):
+- M8 parent and sub-steps (`M8-0`..`M8-4`) marked complete in
+  `doc/PLAN_SEQUENCE.md`.
+- Published `List` contract wording aligned across:
+  - `README.md` (high-level positioning),
+  - `doc/LANGUAGE_SPEC.md` (authoritative semantics and caveats),
+  - `doc/PLAN.md` (policy/debt framing),
+  - `doc/PLAN_SEQUENCE.md` (milestone closure and follow-up).
+- Representative examples are now locked and referenced:
+  - `examples/list_index.gb`
+  - `examples/list_set.gb`
+  - `examples/list_pattern_multichunk.gb` (new in M8)
+  - `examples/list_iterator_effect.gb`
+- M8-3 carve-out decision locked:
+  - explicit-boundary policy is complete for `List`;
+  - remaining string traversal wiring is tracked as named follow-up `M9`.
 
 M7-5 completion checkpoint (2026-04-13):
 - All 4 gates passed:
@@ -62,13 +79,14 @@ TCO contract reminder (stable, no action needed):
 
 Immediate next steps:
 
-- **Sequence M7-5**: lock iterator/effect verification.
-  - correctness gate: M7 regression tests green.
-  - design gate: no stdlib-name magic, no callback-symbol one-offs, explicit
-    traversal boundary maintained.
-  - performance gate: compare final numbers vs M7-1 baseline in PLAN_SEQUENCE.md.
-  - positioning gate: document whether callback-style `each` stays recommended
-    default or becomes equal-first-class after M7.
+- **Sequence M9-0**: inventory current string traversal boundary wiring.
+  - confirm all `graphemes` / `split` routing points in lowering/runtime.
+- **Sequence M9-1**: design explicit boundary equivalent to current `List`
+  policy framing.
+  - decide whether to route via shared lowerer-owned forms or explicit
+    intrinsic wrappers without name-magic lists.
+- **Sequence M9-2**: lock docs for `List complete / string in-progress` to
+  `string complete` once implementation and verification pass.
 
 Checkpoint update (2026-04-10, later slice):
 - `goby-wasm` Candidate B migration advanced substantially in
