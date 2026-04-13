@@ -486,7 +486,7 @@ The following product-direction decisions are already locked for this plan:
     - `M5`: `cargo test -p goby-wasm` -> `641 passed, 0 failed, 4 ignored`
     - `M6`: `cargo test -p goby-wasm` -> `656 passed, 0 failed, 7 ignored`
 
-- [ ] **M7: Integrate effect-oriented iterator execution**
+- [x] **M7: Integrate effect-oriented iterator execution**
 
   ### M7 Design Decisions
 
@@ -717,7 +717,7 @@ The following product-direction decisions are already locked for this plan:
     iterator-effect overhead (1.52x over each-pure) is within practical bounds for
     ordinary Goby scripts at the §6.6 success-bar input sizes.
 
-  - [ ] **M7-5: Lock iterator/effect verification**
+  - [x] **M7-5: Lock iterator/effect verification**
     - scope: compare final numbers against M7-1 baseline.
       - correctness gate: iterator/effect traversal regressions green.
       - design gate:
@@ -739,6 +739,31 @@ The following product-direction decisions are already locked for this plan:
       marked `[x]`.
     - checks: `cargo test -p goby-wasm` green, benchmark comparison recorded,
       PLAN_SEQUENCE.md updated.
+
+  **M7-5 verification snapshot (2026-04-13):**
+  - correctness gate:
+    - `cargo test -p goby-wasm m7_3_ -- --nocapture`: 2 passed, 0 failed ✓
+    - `cargo test -p goby-wasm`: 658+62 passed, 0 failed ✓
+    - `cargo test`: all suites green ✓
+  - design gate:
+    - `SPECIALLY_LOWERED_STDLIB_NAMES = ["graphemes", "split"]` — `each`/`map`/`fold`
+      excluded (removed at M5); no stdlib-name magic for iterator/effect path ✓
+    - no callback-symbol-specific one-off branches in gen_lower ✓
+    - iterator/effect execution routes through the M5 explicit traversal boundary
+      (fold family + handler-lowering rewrite boundary) ✓
+    - user-facing traversal style documented in `doc/LANGUAGE_SPEC.md` (M7 section
+      "List traversal style and positioning") and `examples/list_iterator_effect.gb` ✓
+    - effect semantics (`yield : a -> state -> (Bool, state)`, resume contract,
+      early-stop convention) documented in `doc/LANGUAGE_SPEC.md` ✓
+  - performance gate:
+    - M7-4 measured: iterator-effect/each-pure = 1.52x (threshold 2.0x) ✓
+    - §6.6 success bar met: no O(n²), no memory exhaustion at ≤1000 elements ✓
+    - no specialization needed ✓
+  - positioning gate:
+    - `list.each` (callback-style) is the **recommended default** for ordinary iteration ✓
+    - `goby/iterator` (`with ... in ...`) is **experimental-but-supported** for
+      early-stop / state-threading use cases ✓
+    - documented in `doc/LANGUAGE_SPEC.md` under "List traversal style and positioning" ✓
 
   ### M7 Design Constraints
 

@@ -341,6 +341,25 @@ syntax/semantics.
     - only the touched chunk is copied (O(CHUNK_SIZE)); the header pointer table is
       shallow-copied (O(n_chunks)). Negative or out-of-bounds index aborts the program.
     - intended for functional-style update without `mut` bindings.
+- **List traversal style and positioning (M7, 2026-04-13):**
+  - `list.each` (callback-style) is the **recommended default** for ordinary
+    iteration over a list. It handles pure and effectful callbacks and covers
+    most scripting use cases.
+  - Iterator/effect traversal via `goby/iterator` (`Iterator` effect +
+    `with ... in ...` handler) is **experimental-but-supported**. It is
+    appropriate when the traversal logic requires explicit early-stop control
+    or explicit state threading that are awkward to express as a callback.
+  - Effect semantics for List iterator traversal (as of M7):
+    - Define an emitter function in `can Iterator` that calls
+      `yield value state` for each element. `yield` has the form
+      `yield : a -> state -> (Bool, state)`.
+    - Handle via `with yield value state -> resume (continue, newState) in emit_each xs init`.
+    - `(True, state)` resumes iteration with updated state.
+    - `(False, state)` stops iteration early; the returned state is the
+      result of the `with ... in ...` expression.
+    - Representative example: `examples/list_iterator_effect.gb`.
+  - This positioning is current as of M7 and may be revised if iterator/effect
+    traversal matures to become fully recommended in a future milestone.
 - Stdlib `goby/string` currently provides:
   - `length : String -> Int`
   - `split : String -> String -> List String`

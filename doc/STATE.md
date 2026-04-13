@@ -4,9 +4,20 @@ Last updated: 2026-04-13
 
 ## Current Focus
 
-Next slice: **Sequence-backed List M7-5 iterator/effect verification lock**
-(`doc/PLAN_SEQUENCE.md`) — final numbers vs M7-1 baseline, correctness/design/
-performance/positioning gates.
+Next slice: **Sequence-backed List M8: Publish the new `List` contract**
+(`doc/PLAN_SEQUENCE.md`) — close the product/documentation loop; lock the
+final public contract for `List` after M0–M7 implementation work.
+
+M7-5 completion checkpoint (2026-04-13):
+- All 4 gates passed:
+  - correctness: M7-3 regressions green; full test suite green
+  - design: no stdlib-name magic for each/map/fold; M5 boundary maintained;
+    List traversal style and effect semantics documented in LANGUAGE_SPEC.md
+  - performance: iterator-effect/each-pure = 1.52x (M7-4); §6.6 bar met
+  - positioning: `list.each` = recommended default;
+    `goby/iterator` + `with ... in ...` = experimental-but-supported
+- LANGUAGE_SPEC.md updated: "List traversal style and positioning" section added
+- M7-5 and M7 parent checkbox marked [x] in PLAN_SEQUENCE.md
 
 M7-4 completion checkpoint (2026-04-13):
 - benchmark command:
