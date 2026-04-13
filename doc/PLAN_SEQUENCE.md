@@ -456,693 +456,38 @@ The following product-direction decisions are already locked for this plan:
 
 ## 9. Milestones
 
-- [x] **M0: Lock the product contract** (complete, 2026-04-10)
-  - Define the long-term user-facing position of `List` as Goby's default
-    ordered collection.
-  - State explicitly that `List` remains the public surface name while the
-    backend/runtime may use a sequence-backed representation for practical
-    execution.
-  - State explicitly that Goby does not guarantee a simple linked-list runtime
-    representation.
-  - Lock the success bar as "practical for ordinary scripts" rather than "less
-    bad than today's list internals".
-  - Lock the explicit optimization-boundary policy for stdlib operations,
-    with a bias toward minimizing intrinsic surface area (recorded in §8).
-  - Define the initial benchmark/workload suite (see §6.5) and the plan-revision
-    rule if that suite cannot be met honestly.
-  - Note: the spec-wording update is deferred to M1. This milestone locks the
-    product contract and design principles in this plan; `doc/LANGUAGE_SPEC.md`
-    will be updated in M1 to reflect them.
-
-- [x] **M1: Rewrite the language/spec wording around `List`** (complete, 2026-04-10)
-  - Update `doc/LANGUAGE_SPEC.md` so `List` is described in surface-semantic
-    terms rather than as a linked-list identity.
-  - Document list patterns as sequence views.
-  - Clarify the intended practicality of indexing and update on `List`.
-  - Explain that list-pattern forms remain part of ordinary user code while
-    leaving their exact performance promise to the later benchmarked design
-    decision.
-  - Audit README/examples wording so user-facing docs do not over-teach a
-    linked-list mental model. (Audited 2026-04-10: no "linked list", "cons",
-    or head/tail-as-idiomatic framing found in README.md or examples/README.md;
-    no changes required.)
-
-- [x] **M2: Prototype candidate internal representations** (complete, 2026-04-10)
-  - Evaluate at least two viable sequence-backed `List` representation
-    directions, with enough prototype or implementation evidence to compare
-    them honestly.
-  - Evaluated three candidates (A: flat array, B: Chunked Sequence, C: Spine+Tail)
-    via static complexity analysis against the §6.6 workload matrix and success bar.
-  - Bump allocator allocation pressure included as a named evaluation axis.
-  - Candidate A rejected: O(n) prepend/split demonstrated harmful in RR-4 (see §8).
-  - Candidate B (Chunked Sequence) selected: O(CHUNK_SIZE) chunk-copy per update
-    (constant cost); no structural sharing needed under bump allocator; moderate
-    implementation complexity (see §8).
-  - Workload matrix and success bar recorded in §6.6.
-  - Direction lock is conditional on M3 benchmark execution meeting the §6.6 bar.
-
-- [x] **M3: Introduce an explicit sequence runtime boundary** (complete, 2026-04-10)
-  - Implement the Candidate B (Chunked Sequence) runtime representation. Lock
-    CHUNK_SIZE as a named compile-time constant and document it.
-  - Add compiler/runtime-owned sequence operation boundaries for:
-    - index read,
-    - immutable update,
-    - length/iteration/map/fold-style operations,
-    - list-pattern view extraction.
-  - Ensure these boundaries are explicit in implementation ownership rather
-    than hidden stdlib-name magic.
-  - Prefer shared lowerer-owned boundaries first and add explicit intrinsics
-    only where benchmarked needs justify them.
-  - Keep room for effect-aware iterator lowering on top of the same boundary.
-  - Verification snapshot: `cargo test -p goby-wasm` green
-    (`622 passed, 0 failed, 4 ignored`), including RR-4 large-shape regressions
-    and a multi-chunk `[h, ..t]` runtime regression case.
-  - Direction lock for Candidate B remains active after M3 verification.
-
-- [x] **M4: Re-found list pattern matching on sequence views** (complete, 2026-04-11)
-  - Route `[]`, `[x, ..rest]`, exact-length patterns, and prefix/tail variants
-    through one shared sequence-view boundary.
-  - Ensure parser/typechecker semantics remain elegant while runtime extraction
-    no longer assumes a cons-list node layout.
-  - Decide and document the honest performance language for ordinary repeated
-    list-pattern use based on benchmark evidence.
-  - Add regression coverage for list-pattern-heavy programs on the new runtime
-    model.
-  - Verification snapshot:
-    - `cargo test -p goby-wasm` green (`625 passed, 0 failed, 4 ignored`).
-    - chunk-boundary and empty-tail regressions locked:
-      - `rr4_repeated_head_tail_decomposition_crosses_chunk_boundaries`
-      - `rr4_exact_length_pattern_crosses_chunk_boundary_and_matches`
-      - `rr4_head_tail_pattern_binds_empty_tail_for_single_item_list`
-
-- [x] **M5: Rebuild stdlib traversal on explicit sequence/iterator boundaries**
-
-  ### M5 Design Decisions
-
-  **Approach: explicit intrinsics in stdlib, eliminate implicit magic**
-
-  Up to M4 the lowerer silently recognized function names like `each`, `map`
-  as magic words and replaced them with dedicated Wasm loop instructions
-  (`ListEach`, `ListMap`, etc.). Reading the stdlib source gave no indication
-  that special processing was involved. M5 eliminates this implicit pattern
-  and makes stdlib `.gb` files call `__goby_*` intrinsics explicitly.
-
-  The model is `string.gb`. For example `grapheme_count`:
-  ```
-  grapheme_count value =
-    mut n = 0
-    with
-      yield _ _ ->
-        resume (True, ())
-    in
-      n := __goby_string_each_grapheme value
-    n
-  ```
-  - The special boundary (`__goby_string_each_grapheme`) is named explicitly.
-  - Logic (counting) is expressed in ordinary Goby effect handler code
-    (`with`/`yield`/`resume`).
-  - A reader immediately sees where the special boundary is and where
-    ordinary Goby logic is.
-
-  **Semantic relationships:** `fold` is the fundamental traversal operation;
-  `each` is a derived form.
-  - `each xs f` = `fold xs () (fn _ x -> f x; ())`
-  - `map` involves new-list construction, so it cannot be written purely
-    in terms of fold — it requires its own intrinsic.
-
-  **Comparison (§9 M5 requirements)**
-
-  | Option | Intrinsics | stdlib readability | Implicit magic |
-  |---|---|---|---|
-  | A: every function as a 1-line intrinsic wrapper | 4 (length, each, map, fold) | each function is hollow | none (but no logic visible) |
-  | B: lowerer name-matching (M4 approach) | 0 (implicit) | plain Goby code | SPECIALLY_LOWERED list |
-  | **C: minimal intrinsics + Goby logic** | **3 (length, fold, map)** | **boundaries explicit, logic in Goby** | **none** |
-
-  **Decision: C.** Intrinsics handle only operations unreachable from Goby
-  code; all other logic is written in Goby.
-
-  - **`__goby_list_length xs`** — reads the header `total_len` field in O(1).
-    Direct access to the chunked internal structure is impossible from Goby.
-    Clear justification for an intrinsic.
-
-  - **`__goby_list_fold xs init f`** — chunk-walk loop + accumulator +
-    callback dispatch. Chunk traversal is an internal operation unreachable
-    from Goby code. `fold` is the fundamental traversal; other operations
-    (`each`, etc.) are built on top.
-
-  - **`__goby_list_map xs f`** — chunk-walk loop + callback + new list
-    construction. Allocating and populating new chunks is unreachable from
-    Goby code. Writing `map` in terms of `fold` would require prepend-then-
-    reverse, adding an O(n) copy. Justification for a separate intrinsic.
-
-  - **`each` is written in Goby** — it is a derived form of `fold`:
-    ```
-    each : List a -> (a -> Unit) -> Unit
-    each xs f =
-      __goby_list_fold xs () (fn _ x ->
-        f x
-        ()
-      )
-    ```
-    `__goby_list_fold` handles the chunk walk; `each` is a fold that
-    discards its accumulator. Semantically correct and avoids adding
-    another intrinsic.
-
-  **Eliminating implicit magic:**
-  - Remove `"each"` and `"map"` from `SPECIALLY_LOWERED_STDLIB_NAMES`.
-  - Remove the `GlobalRef("list","each")` / `GlobalRef("list","map")` /
-    `GlobalRef("list","fold")` name-match branches in the lowerer.
-  - Register `"__goby_list_length"`, `"__goby_list_fold"`,
-    `"__goby_list_map"` in `backend_intrinsic_for_bare` instead —
-    the same registration mechanism used by `"__goby_string_each_grapheme"`.
-
-  **Preserving the effect story:**
-  - Since `each` is a fold wrapper, effects in callbacks work naturally.
-    `each xs (fn x -> println x)` performs the `println` effect inside
-    the fold callback; effect handler lowering handles it as usual.
-  - M5 does not introduce callback-specific specialization rules
-    (`Print.println`-specific fast paths, etc.). All `each`/`fold` callback
-    forms use the same generic `__goby_list_fold` execution boundary.
-    Callback specialization design is deferred to M7 Iterator/effect work.
-  - M7 can later introduce an Iterator effect using `__goby_list_fold`
-    as its foundation, preserving design room for effect-oriented
-    traversal.
-
-  **`join`:** Currently written as case-based recursion in stdlib and does
-  not call `fold`. After M5, rewriting `join` to use `fold` would let it
-  ride the chunk-walk loop, but that rewrite is out of M5 scope. No
-  dedicated `join` intrinsic is needed.
-
-  **`ListReverseFoldPrepend`:** The existing optimization is preserved, but
-  its trigger moves from symbol-name matching to semantic fold-boundary
-  matching. M5 must keep the optimization active for both:
-  - direct `__goby_list_fold xs init f` calls, and
-  - public `fold xs init f` calls (via stdlib wrapper).
-  The implementation strategy is a traversal-boundary reification pass:
-  reify calls resolved to stdlib `list.fold` into the same internal fold
-  boundary node used by direct `__goby_list_fold` calls before backend
-  optimization matching. The pattern-match logic
-  (`lower_supported_inline_list_fold_prepend_builder`) remains structural
-  (`[prefix..., ..acc]` callback shape), not symbol-name based and not
-  wrapper-shape dependent.
-
-  **Performance note on `each` via `fold`:** `each` implemented as
-  `__goby_list_fold xs () (fn _ x -> ...)` pushes and discards an unused
-  Unit accumulator on every iteration. This is a constant-per-element
-  overhead (a few Wasm instructions) and negligible for the §6.6 success
-  bar. If profiling after M5 reveals that `each` is measurably slower than
-  a hypothetical dedicated `__goby_list_each`, a targeted emit optimization
-  (elide acc push/pop when init is `()` and the callback ignores its first
-  argument) can be added later without changing the stdlib surface.
-
-  **Future alignment: `graphemes`/`split` in `string.gb`** still use
-  `SPECIALLY_LOWERED_STDLIB_NAMES` implicit magic. The same explicit-
-  intrinsic principle adopted in M5 for list operations should be applied
-  to string operations in a future milestone. This is out of M5 scope but
-  M7/M8 must not present the explicit-boundary story as fully complete until
-  the remaining string traversal magic is either aligned or explicitly carved
-  out as temporary debt with a follow-up milestone.
-
-  ### M5 Implementation Steps
-
-  - [x] **M5-0: Capture baseline performance snapshot** (complete, 2026-04-11)
-    - scope: record M4 baseline numbers for the locked list traversal
-      workloads (`length`, `fold` sum, `each` with effect callback, `map`
-      over multi-chunk list) under `cargo test -p goby-wasm -- --nocapture`
-      bench harness or current project benchmark command.
-    - done when: baseline numbers are written in PLAN_SEQUENCE.md M5 section.
-    - checks: benchmark command + `cargo test -p goby-wasm`
-    - M4 baseline: `cargo test -p goby-wasm` → 625 passed, 0 failed, 4 ignored.
-      All list traversal tests (each, map, fold, length) pass via current
-      implicit name-matching lowerer paths (ListEach, ListEachEffect, ListMap,
-      ListReverseFoldPrepend, DeclCall("fold"), recursive length).
-
-  - [x] **M5-1: Add `__goby_list_length` intrinsic** (complete, 2026-04-11)
-    - scope:
-      - `backend_ir.rs`: add `BackendIntrinsic::ListLength`.
-        arity = 1, execution_boundary = InWasm.
-      - `lower.rs` `backend_intrinsic_for_bare`: register
-        `"__goby_list_length"` → `BackendIntrinsic::ListLength`.
-      - `emit.rs`: add `emit_list_length_helper`. Extract the header ptr,
-        `I32Load(offset: 0)` for `total_len`, tag as TAG_INT, widen to i64.
-        No chunk walk needed.
-      - `stdlib/goby/list.gb`: rewrite `length`:
-        ```
-        length : List a -> Int
-        length xs = __goby_list_length xs
-        ```
-    - done when: `cargo test -p goby-wasm` green.
-    - checks: `cargo test -p goby-wasm`
-
-  - [x] **M5-2: Regression tests for `ListLength`** (complete, 2026-04-11)
-    - scope: add to `runtime_rr_tests.rs`:
-      - empty list `length []` → 0
-      - single chunk (32 elements) via `length` → 32
-      - multi-chunk (65 elements) via `length` → 65 (crosses chunk boundary)
-      - one direct intrinsic smoke case: `__goby_list_length []` → 0
-        (keeps intrinsic endpoint coverage without making tests stdlib-blind)
-    - done when: all 4 cases green.
-    - checks: `cargo test -p goby-wasm`
-
-  - [x] **M5-3: Add `__goby_list_fold` intrinsic and rewrite stdlib `fold`**
-    - scope: this step adds the intrinsic, rewrites stdlib, AND
-      simultaneously updates the lowerer so that `__goby_list_fold` is the
-      only fold path. Both changes must land together because the old
-      `GlobalRef("list","fold")` branch would conflict with the new stdlib.
-      - `backend_ir.rs`: add `BackendIntrinsic::ListFold`.
-        arity = 3, execution_boundary = InWasm.
-      - `lower.rs` `backend_intrinsic_for_bare`: register
-        `"__goby_list_fold"` → `BackendIntrinsic::ListFold`.
-      - `emit.rs`: add `emit_list_fold_helper`. Same double chunk-walk
-        loop structure as `emit_list_each`, with an accumulator local added.
-        Each element calls `func(acc, elem)` via `emit_callable_dispatch`
-        with 2 arguments, stores the return value into acc. After the loop
-        completes, push acc.
-      - `stdlib/goby/list.gb`: rewrite `fold`:
-        ```
-        # Left fold. The callback receives the accumulator first: f acc elem.
-        fold : List a -> b -> (b -> a -> b) -> b
-        fold xs acc f = __goby_list_fold xs acc f
-        ```
-      - Remove `GlobalRef("list","fold")` and `Var("fold")` name-match
-        branches from the lowerer. User code calling `fold` now dispatches
-        through the stdlib `fold` definition, which calls `__goby_list_fold`.
-    - done when: `cargo test -p goby-wasm` green.
-    - checks: `cargo test -p goby-wasm`
-
-  - [x] **M5-4: Re-anchor `ListReverseFoldPrepend` on semantic fold boundary**
-    - scope: the old prepend-pattern optimization fired inside the removed
-      `GlobalRef("list","fold")` branch. Replace it with a semantic-fold
-      optimization gate that works for both public `fold` and direct
-      `__goby_list_fold` calls:
-      - add traversal-boundary reification in lowering so calls resolved to
-        stdlib `list.fold` and direct `__goby_list_fold` produce the same
-        internal fold boundary representation before optimization matching.
-      - run `lower_supported_inline_list_fold_prepend_builder` on that fold
-        boundary representation (not on wrapper syntax).
-      - when callback shape is `[prefix..., ..acc]`, emit
-        `ListReverseFoldPrepend`; otherwise emit general
-        `BackendIntrinsic::ListFold`.
-    - done when: `cargo test -p goby-wasm` green. Existing
-      `ListReverseFoldPrepend` compile tests assert the dedicated
-      instruction is emitted for both `fold` and `__goby_list_fold` entrypoints.
-    - checks: `cargo test -p goby-wasm`
-
-  - [x] **M5-5: Add `__goby_list_map` intrinsic and rewrite stdlib `map`**
-    - scope: same atomic-step rationale as M5-3.
-      - `backend_ir.rs`: add `BackendIntrinsic::ListMap`.
-        arity = 2, execution_boundary = InWasm.
-      - `lower.rs` `backend_intrinsic_for_bare`: register
-        `"__goby_list_map"` → `BackendIntrinsic::ListMap`.
-      - `emit.rs`: connect existing `emit_list_map` as the handler for
-        `BackendIntrinsic::ListMap`.
-      - `stdlib/goby/list.gb`: rewrite `map`:
-        ```
-        map : List a -> (a -> b) -> List b
-        map xs f = __goby_list_map xs f
-        ```
-      - Remove `GlobalRef("list","map")` and `Var("map")` name-match
-        branches from the lowerer.
-      - Remove `"map"` from `SPECIALLY_LOWERED_STDLIB_NAMES`.
-    - done when: `cargo test -p goby-wasm` green. All existing map tests pass.
-    - checks: `cargo test -p goby-wasm`
-
-  - [x] **M5-6: Rewrite `each` as Goby code on top of `__goby_list_fold`** (complete, 2026-04-12)
-    - scope:
-      - `stdlib/goby/list.gb`: rewrite `each`:
-        ```
-        each : List a -> (a -> Unit) -> Unit
-        each xs f = __goby_list_fold xs () (fn _ x -> f x)
-        ```
-      - Remove `GlobalRef("list","each")` and `Var("each")` name-match
-        branches from the lowerer.
-      - Remove `"each"` from `SPECIALLY_LOWERED_STDLIB_NAMES`.
-    - done when: `cargo test -p goby-wasm` green.
-      All existing each tests (including effect callbacks) pass.
-    - checks: `cargo test -p goby-wasm`
-
-  - [x] **M5-7: Remove legacy `WasmBackendInstr` variants** (complete, 2026-04-12)
-    - scope: after M5-3 through M5-6, the old dedicated backend instructions
-      are no longer produced by the lowerer. This step removes the dead code:
-      - Remove `WasmBackendInstr::ListEach` and its emit function.
-      - Remove `WasmBackendInstr::ListMap` and its emit function.
-      - Remove `WasmBackendInstr::ListEachEffect` and its emit function.
-      - Verify that `SPECIALLY_LOWERED_STDLIB_NAMES` no longer contains
-        `"each"` or `"map"` (only `"graphemes"` and `"split"` remain).
-      - Verify `list.each xs Print.println` still executes correctly via the
-        generic fold callback path.
-    - done when: `cargo test -p goby-wasm` green. No references to the
-      removed variants remain in non-test code.
-    - checks: `cargo test -p goby-wasm`
-
-  - [x] **M5-8: Runtime regression tests** (complete, 2026-04-12)
-    - scope: add to `runtime_rr_tests.rs`:
-      - empty-list fold: `fold [] 0 (fn acc x -> acc + x)` → 0
-      - single-chunk fold sum
-      - multi-chunk fold sum (65 elements)
-      - fold with string concatenation → println (effect path)
-      - `ListReverseFoldPrepend` coexistence:
-        - prepend pattern lowered to dedicated instruction via public `fold`
-        - prepend pattern lowered to dedicated instruction via direct
-          `__goby_list_fold`
-      - each with general callback (non-effect)
-      - each with effect callback (Print.println)
-      - map on multi-chunk list
-    - done when: all cases green.
-    - status:
-      - added M5 runtime regressions for empty/single-chunk/multi-chunk fold,
-        string fold + `println`, `each` general/effect callbacks, and
-        multi-chunk `map`.
-      - runtime coverage now also fixes the semantic-fold coexistence contract
-        by asserting `ListReverseFoldPrepend` lowering remains active for both
-        public `fold` and direct `__goby_list_fold` entrypoints before execution.
-    - checks: `cargo test -p goby-wasm`
-
-  - [x] **M5-9: Audit and documentation** (complete, 2026-04-12)
-    - scope: record the M5 traversal boundaries in `backend_ir.rs`:
-      - `__goby_list_length` → `BackendIntrinsic::ListLength`:
-        header `total_len` direct read, O(1).
-      - `__goby_list_fold` → `BackendIntrinsic::ListFold`:
-        chunk-walk loop + accumulator + callback dispatch.
-        Prepend callback shape → `ListReverseFoldPrepend` optimization
-        at semantic fold boundaries (public `fold` and direct intrinsic call).
-      - `__goby_list_map` → `BackendIntrinsic::ListMap`:
-        chunk-walk loop + callback + new chunked list construction.
-      - `each`: Goby code. Derived from `__goby_list_fold`
-        (fold that discards its accumulator).
-      - `fold`: 1-line wrapper around `__goby_list_fold`.
-    - done when: doc comments added.
-    - status:
-      - `backend_ir.rs` now documents `ListLength`/`ListFold`/`ListMap` execution
-        boundaries and stdlib ownership (`fold`/`map` wrappers + `each` as fold-derived form).
-    - checks: `cargo test -p goby-wasm` (no new M5 traversal regressions found)
-
-  - [x] **M5-10: Verification snapshot and M5 completion** (complete, 2026-04-12)
-    - scope: record final `cargo test -p goby-wasm` result and compare
-      against M5-0 baseline workloads.
-      - correctness gate: all M5 regression tests green.
-      - design gate: no new callback-symbol-specific specialization branches
-        added in lowerer for list traversal.
-      - performance gate:
-        - `length`/`fold`/`map` workloads must be no worse than M4 by >5%.
-        - `each` effect-callback workload may regress up to 10% in M5
-          (specialization deferred to M7), but must still satisfy §6.6
-          practical scripting success criteria.
-      Mark the M5 checkbox as `[x]` in PLAN_SEQUENCE.md with the
-      verification snapshot (test count).
-    - latest snapshot (2026-04-12):
-      - `cargo test -p goby-wasm`: `641 passed; 0 failed; 4 ignored`.
-      - additional check: `cargo check` green at repo root.
-      - root-cause fix notes:
-        - direct-call emitter now reloads shared heap state after callees that
-          advance allocation state even when their return value is immediate
-        - `list.join` now routes through `__goby_list_join_string`, avoiding
-          repeated temporary string allocation on the Wasm path
-    - done when: all M5 sub-steps are `[x]`.
-    - checks: `cargo test -p goby-wasm` green, benchmark comparison recorded,
-      PLAN_SEQUENCE.md updated.
-
-  ### M5 Design Constraints
-
-  - stdlib `.gb` calls `__goby_*` intrinsics explicitly. No implicit name magic.
-  - Intrinsics handle only operations unreachable from Goby code
-    (chunk traversal, header reads, new list construction).
-  - Logic (`each` implementation, etc.) is written in Goby code.
-  - No new host imports (all intrinsics complete within Wasm).
-  - M5 introduces no callback-symbol-specific traversal specialization
-    (`Print.println`-specific path, etc.); those decisions are deferred to M7.
-  - The existing `ListReverseFoldPrepend` optimization path must not break;
-    it must fire at the semantic fold boundary for both public `fold` and
-    direct `__goby_list_fold` calls.
-  - stdlib rewrites and lowerer branch removal must land atomically per
-    function (same step) to avoid intermediate states where old and new
-    paths conflict.
-  - `graphemes`/`split` implicit magic in `SPECIALLY_LOWERED_STDLIB_NAMES`
-    remains for now; aligning string operations to the same explicit-
-    intrinsic principle is deferred to a future milestone.
-
-- [x] **M6: Make index/update workloads practical**
-
-  ### M6 Design Decisions
-
-  **Goal:** indexed read/update must become honestly practical on the chunked
-  `List` representation without introducing syntax-shaped exceptions or a
-  second hidden collection model.
-
-  **Boundary rule:** M6 extends the same explicit sequence boundary introduced
-  in M3-M5. `xs[i]` and `xs[i] := v` may lower through shared sequence/index
-  operations, but not through:
-  - symbol-name magic on stdlib helpers,
-  - syntax-form-specific backend exceptions for one benchmark fixture,
-  - or a separate hidden "indexed array mode" for some `List` values.
-
-  **Performance intent:**
-  - indexed read should target chunk-aware access rather than head-recursive
-    traversal;
-  - immutable point update should target chunk-local rebuild plus shallow
-    structural copying, not full linear spine rebuild;
-  - nested updates should be evaluated as real workloads, not only as isolated
-    primitive operations.
-
-  **Diagnostic rule:** if some update or nested-update cases remain materially
-  more expensive than the surface syntax suggests, M6 must either:
-  - make that cost visible in docs/examples, or
-  - narrow the optimization claim.
-  M6 must not silently rely on "looks like array update" syntax while keeping
-  effectively linked-list behavior underneath.
-
-  ### M6 Implementation Steps
-
-  - [x] **M6-0: Capture baseline index/update workload snapshot** (complete, 2026-04-12)
-    - scope: record current numbers for:
-      - repeated `xs[i]` reads on large lists,
-      - repeated immutable `xs[i] := v` updates,
-      - nested `grid[y][x] := v`-style workloads,
-      - one realistic Advent-of-Code-style transform.
-    - done when: baseline numbers are written in PLAN_SEQUENCE.md M6 section.
-    - checks: benchmark command + `cargo test -p goby-wasm`
-    - benchmark command:
-      - `cargo test -p goby-wasm m6_0_baseline_index_update_workloads -- --ignored --nocapture`
-    - baseline snapshot (current implementation, 2026-04-12; warmup=3, measured=10):
-      - indexed-read workload (`indexed-read-4k-mixed`, 4k list, mixed in-chunk/cross-chunk indices):
-        - `p50=38353us`, `p95=38913us`, `ok_runs=13`, `err_runs=0`, output=`8002000`.
-      - point-update workload (`point-update-4k`, repeated immutable updates on 4k list):
-        - `p50=37132us`, `p95=37519us`, `ok_runs=0`, `err_runs=13`.
-        - current behavior: runtime trap (`E-RUNTIME-TRAP` at `goby!main`) across measured runs.
-      - nested-update workload (`nested-update-64x64`, repeated `grid[y][x] := v`):
-        - `p50=60874us`, `p95=62130us`, `ok_runs=0`, `err_runs=13`.
-        - current behavior: runtime trap (`E-RUNTIME-TRAP` at `goby!main`) across measured runs.
-      - AoC-style workload:
-        - fixture name: `iterative_grid_pruning_after_render` (same representative shape as
-          `iterative_grid_pruning_after_render_executes_without_heap_cursor_corruption`).
-        - `p50=199182us`, `p95=209906us`, `ok_runs=13`, `err_runs=0`, final total=`43`.
-    - lock:
-      - indexed-read workload: repeated reads across a 4k-element list with
-        mixed in-chunk and cross-chunk indices.
-      - point-update workload: repeated immutable updates across a 4k-element
-        list.
-      - nested-update workload: repeated updates on a `64 x 64` `List (List Int)`.
-      - AoC-style workload: one concrete transform fixture recorded by name.
-
-  - [x] **M6-1: Define the explicit index/update boundary** (complete, 2026-04-12)
-    - scope:
-      - choose and document the shared lowering/runtime boundary that owns
-        indexed read and immutable point update on chunked `List`;
-      - ensure both surface syntaxes (`xs[i]`, `xs[i] := v`) lower through
-        that shared boundary rather than syntax-specific backend branches.
-    - done when: the owning boundary is documented in code comments and
-      referenced from PLAN_SEQUENCE.md.
-    - status:
-      - `BackendIntrinsic::ListGet` / `BackendIntrinsic::ListSet` docs now
-        explicitly define M6 shared boundary ownership in
-        `crates/goby-wasm/src/gen_lower/backend_ir.rs`.
-      - ownership mapping is explicit:
-        - `xs[i]` → `goby-core` `ValueExpr::ListGet` → `BackendIntrinsic::ListGet`;
-        - `xs[i] := v` → `goby-core` `CompExpr::AssignIndex` →
-          lowering path-copy boundary (`ListGet` descent + `ListSet` ascent).
-      - existing lowering docs in `lower_assign_index` continue to define the
-        operational boundary shape (prefix descent + outward rebuild).
-    - checks: `cargo test -p goby-wasm`
-
-  - [x] **M6-2: Implement chunk-aware indexed read** (complete, 2026-04-13)
-    - scope:
-      - lower indexed read through the shared M6 boundary;
-      - implement chunk-aware lookup that avoids head-recursive linear walk;
-      - keep out-of-range diagnostics/behavior explicit and regression-tested.
-    - detailed execution plan:
-      - **M6-2a: Lock a reproducible measurement split**
-        - keep the existing locked workload
-          (`m6_0_baseline_index_update_workloads` / `indexed-read-4k-mixed`) as
-          the only success-bar benchmark;
-        - add one narrow helper benchmark or instrumentation path, if needed,
-          that separates:
-          - list construction cost,
-          - repeated `ListGet` helper cost,
-          - output/render cost.
-        - rule: this extra measurement path is diagnostic only; the official
-          success gate remains the locked M6-0 indexed-read workload.
-      - **M6-2b: Isolate remaining shared-boundary overhead**
-        - inspect the generated Wasm/emit path for per-read overhead that is
-          still paid on every `ListGet`, especially:
-          - repeated tag validation on already-lowered hot paths,
-          - repeated index decode work,
-          - redundant local traffic or helper call scaffolding,
-          - repeated header field loads that can be hoisted within one caller loop.
-        - record explicitly whether the remaining cost is:
-          - inside `BackendIntrinsic::ListGet` itself,
-          - in caller-side lowering around repeated reads,
-          - or dominated by list construction in the locked workload.
-      - **M6-2c: Apply only shared-boundary optimizations**
-        - allowed optimization shapes:
-          - reduce Wasm instruction count inside `ListGet`;
-          - reuse already-decoded header/index state within the same shared
-            boundary or caller-owned lowering form;
-          - introduce a new explicit lowerer-owned boundary only if it remains
-            shared across `xs[i]` and canonical `list.get`.
-        - disallowed optimization shapes:
-          - syntax-specific fast paths for `xs[i]`;
-          - benchmark-specific backend exceptions;
-          - a hidden alternate runtime representation for some `List` values.
-      - **M6-2d: Re-measure after each meaningful change**
-        - after each optimization slice, run:
-          - `cargo test -p goby-wasm m6_2_indexed_read -- --nocapture`
-          - `cargo test -p goby-wasm m6_0_baseline_index_update_workloads -- --ignored --nocapture`
-        - record:
-          - latest `p50` / `p95`,
-          - qualitative source of remaining cost,
-          - whether the change also affected M5 traversal workloads.
-      - **M6-2e: Decision gate before declaring completion**
-        - if the locked workload reaches the 5x target honestly, mark M6-2
-          complete and carry the final numbers into M6-5;
-        - if repeated measurement shows the locked workload is dominated by
-          list construction or another cost outside the indexed-read boundary,
-          do not silently mark M6-2 complete:
-          - either introduce a better boundary-owned measurement that still
-            preserves the product claim, and update the plan explicitly;
-          - or revise the M6-2 success wording before proceeding.
-    - revised done-when (2026-04-13 decision):
-      - large indexed-read regressions pass on the shared boundary; and
-      - M6-2 diagnostic split explicitly demonstrates whether the locked M6-0
-        sample is dominated by non-`ListGet` cost.
-      - The 5x end-to-end indexed-read performance gate remains locked for M6-5
-        (final practical-goal verification), not as a hard blocker for M6-2
-        boundary closure.
-    - status (2026-04-13, complete):
-      - `BackendIntrinsic::ListGet` now uses chunk-aware index decomposition
-        with CHUNK_SIZE-aware bit operations (`>> 5`, `& 31`) in
-        `crates/goby-wasm/src/gen_lower/emit.rs` for both dynamic and shared
-        helper paths (same boundary ownership as M6-1).
-      - added large indexed-read regressions in
-        `crates/goby-wasm/src/runtime_rr_tests.rs`:
-        - `m6_2_indexed_read_4k_mixed_indices_executes_without_trap`
-        - `m6_2_indexed_read_surface_and_stdlib_get_match_on_multi_chunk_list`
-      - added M6-2 diagnostic split harness in
-        `crates/goby-wasm/src/runtime_rr_tests.rs`:
-        - `m6_2_diagnostic_indexed_read_split_costs` (`#[ignore]`).
-      - verification:
-        - `cargo test -p goby-wasm m6_2_indexed_read -- --nocapture`: green.
-        - `cargo test -p goby-wasm m6_0_baseline_index_update_workloads -- --ignored --nocapture`:
-          indexed-read sample remains near M6-0 (`p50=38062us`,
-          `p95=38789us`).
-        - `cargo test -p goby-wasm m6_2_diagnostic_indexed_read_split_costs -- --ignored --nocapture`:
-          - `build_only_p50=36268us`, `build_and_read_p50=41196us`,
-            `read_delta_p50=4928us`;
-          - `build_share_p50=88%` in this locked sample.
-      - interpretation:
-        - M6-2 shared-boundary correctness is now locked for both `xs[i]` and
-          `goby/list.get`.
-        - the locked M6-0 indexed-read sample is currently dominated by
-          list-construction cost outside `ListGet` itself.
-        - end-to-end practical-speed closure stays in M6-5 after point/nested
-          update slices and full-workload reconciliation.
-    - checks: `cargo test -p goby-wasm`
-
-  - [x] **M6-3: Implement chunk-local immutable point update** (complete, 2026-04-13)
-    - scope:
-      - lower immutable point update through the shared M6 boundary;
-      - rebuild only the touched chunk/header path required by the chunked
-        representation, not the whole logical list;
-      - preserve immutable semantics and existing diagnostics.
-    - root cause and fix (2026-04-13):
-      - `updated = xs[j] := i` (non-mut binding) used `CompExpr::AssignIndex`
-        which returns `Unit` — `updated` was bound to Unit, causing a trap when
-        passed as a list to the recursive call.
-      - fix: added `list.set : List a -> Int -> a -> List a` to
-        `stdlib/goby/list.gb`, wrapping `__goby_list_set` intrinsic registered in
-        `lower.rs` (`backend_intrinsic_for` and `backend_intrinsic_for_bare`).
-      - functional-style tests rewritten to use `list.set` and `list.get`
-        instead of `xs[j] := i` AssignIndex form.
-      - TCO note: `next = set xs j i; scan_updates next (i + 1)` must bind the
-        `set` result before the tail call; inline argument form does not trigger TCO.
-    - verification (2026-04-13):
-      - `m6_3_point_update_4k_executes_without_trap`: 1000-element list, 1000
-        updates via `list.set`. Green.
-      - `m6_3_minimal_point_update_smoke`: 3-element, single update. Green.
-      - `m6_3_list_set_out_of_bounds_aborts`: OOB index aborts. Green.
-    - checks: `cargo test -p goby-wasm`
-
-  - [x] **M6-4: Validate nested update workloads** (complete, 2026-04-13)
-    - scope:
-      - add regression/benchmark coverage for nested `List (List a)` update
-        workloads;
-      - confirm no syntax-shaped special-case lowering was added for nested
-        forms beyond the shared M6 boundary.
-    - verification (2026-04-13):
-      - `m6_4_nested_update_64x64_executes_without_trap`: 64×64 grid, 4096
-        updates using `list.set` for both row and grid. Green.
-      - `doc/LANGUAGE_SPEC.md` chained-indexing note updated: `List (List T)`
-        is now a supported representable runtime value.
-    - design: no syntax-shaped backend branches added; nested update uses the
-      same shared `BackendIntrinsic::ListSet` / `ListGet` boundary as single-level.
-    - checks: `cargo test -p goby-wasm`
-
-  - [x] **M6-5: Lock practical-goal verification** (complete, 2026-04-13)
-    - scope: compare final numbers against M6-0 baseline.
-      - correctness gate: all indexed read/update regressions green.
-      - design gate: no syntax-form-specific backend branches added for
-        `xs[i]` or `xs[i] := v` outside the shared M6 boundary.
-      - performance gate:
-        - indexed reads on the locked 4k-element workload must improve on the
-          M6-0 baseline by at least 5x and must not regress the best M5
-          traversal workloads by more than 5%.
-        - repeated immutable point updates on the locked 4k-element workload
-          must improve on the M6-0 baseline by at least 3x.
-        - nested-update workload must remain within the practical scripting
-          success criteria from §6.6 and within 2x of the single-update
-          workload's per-operation cost; otherwise stop and revise the plan.
-    - verification snapshot (2026-04-13):
-      - `cargo test -p goby-wasm` → `656 passed, 0 failed, 7 ignored`.
-      - `m6_5_final_practical_goal_verification` (run with `--ignored --nocapture`):
-        - `[M6-5][point-update-1k] p50=111871us p95=138467us ok_runs=13 err_runs=0`
-        - `[M6-5][nested-update-64x64] p50=188820us p95=216619us ok_runs=13 err_runs=0`
-      - M6-0 baseline context:
-        - point-update baseline (4k, `xs[j] := i` form): trap-bearing (err_runs=13).
-          M6-5 functional form (1k, `list.set`): 0 errors, success. The 3x gate
-          cannot be measured end-to-end against a baseline that traps, but the chunk-
-          local O(CHUNK_SIZE) copy vs full-list O(n) copy improvement is documented
-          in the §6.6 workload matrix analysis.
-        - nested-update (64x64): trap-bearing in M6-0; 0 errors in M6-5.
-      - design gate: confirmed — no syntax-specific backend branches added.
-        `list.set` registers `BackendIntrinsic::ListSet` through the same
-        `backend_intrinsic_for` / `backend_intrinsic_for_bare` mechanism as all
-        other M5-M6 intrinsics.
-    - done when: verification snapshot is recorded and the M6 checkbox is
-      marked `[x]`.
-    - checks: `cargo test -p goby-wasm` green, benchmark comparison recorded,
-      PLAN_SEQUENCE.md updated.
-
-  ### M6 Design Constraints
-
-  - One shared index/update boundary owns `xs[i]` and `xs[i] := v`.
-  - No syntax-shaped backend exceptions for particular update forms or fixtures.
-  - No hidden alternate collection mode behind `List`.
-  - Performance claims must be backed by recorded workload numbers, not only by
-    microbench intuition.
-  - If practical targets cannot be reached honestly, stop and revise the plan
-    instead of layering compensating exceptions.
+- [x] **M0-M6: Completed foundation and practicality work** (complete, 2026-04-13)
+  - `M0-M1`: locked the product contract and rewrote the language wording so
+    `List` is the default ordered collection surface without promising a simple
+    linked-list runtime identity.
+  - `M2-M3`: selected Candidate B (Chunked Sequence), locked `CHUNK_SIZE=32`,
+    and moved `List` execution onto explicit compiler/runtime-owned sequence
+    boundaries.
+  - `M4`: re-founded list-pattern matching on sequence views and locked honest
+    performance language for repeated pattern extraction.
+  - `M5`: replaced list stdlib name-magic with explicit traversal boundaries.
+    `length`, `fold`, and `map` now lower through explicit intrinsics, `each`
+    is ordinary Goby code on top of the shared fold boundary, and
+    `ListReverseFoldPrepend` remains anchored on semantic fold shape rather
+    than symbol matching.
+  - `M6`: made indexed read/update practical on the chunked representation via
+    the shared `ListGet`/`ListSet` boundary, added `list.get` / `list.set` as
+    the functional-style public surface, and locked nested-update support for
+    `List (List a)` on the same boundary.
+  - Locked outcomes through M6:
+    - no stdlib-name magic for `List` traversal/index/update paths;
+    - no syntax-shaped backend exceptions for `xs[i]` / `xs[i] := v`;
+    - no alternate hidden collection mode behind `List`;
+    - remaining implicit string traversal magic (`graphemes` / `split`) is
+      explicit temporary debt and must be addressed or carved out in M8.
+  - Verification snapshots:
+    - `M3`: `cargo test -p goby-wasm` -> `622 passed, 0 failed, 4 ignored`
+    - `M4`: `cargo test -p goby-wasm` -> `625 passed, 0 failed, 4 ignored`
+    - `M5`: `cargo test -p goby-wasm` -> `641 passed, 0 failed, 4 ignored`
+    - `M6`: `cargo test -p goby-wasm` -> `656 passed, 0 failed, 7 ignored`
 
 - [ ] **M7: Integrate effect-oriented iterator execution**
-  
+
   ### M7 Design Decisions
 
   **Goal:** preserve Goby's effect-oriented traversal story while keeping the
@@ -1172,6 +517,32 @@ The following product-direction decisions are already locked for this plan:
   ("known effect op with property X lowers via form Y"), not by one-off symbol
   branches for `Print.println` or other specific stdlib names.
 
+  **Surface lock rule:** M7 must choose one concrete user-facing traversal
+  surface before implementation starts. This plan must name:
+  - the exact stdlib/API entrypoint or syntax form;
+  - one representative example to carry through baseline, implementation, docs,
+    and verification;
+  - whether callback-style `each` remains the default recommendation or becomes
+    the compatibility surface after M7.
+
+  **Effect semantics rule:** the chosen iterator/effect path must preserve and
+  document:
+  - element visitation order;
+  - exactly-once callback/effect delivery semantics;
+  - handler nesting/resume behavior;
+  - whether traversal is single-pass and streaming or may buffer materialized
+    intermediate state.
+  M7 is not complete if performance work lands without these semantics being
+  written down.
+
+  **Measurement rule:** M7 must lock one performance story for the new surface.
+  The benchmark set must distinguish:
+  - pure per-element traversal,
+  - effect-callback traversal,
+  - the chosen iterator/effect surface on the same logical workload.
+  If the new surface cannot beat or match the existing callback story on the
+  locked practical workloads, the plan must explicitly say why it still exists.
+
   **Ownership rule:** M7 must explicitly assign ownership for:
   - stepping,
   - yielding,
@@ -1183,19 +554,29 @@ The following product-direction decisions are already locked for this plan:
 
   ### M7 Implementation Steps
 
-  - [ ] **M7-0: Capture traversal baseline after M5**
+  - [ ] **M7-0: Lock the target iterator/effect surface**
+    - scope:
+      - choose the exact user-facing traversal entrypoint or syntax to carry
+        through M7;
+      - add one representative example in `examples/` and reference it here;
+      - state whether this surface is intended as:
+        - the recommended default for effect-oriented traversal,
+        - an equal alternative to callback-style traversal,
+        - or an experimental-but-supported surface.
+    - done when: the named surface and example are recorded in this section.
+    - checks: docs/examples updated consistently.
+
+  - [ ] **M7-1: Capture traversal baseline against the locked surface**
     - scope: record baseline numbers and behavior for:
       - `each` with pure callback,
       - `each` with effect callback,
-      - one locked iterator/effect-shaped traversal surface example intended to
-        replace callback-style traversal ergonomically.
+      - the M7-0 locked iterator/effect example on the same logical workload.
     - done when: baseline numbers are written in PLAN_SEQUENCE.md M7 section.
     - checks: benchmark command + `cargo test -p goby-wasm`
     - lock:
-      - record the exact language-facing iterator/effect example used as the
-        M7 target surface in PLAN_SEQUENCE.md and examples/.
+      - the same fixture names and input sizes must be reused for M7-4/M7-5.
 
-  - [ ] **M7-1: Define iterator/effect lowering ownership**
+  - [ ] **M7-2: Define iterator/effect lowering ownership**
     - scope:
       - specify which layer owns stepping, yielding, consumption, and handler
         interaction;
@@ -1207,33 +588,40 @@ The following product-direction decisions are already locked for this plan:
         - the recommended default for effect-oriented traversal,
         - an equal alternative to callback-style traversal,
         - or a future direction not yet recommended as primary.
+      - explicitly state where element order, single-pass behavior, and
+        resume/handler semantics are enforced.
     - done when: the ownership split is written in PLAN_SEQUENCE.md and
       mirrored in code comments for the owning modules.
     - checks: `cargo test -p goby-wasm`
 
-  - [ ] **M7-2: Implement the base iterator/effect execution path**
+  - [ ] **M7-3: Implement the generic iterator/effect execution path**
     - scope:
-      - add the general lowering/runtime path for iterator/effect traversal;
+      - add the general lowering/runtime path for the M7-0 surface;
       - ensure it executes through explicit forms rather than symbol-name
         matching in stdlib/lowerer code;
-      - validate effect handling semantics with focused regression tests.
-    - done when: base iterator/effect regression tests pass.
+      - validate effect handling semantics with focused regression tests,
+        including element order, early handler exit if supported, and nested
+        effect/callback interaction.
+    - done when: base iterator/effect regression tests pass and the intended
+      semantics from M7-2 are covered by named tests.
     - checks: `cargo test -p goby-wasm`
 
-  - [ ] **M7-3: Evaluate and, if justified, add shared specialization**
+  - [ ] **M7-4: Evaluate and, if justified, add shared specialization**
     - scope:
-      - benchmark the general M7 path against the M7-0 baseline;
+      - benchmark the general M7 path against the M7-1 baseline;
       - if practical targets are already met, do not add specialization;
       - if specialization is needed, add one shared rule with explicit
-        eligibility criteria and regression tests.
+        eligibility criteria and regression tests;
+      - the rule must be phrased in terms of effect/handler properties or IR
+        shape, not specific stdlib symbol names.
     - done when: either
       - the generic path meets target with no specialization, or
       - the chosen shared specialization rule is documented, implemented,
         and benchmark-validated.
     - checks: `cargo test -p goby-wasm`
 
-  - [ ] **M7-4: Lock iterator/effect verification**
-    - scope: compare final numbers against M7-0 baseline.
+  - [ ] **M7-5: Lock iterator/effect verification**
+    - scope: compare final numbers against M7-1 baseline.
       - correctness gate: iterator/effect traversal regressions green.
       - design gate:
         - no reintroduction of stdlib-name magic;
@@ -1242,9 +630,14 @@ The following product-direction decisions are already locked for this plan:
           traversal family established by M5.
         - one documented user-facing iterator/effect traversal style is
           published as the intended path in examples/spec/plan docs.
+        - effect semantics are documented and match the regression suite.
       - performance gate: effect-oriented traversal must meet the practical
         scripting success criteria from §6.6, either via the generic path or
         one documented shared specialization rule.
+      - positioning gate:
+        - the plan explicitly states whether callback-style `each` remains the
+          default recommendation, becomes legacy-compatible surface, or stays
+          equal-first-class after M7.
     - done when: verification snapshot is recorded and the M7 checkbox is
       marked `[x]`.
     - checks: `cargo test -p goby-wasm` green, benchmark comparison recorded,
@@ -1268,18 +661,69 @@ The following product-direction decisions are already locked for this plan:
     stop and revise the plan instead of hiding costs behind magical lowering.
 
 - [ ] **M8: Publish the new `List` contract**
-  - Update README/examples/spec/plan documents with the final language-facing
-    story.
-  - Add representative examples showing:
-    - ordinary indexed access on `List`,
-    - list-pattern matching,
-    - iterator/effect-based traversal,
-    - workloads that previously exposed the linked-list runtime boundary.
-  - Lock the wording for what Goby means by "default collection" and by
-    "practical indexed/update behavior" for `List`.
-  - Either align remaining string traversal magic (`graphemes`/`split`) to the
-    same explicit-boundary policy, or explicitly record it as temporary debt
-    with a named follow-up milestone and rationale.
+  
+  ### M8 Goal
+
+  M8 closes the product/documentation loop. It is not just a doc sweep; it
+  locks the final public contract for `List` after M0-M7 implementation work.
+  M8 is incomplete if the implementation exists but users still need plan-only
+  context to understand what `List` is good at, what the preferred traversal
+  style is, and what debt remains.
+
+  ### M8 Implementation Steps
+
+  - [ ] **M8-0: Audit every user-facing `List` explanation**
+    - scope:
+      - audit `README.md`, `doc/LANGUAGE_SPEC.md`, `doc/PLAN.md`,
+        `doc/PLAN_SEQUENCE.md`, and representative `examples/*.gb`;
+      - remove stale linked-list-flavored wording and stale pre-M7 traversal
+        guidance;
+      - identify every place where `List` practicality or traversal style is
+        stated differently.
+    - done when: this plan lists the files that define the public contract.
+
+  - [ ] **M8-1: Publish the final `List` positioning**
+    - scope:
+      - lock the wording for what Goby means by:
+        - the default ordered collection,
+        - practical indexed read,
+        - practical immutable update,
+        - practical traversal,
+        - list-pattern matching as a surface feature.
+      - ensure README stays high-level while spec/plan carry the precise
+        contract and caveats.
+    - done when: the wording is aligned across README/spec/plan without
+      contradiction.
+
+  - [ ] **M8-2: Publish representative examples**
+    - scope: add or refresh examples showing:
+      - ordinary indexed access on `List`;
+      - functional update via the intended public surface;
+      - list-pattern matching on multi-chunk values;
+      - the M7-chosen iterator/effect traversal style;
+      - one workload shape that previously exposed the old linked-list runtime
+        boundary and now has an honest recommended form.
+    - done when: examples are referenced from docs and match the final wording.
+
+  - [ ] **M8-3: Resolve or carve out remaining explicit-boundary debt**
+    - scope:
+      - either align remaining string traversal magic (`graphemes` / `split`)
+        to the same explicit-boundary policy;
+      - or record it as temporary debt with:
+        - a named follow-up milestone,
+        - a short rationale,
+        - and explicit wording that the policy is complete for `List` but not
+          yet for `string`.
+    - done when: there is no ambiguity about whether the explicit-boundary
+      story is fully closed or intentionally partial.
+
+  - [ ] **M8-4: Lock the final publication snapshot**
+    - scope:
+      - verify examples, spec text, and roadmap wording agree with the shipped
+        implementation and measured claims;
+      - record the final verification snapshot and mark this plan complete.
+    - done when: final wording, examples, and remaining debt are all locked in
+      one documented snapshot.
 
 ## 10. Open Questions (and Resolved Decisions)
 
