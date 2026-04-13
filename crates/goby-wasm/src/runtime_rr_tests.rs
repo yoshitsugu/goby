@@ -529,11 +529,14 @@ fn rr_tight_stack_config() -> crate::memory_config::WasmMemoryConfig {
 
 fn parse_general_lowered_module(source: &str) -> goby_core::Module {
     let module = parse_module(source).expect("representative RR source should parse");
+    let execution_kind = runtime_io_execution_kind(&module)
+        .expect("representative RR source should classify for runtime execution");
+    let general_lower_reason = crate::gen_lower::supports_general_lower_module(&module)
+        .expect("general lowering support check should not error");
     assert_eq!(
-        runtime_io_execution_kind(&module)
-            .expect("representative RR source should classify for runtime execution"),
+        execution_kind,
         RuntimeIoExecutionKind::GeneralLowered,
-        "RR representative should stay on the Goby-owned Wasm runtime boundary"
+        "RR representative should stay on the Goby-owned Wasm runtime boundary; kind={execution_kind:?}, general_lower_reason={general_lower_reason:?}"
     );
     module
 }
@@ -1780,6 +1783,70 @@ main =
         "M7-1 iterator-effect baseline should resolve runtime output"
     );
     assert_eq!(iterator_effect_last_ok.as_deref(), Some("6"));
+}
+
+#[test]
+fn m7_3_iterator_effect_traversal_preserves_source_order_and_early_stop() {
+    let source = r#"
+import goby/iterator ( Iterator )
+import goby/stdio
+
+main : Unit -> Unit can Print
+main =
+  calls = with
+    yield _ _ ->
+      resume (False, 1)
+  in
+    step0 = yield 10 0
+    if step0.0
+      step1 = yield 20 step0.1
+      if step1.0
+        step2 = yield 30 step1.1
+        step2.1
+      else
+        step1.1
+    else
+      step0.1
+  println "${calls}"
+"#;
+    let module = parse_general_lowered_module(source);
+    let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+        .expect("M7-3 iterator/effect order+early-stop workload should execute");
+    assert_eq!(
+        output.as_deref(),
+        Some("1\n"),
+        "M7-3 iterator/effect traversal should keep source order and stop after first False resume"
+    );
+}
+
+#[test]
+fn m7_3_iterator_effect_handler_clause_can_host_nested_callback_effects() {
+    let source = r#"
+import goby/iterator ( Iterator )
+import goby/list ( each )
+import goby/stdio
+
+main : Unit -> Unit can Print
+main =
+  total = with
+    yield value state ->
+      each ["${value}"] print
+      resume (True, state * 10 + value)
+  in
+    step0 = yield 1 0
+    step1 = yield 2 step0.1
+    step2 = yield 3 step1.1
+    step2.1
+  println "${total}"
+"#;
+    let module = parse_general_lowered_module(source);
+    let output = execute_runtime_module_with_stdin(&module, Some(String::new()))
+        .expect("M7-3 iterator/effect nested callback workload should execute");
+    assert_eq!(
+        output.as_deref(),
+        Some("123123\n"),
+        "M7-3 handler clause should preserve nested callback/effect interaction semantics"
+    );
 }
 
 #[test]

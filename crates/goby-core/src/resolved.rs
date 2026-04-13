@@ -613,6 +613,7 @@ impl ResolverMetadata {
             let Ok(resolved) = resolver.resolve_module(&import.module_path) else {
                 continue;
             };
+            let module_key = module_basename(&import.module_path).to_string();
             if import.module_path == PRELUDE_MODULE_PATH {
                 for export in &resolved.embedded_effect_exports {
                     let ops = export
@@ -653,11 +654,34 @@ impl ResolverMetadata {
 
             for effect in resolved.visible_effects {
                 if import_selects_name(&import.kind, &effect.decl.name) {
+                    let ops = effect
+                        .decl
+                        .members
+                        .iter()
+                        .map(|member| member.name.clone())
+                        .collect::<HashSet<_>>();
                     metadata
                         .qualified_effect_ops
                         .entry(effect.decl.name.clone())
                         .or_default()
-                        .extend(effect.decl.members.iter().map(|member| member.name.clone()));
+                        .extend(ops.iter().cloned());
+                    // Qualified receiver resolution canonicalizes imports to the module
+                    // basename (e.g. `import goby/iterator as iterator` => `iterator.yield`).
+                    // Mirror the same op set under the module key so alias/basename-qualified
+                    // effect calls resolve as effect operations, not generic globals.
+                    metadata
+                        .qualified_effect_ops
+                        .entry(module_key.clone())
+                        .or_default()
+                        .extend(ops.iter().cloned());
+                    if matches!(import.kind, ImportKind::Plain | ImportKind::Selective(_)) {
+                        for op in ops {
+                            metadata
+                                .bare_effect_ops
+                                .entry(op)
+                                .or_insert_with(|| effect.decl.name.clone());
+                        }
+                    }
                 }
             }
         }
@@ -921,6 +945,74 @@ mod tests {
                 ResolvedExpr::Ref(ResolvedRef::EffectOp {
                     effect: "Print".to_string(),
                     op: "print".to_string(),
+                }),
+                None,
+            )]
+        );
+    }
+
+    #[test]
+    fn resolves_alias_qualified_effect_op_via_module_basename_receiver() {
+        let sandbox = TempDirGuard::new("qualified_effect_owner_alias_receiver");
+        let stdlib_root = sandbox.path.join("stdlib");
+        fs::create_dir_all(stdlib_root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            stdlib_root.join("goby/iterator.gb"),
+            "effect Iterator\n  yield : Int -> Int -> (Bool, Int)\n",
+        )
+        .expect("iterator file should be writable");
+
+        let module = module_with_imports(
+            vec![ImportDecl {
+                module_path: "goby/iterator".to_string(),
+                kind: ImportKind::Alias("iterator".to_string()),
+                module_path_span: None,
+                kind_span: None,
+            }],
+            vec![Stmt::Expr(Expr::qualified("iterator", "yield"), None)],
+        );
+
+        let resolved = resolve_module_with_stdlib(&module, &stdlib_root);
+        assert_eq!(
+            resolved.declarations[0].body,
+            vec![ResolvedStmt::Expr(
+                ResolvedExpr::Ref(ResolvedRef::EffectOp {
+                    effect: "iterator".to_string(),
+                    op: "yield".to_string(),
+                }),
+                None,
+            )]
+        );
+    }
+
+    #[test]
+    fn resolves_bare_effect_op_via_selective_imported_effect_owner() {
+        let sandbox = TempDirGuard::new("bare_effect_owner_selective_import");
+        let stdlib_root = sandbox.path.join("stdlib");
+        fs::create_dir_all(stdlib_root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            stdlib_root.join("goby/iterator.gb"),
+            "effect Iterator\n  yield : Int -> Int -> (Bool, Int)\n",
+        )
+        .expect("iterator file should be writable");
+
+        let module = module_with_imports(
+            vec![ImportDecl {
+                module_path: "goby/iterator".to_string(),
+                kind: ImportKind::Selective(vec!["Iterator".to_string()]),
+                module_path_span: None,
+                kind_span: None,
+            }],
+            vec![Stmt::Expr(Expr::var("yield"), None)],
+        );
+
+        let resolved = resolve_module_with_stdlib(&module, &stdlib_root);
+        assert_eq!(
+            resolved.declarations[0].body,
+            vec![ResolvedStmt::Expr(
+                ResolvedExpr::Ref(ResolvedRef::EffectOp {
+                    effect: "Iterator".to_string(),
+                    op: "yield".to_string(),
                 }),
                 None,
             )]

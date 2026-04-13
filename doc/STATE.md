@@ -4,9 +4,9 @@ Last updated: 2026-04-13
 
 ## Current Focus
 
-Next slice: **Sequence-backed List M7-3 generic execution path**
-(`doc/PLAN_SEQUENCE.md`) — implement the generic iterator/effect execution path
-for the locked M7 surface on explicit boundaries.
+Next slice: **Sequence-backed List M7-4 specialization decision**
+(`doc/PLAN_SEQUENCE.md`) — benchmark the generic M7 path against the M7-1
+baseline and decide whether shared specialization is required.
 
 M7 kickoff context:
 - Sequence-backed List M0–M6 are complete as of 2026-04-13.
@@ -39,13 +39,34 @@ TCO contract reminder (stable, no action needed):
   declarations vs. higher-order/non-tail) is stable and must not be silently
   widened.
 
+M7-3 completion checkpoint (2026-04-13):
+- generic iterator/effect path is now wired through explicit forms for the
+  M7 target shape on current ownership boundaries.
+- resolver coverage expanded for iterator effect-op resolution:
+  - module-basename/alias qualified lookup (`iterator.yield`);
+  - bare op lookup via selective effect-owner import
+    (`import goby/iterator ( Iterator )` + `yield`).
+- handler-lowering op match now accepts both exact and qualified clause names
+  (`yield` and `iterator.yield`).
+- new focused regressions:
+  - `runtime_rr_tests::m7_3_iterator_effect_traversal_preserves_source_order_and_early_stop`
+  - `runtime_rr_tests::m7_3_iterator_effect_handler_clause_can_host_nested_callback_effects`
+  - `resolved::tests::resolves_alias_qualified_effect_op_via_module_basename_receiver`
+  - `resolved::tests::resolves_bare_effect_op_via_selective_imported_effect_owner`
+- verification snapshot:
+  - `cargo fmt`: green
+  - `cargo check`: green
+  - `cargo test`: green
+
 Immediate next steps:
 
-- **Sequence M7-3**: implement generic iterator/effect execution path.
-  - Route the locked iterator/effect traversal shape through explicit forms.
-  - Add/refresh regression tests for order, handler nesting, and resume
-    interaction on the generic path.
-  - Keep `cargo test -p goby-wasm` green and avoid stdlib-name magic.
+- **Sequence M7-4**: evaluate and, if needed, add one shared specialization
+  rule.
+  - Re-run baseline fixtures from M7-1 against the current generic M7 path.
+  - If generic path already meets the practical target, lock "no
+    specialization".
+  - If not, introduce exactly one rule-based specialization (no stdlib symbol
+    one-offs), with benchmark and regression evidence.
 
 Checkpoint update (2026-04-10, later slice):
 - `goby-wasm` Candidate B migration advanced substantially in

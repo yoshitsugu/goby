@@ -466,7 +466,14 @@ fn find_matching_handler_clause<'a>(
         scope
             .clauses
             .iter()
-            .find(|clause| clause.op_name == op_name)
+            .find(|clause| {
+                clause.op_name == op_name
+                    || clause
+                        .op_name
+                        .rsplit('.')
+                        .next()
+                        .is_some_and(|short_name| short_name == op_name)
+            })
             .map(|clause| (scope, clause))
     })
 }

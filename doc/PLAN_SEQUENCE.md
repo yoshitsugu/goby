@@ -658,7 +658,7 @@ The following product-direction decisions are already locked for this plan:
       enforced in runtime continuation token state (pending/resumed/suspended +
       one-shot consume guard).
 
-  - [ ] **M7-3: Implement the generic iterator/effect execution path**
+  - [x] **M7-3: Implement the generic iterator/effect execution path**
     - scope:
       - add the general lowering/runtime path for the M7-0 surface;
       - ensure it executes through explicit forms rather than symbol-name
@@ -669,6 +669,26 @@ The following product-direction decisions are already locked for this plan:
     - done when: base iterator/effect regression tests pass and the intended
       semantics from M7-2 are covered by named tests.
     - checks: `cargo test -p goby-wasm`
+
+  **M7-3 implementation snapshot (2026-04-13):**
+  - general path lock-in:
+    - iterator effect-op resolution now covers imported owner forms used by M7
+      surface code:
+      - qualified receiver form keyed by module basename/alias (for example
+        `iterator.yield`);
+      - bare op form after selective effect-owner import
+        (for example `import goby/iterator ( Iterator )`, then `yield ...`).
+    - handler-lowering clause match now accepts both exact op names and
+      qualified clause names (`iterator.yield`) via short-name match.
+  - M7-3 focused regressions (`crates/goby-wasm/src/runtime_rr_tests.rs`):
+    - `m7_3_iterator_effect_traversal_preserves_source_order_and_early_stop`
+    - `m7_3_iterator_effect_handler_clause_can_host_nested_callback_effects`
+  - resolver regressions (`crates/goby-core/src/resolved.rs`):
+    - `resolves_alias_qualified_effect_op_via_module_basename_receiver`
+    - `resolves_bare_effect_op_via_selective_imported_effect_owner`
+  - verification snapshot:
+    - `cargo test -p goby-wasm m7_3_ -- --nocapture`: green
+    - `cargo test`: green
 
   - [ ] **M7-4: Evaluate and, if justified, add shared specialization**
     - scope:
