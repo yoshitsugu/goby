@@ -123,9 +123,10 @@ pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
 /// - This function is intended to be called only from the CLI `run` command.
 ///   It is `pub` only because the CLI lives in a separate crate.
 ///
-/// **Current status**: `InterpreterBridge` is currently reserved for the narrow
-/// grapheme-backed stdlib subset in runtime-`Read` programs. This is
-/// intentionally not a generic fallback for arbitrary unsupported runtime shapes.
+/// **Current status**: `InterpreterBridge` is currently reserved for the
+/// remaining narrow runtime-stdin bridge subset (not for general string
+/// traversal). This is intentionally not a generic fallback for arbitrary
+/// unsupported runtime shapes.
 ///
 /// # Errors
 ///

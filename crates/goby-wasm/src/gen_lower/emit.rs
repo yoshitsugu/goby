@@ -1138,6 +1138,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
                 instr,
                 WasmBackendInstr::Intrinsic { intrinsic }
                     if intrinsic.execution_boundary() == IntrinsicExecutionBoundary::HostImport
+                        || *intrinsic == BackendIntrinsic::StringSplit
             )
         })
     });
@@ -2968,19 +2969,7 @@ fn emit_helper_call(
             if let Some(hs) = heap_state {
                 emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
             }
-            let host_import = host_import_for_intrinsic(intrinsic).ok_or_else(|| CodegenError {
-                message: format!(
-                    "gen_lower/emit: missing host import mapping for intrinsic '{intrinsic:?}'"
-                ),
-            })?;
-            let host_offset = HOST_INTRINSIC_IMPORTS
-                .iter()
-                .position(|candidate| candidate == &host_import)
-                .ok_or_else(|| CodegenError {
-                    message: format!(
-                        "gen_lower/emit: missing host import index for '{host_import:?}'"
-                    ),
-                })? as u32;
+            let host_offset = host_import_offset_for_intrinsic(intrinsic)?;
             function.instruction(&Instruction::Call(HOST_IMPORT_BASE_IDX + host_offset));
             if let Some(hs) = heap_state {
                 emit_return_if_runtime_error(function, hs);
@@ -3042,6 +3031,21 @@ fn emit_helper_call(
     }?;
     let _ = (ctx, i32_base);
     Ok(())
+}
+
+fn host_import_offset_for_intrinsic(intrinsic: BackendIntrinsic) -> Result<u32, CodegenError> {
+    let host_import = host_import_for_intrinsic(intrinsic).ok_or_else(|| CodegenError {
+        message: format!(
+            "gen_lower/emit: missing host import mapping for intrinsic '{intrinsic:?}'"
+        ),
+    })?;
+    HOST_INTRINSIC_IMPORTS
+        .iter()
+        .position(|candidate| candidate == &host_import)
+        .map(|idx| idx as u32)
+        .ok_or_else(|| CodegenError {
+            message: format!("gen_lower/emit: missing host import index for '{host_import:?}'"),
+        })
 }
 
 fn emit_decode_string_ptr(
@@ -3897,6 +3901,8 @@ fn emit_string_split_helper(
     function: &mut Function,
     helper_state: &HeapEmitState,
 ) -> Result<(), CodegenError> {
+    let graphemes_host_offset =
+        host_import_offset_for_intrinsic(BackendIntrinsic::StringGraphemesList)?;
     let text_i64 = helper_state.scratch.i64_base;
     let sep_i64 = helper_state.scratch.i64_base + 1;
     let s_text_ptr = helper_state.scratch.i32_base + HS_TEXT_PTR;
@@ -3929,10 +3935,18 @@ fn emit_string_split_helper(
         s_sep_len,
     );
 
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
     function.instruction(&Instruction::LocalGet(s_sep_len));
     function.instruction(&Instruction::I32Eqz);
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-    emit_abort(function);
+    emit_sync_cursor_to_global(function, helper_state.alloc_cursor_local);
+    function.instruction(&Instruction::LocalGet(text_i64));
+    function.instruction(&Instruction::Call(
+        HOST_IMPORT_BASE_IDX + graphemes_host_offset,
+    ));
+    function.instruction(&Instruction::LocalSet(sep_i64));
+    emit_return_if_runtime_error(function, helper_state);
+    function.instruction(&Instruction::Br(1));
     function.instruction(&Instruction::End);
 
     // Allocate a header large enough for the worst-case segment count:
@@ -4142,6 +4156,9 @@ fn emit_string_split_helper(
         memory_index: 0,
     }));
     emit_push_tagged_ptr(function, s_list_ptr, TAG_LIST);
+    function.instruction(&Instruction::LocalSet(sep_i64));
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::LocalGet(sep_i64));
     Ok(())
 }
 

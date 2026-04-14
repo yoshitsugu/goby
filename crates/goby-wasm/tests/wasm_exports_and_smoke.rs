@@ -1185,6 +1185,23 @@ main =
 }
 
 #[test]
+fn c4_s4_split_empty_delimiter_module_validates() {
+    let source = r#"
+import goby/string ( split )
+import goby/list ( each )
+
+main : Unit -> Unit can Print, Read
+main =
+  text = read()
+  parts = split text ""
+  each parts println
+"#;
+    let module = parse_module(source).expect("parse should succeed");
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
 fn c4_s4_split_empty_delimiter_emoji_executes_correctly() {
     // split with empty delimiter on input containing a multi-codepoint emoji ZWJ sequence
     // must yield grapheme clusters, not individual bytes/codepoints

@@ -617,13 +617,6 @@ impl std::fmt::Display for GeneralLowerUnsupportedReason {
     }
 }
 
-/// Names from stdlib that have dedicated special lowering in `lower_comp_inner` or
-/// `backend_intrinsic_for` and must NOT be routed as generic `DeclCall` targets.
-/// - `graphemes`: handled by special `lower_comp_inner` branch.
-/// - `split`: handled by `StringSplit` intrinsic (non-empty sep) or redirected to
-///   `StringGraphemesList` (empty string literal sep) before reaching the intrinsic path.
-const SPECIALLY_LOWERED_STDLIB_NAMES: &[&str] = &["graphemes", "split"];
-
 fn type_expr_returns_wasm_heap(expr: &TypeExpr) -> bool {
     match expr {
         TypeExpr::Name(name) => !matches!(name.as_str(), "Int" | "Bool" | "String" | "Unit"),
@@ -1273,11 +1266,7 @@ fn first_non_main_lowering_issue(
         .filter(|d| d.name != "main")
         .map(|d| d.name.clone())
         .collect();
-    for name in stdlib_export_map.keys() {
-        if !SPECIALLY_LOWERED_STDLIB_NAMES.contains(&name.as_str()) {
-            known_decls.insert(name.clone());
-        }
-    }
+    known_decls.extend(stdlib_export_map.keys().cloned());
 
     let mut lambda_decls: Vec<LambdaAuxDecl> = Vec::new();
     for goby_decl in module.declarations.iter().filter(|d| d.name != "main") {
@@ -1524,14 +1513,9 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
         .map(|d| d.name.clone())
         .collect();
     // Add stdlib-exported names to known_decls so user-written helpers that call stdlib
-    // functions via bare names are lowered correctly.
-    // Exclude names that have dedicated special lowering in lower_comp_inner or backend_intrinsic_for
-    // (graphemes, split) — those must NOT be routed through the generic DeclCall path.
-    for name in stdlib_export_map.keys() {
-        if !SPECIALLY_LOWERED_STDLIB_NAMES.contains(&name.as_str()) {
-            known_decls.insert(name.clone());
-        }
-    }
+    // functions via bare names are lowered correctly. Intrinsic-owned stdlib calls are
+    // resolved earlier in lowering, so they no longer need to be excluded here.
+    known_decls.extend(stdlib_export_map.keys().cloned());
     // Lambda auxiliary declarations collected during main and aux-decl lowering.
     // They are appended AFTER user aux_decls so existing table slot indices remain stable.
     let mut lambda_decls: Vec<LambdaAuxDecl> = Vec::new();

@@ -1297,26 +1297,6 @@ fn lower_comp_inner(
                 }
                 instrs.push(WasmBackendInstr::EffectOp { op });
                 Ok(instrs)
-            } else if let goby_core::ir::ValueExpr::GlobalRef { module, name } = callee.as_ref()
-                && module == "string"
-                && name == "split"
-                && args.len() == 2
-                && matches!(&args[1], goby_core::ir::ValueExpr::StrLit(s) if s.is_empty())
-            {
-                // split text "" — empty delimiter means split by grapheme clusters.
-                // Redirect to StringGraphemesList host intrinsic (same as `graphemes text`).
-                let mut instrs = lower_comp_inner(
-                    &CompExpr::Value(args[0].clone()),
-                    false,
-                    aliases,
-                    bindings,
-                    known_decls,
-                    lambda_decls,
-                )?;
-                instrs.push(WasmBackendInstr::Intrinsic {
-                    intrinsic: BackendIntrinsic::StringGraphemesList,
-                });
-                Ok(instrs)
             } else if let Some(intrinsic) =
                 resolve_intrinsic_call_target(callee, aliases, args.len())
             {
@@ -1382,25 +1362,6 @@ fn lower_comp_inner(
                     });
                     Ok(instrs)
                 }
-            } else if let goby_core::ir::ValueExpr::GlobalRef { module, name } = callee.as_ref()
-                && module == "string"
-                && name == "graphemes"
-                && args.len() == 1
-            {
-                // stdlib string.graphemes: lower as StringGraphemesList host intrinsic.
-                // Returns a tagged List String containing all Unicode Extended Grapheme Clusters.
-                let mut instrs = lower_comp_inner(
-                    &CompExpr::Value(args[0].clone()),
-                    false,
-                    aliases,
-                    bindings,
-                    known_decls,
-                    lambda_decls,
-                )?;
-                instrs.push(WasmBackendInstr::Intrinsic {
-                    intrinsic: BackendIntrinsic::StringGraphemesList,
-                });
-                Ok(instrs)
             } else if let goby_core::ir::ValueExpr::GlobalRef { name, .. } = callee.as_ref() {
                 // Top-level user declaration call via GlobalRef.
                 let mut instrs = Vec::new();
@@ -1460,43 +1421,6 @@ fn lower_comp_inner(
                         });
                         Ok(instrs)
                     }
-                } else if (name == "graphemes"
-                    || resolve_global_ref(name, aliases) == Some(("string", "graphemes")))
-                    && args.len() == 1
-                {
-                    // Var resolves to string.graphemes (bare name or alias via `import goby/string (graphemes)`).
-                    // Lower as StringGraphemesList host intrinsic.
-                    let mut instrs = lower_comp_inner(
-                        &CompExpr::Value(args[0].clone()),
-                        false,
-                        aliases,
-                        bindings,
-                        known_decls,
-                        lambda_decls,
-                    )?;
-                    instrs.push(WasmBackendInstr::Intrinsic {
-                        intrinsic: BackendIntrinsic::StringGraphemesList,
-                    });
-                    Ok(instrs)
-                } else if (name == "split"
-                    || resolve_global_ref(name, aliases) == Some(("string", "split")))
-                    && args.len() == 2
-                    && matches!(&args[1], goby_core::ir::ValueExpr::StrLit(s) if s.is_empty())
-                {
-                    // Var resolves to string.split with empty string literal delimiter:
-                    // redirect to StringGraphemesList (same as `graphemes text`).
-                    let mut instrs = lower_comp_inner(
-                        &CompExpr::Value(args[0].clone()),
-                        false,
-                        aliases,
-                        bindings,
-                        known_decls,
-                        lambda_decls,
-                    )?;
-                    instrs.push(WasmBackendInstr::Intrinsic {
-                        intrinsic: BackendIntrinsic::StringGraphemesList,
-                    });
-                    Ok(instrs)
                 } else {
                     // Runtime function-value call via `call_indirect`.
                     // `name` is a local variable holding a TAG_FUNC tagged i64 handle.
@@ -2203,11 +2127,6 @@ fn lower_value_as_arg(
     lambda_decls: &mut Vec<LambdaAuxDecl>,
 ) -> Result<Vec<WasmBackendInstr>, LowerError> {
     match v {
-        ValueExpr::Var(name) if known_decls.contains(name.as_str()) => {
-            Ok(vec![WasmBackendInstr::PushFuncHandle {
-                decl_name: name.clone(),
-            }])
-        }
         // `graphemes` passed as a function value (e.g. `map lines graphemes`).
         // Generate a wrapper AuxDecl that takes one param and calls StringGraphemesList.
         ValueExpr::Var(name)
@@ -2250,6 +2169,11 @@ fn lower_value_as_arg(
                 ],
             });
             Ok(vec![WasmBackendInstr::PushFuncHandle { decl_name }])
+        }
+        ValueExpr::Var(name) if known_decls.contains(name.as_str()) => {
+            Ok(vec![WasmBackendInstr::PushFuncHandle {
+                decl_name: name.clone(),
+            }])
         }
         ValueExpr::Var(name) => {
             if let Some(BackendEffectOp::Print(op)) =
@@ -2627,6 +2551,7 @@ fn backend_intrinsic_for(module: &str, name: &str) -> Option<BackendIntrinsic> {
         ("list", "get") => Some(BackendIntrinsic::ListGet),
         // M6: explicit immutable point-update boundary for functional-style `set xs i v`.
         ("list", "set") => Some(BackendIntrinsic::ListSet),
+        ("string", "graphemes") => Some(BackendIntrinsic::StringGraphemesList),
         ("string", "length") => Some(BackendIntrinsic::StringLength),
         ("string", "split") => Some(BackendIntrinsic::StringSplit),
         _ => None,
@@ -4092,13 +4017,26 @@ build n =
     /// `Var("graphemes")` resolving to `string.graphemes` via alias also lowers as intrinsic.
     #[test]
     fn lower_string_graphemes_alias_var_lowers_as_intrinsic() {
-        // Simulates: `import goby/string (graphemes)` → `graphemes` becomes a Var with GlobalRef alias.
         let comp = CompExpr::Call {
             callee: Box::new(ValueExpr::Var("graphemes".to_string())),
             args: vec![ValueExpr::Var("text".to_string())],
         };
-        let instrs =
-            lower_comp(&comp).expect("graphemes Var (bare name) should lower to intrinsic");
+        let aliases = HashMap::from([(
+            "graphemes".to_string(),
+            AliasValue::GlobalRef {
+                module: "string".to_string(),
+                name: "graphemes".to_string(),
+            },
+        )]);
+        let instrs = lower_comp_inner(
+            &comp,
+            true,
+            &aliases,
+            &ClosureBindingEnv::default(),
+            &HashSet::new(),
+            &mut Vec::new(),
+        )
+        .expect("graphemes alias Var should lower to intrinsic");
         assert!(
             matches!(
                 instrs.as_slice(),
@@ -4111,6 +4049,75 @@ build n =
             ),
             "expected [LoadLocal, Intrinsic(StringGraphemesList)], got: {:?}",
             instrs
+        );
+    }
+
+    #[test]
+    fn lower_string_split_empty_delimiter_lowers_as_string_split_intrinsic() {
+        let comp = CompExpr::Call {
+            callee: Box::new(ValueExpr::GlobalRef {
+                module: "string".to_string(),
+                name: "split".to_string(),
+            }),
+            args: vec![
+                ValueExpr::Var("text".to_string()),
+                ValueExpr::StrLit(String::new()),
+            ],
+        };
+        let instrs = lower_comp(&comp).expect("string.split with empty delimiter should lower");
+        assert!(
+            matches!(
+                instrs.as_slice(),
+                [
+                    I::LoadLocal { .. },
+                    I::PushStaticString { .. },
+                    I::Intrinsic {
+                        intrinsic: BackendIntrinsic::StringSplit
+                    }
+                ]
+            ),
+            "expected StringSplit intrinsic lowering, got: {:?}",
+            instrs
+        );
+    }
+
+    #[test]
+    fn lower_value_arg_graphemes_prefers_intrinsic_wrapper_over_known_decl_handle() {
+        let aliases = HashMap::from([(
+            "graphemes".to_string(),
+            AliasValue::GlobalRef {
+                module: "string".to_string(),
+                name: "graphemes".to_string(),
+            },
+        )]);
+        let known_decls = HashSet::from(["graphemes".to_string()]);
+        let mut lambda_decls = Vec::new();
+        let instrs = lower_value_as_arg(
+            &ValueExpr::Var("graphemes".to_string()),
+            &aliases,
+            &ClosureBindingEnv::default(),
+            &known_decls,
+            &mut lambda_decls,
+        )
+        .expect("graphemes function value should lower");
+        assert!(
+            matches!(instrs.as_slice(), [I::PushFuncHandle { decl_name }] if decl_name.starts_with("__graphemes_wrapper_")),
+            "expected graphemes wrapper handle, got: {:?}",
+            instrs
+        );
+        assert_eq!(lambda_decls.len(), 1, "expected one wrapper lambda");
+        assert!(
+            matches!(
+                lambda_decls[0].instrs.as_slice(),
+                [
+                    I::LoadLocal { .. },
+                    I::Intrinsic {
+                        intrinsic: BackendIntrinsic::StringGraphemesList
+                    }
+                ]
+            ),
+            "expected wrapper lambda to call StringGraphemesList, got: {:?}",
+            lambda_decls[0].instrs
         );
     }
 

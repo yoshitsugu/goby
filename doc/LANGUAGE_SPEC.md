@@ -387,9 +387,13 @@ syntax/semantics.
   - 2-arg form (`__goby_string_each_grapheme value initial_state`) threads explicit state.
   - `(False, state)` stops iteration early; `(True, state)` continues.
 - Explicit-boundary policy note:
-  - The explicit-boundary policy is complete for `List`.
-  - `string.graphemes` / `string.split` boundary alignment is tracked as
-    temporary debt in `doc/PLAN_SEQUENCE.md` follow-up milestone `M9`.
+  - The explicit-boundary policy is complete for both `List` and the current
+    `goby/string` traversal surface.
+  - `string.graphemes` lowers through the explicit `StringGraphemesList`
+    intrinsic boundary.
+  - `string.split` lowers through the shared `StringSplit` boundary; empty
+    delimiter handling is resolved inside that boundary rather than through a
+    separate stdlib-name rewrite path.
 - Stdlib `goby/int` provides `parse : String -> Int can StringParseError`.
   - accepted form: optional leading `-` followed by one or more ASCII digits.
   - invalid input delegates to `StringParseError.invalid_integer : String -> Int`.

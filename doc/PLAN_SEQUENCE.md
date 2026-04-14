@@ -746,8 +746,8 @@ The following product-direction decisions are already locked for this plan:
     - `cargo test -p goby-wasm`: 658+62 passed, 0 failed ✓
     - `cargo test`: all suites green ✓
   - design gate:
-    - `SPECIALLY_LOWERED_STDLIB_NAMES = ["graphemes", "split"]` — `each`/`map`/`fold`
-      excluded (removed at M5); no stdlib-name magic for iterator/effect path ✓
+    - list traversal path no longer used stdlib-name magic (`each`/`map`/`fold`
+      removed at M5) ✓
     - no callback-symbol-specific one-off branches in gen_lower ✓
     - iterator/effect execution routes through the M5 explicit traversal boundary
       (fold family + handler-lowering rewrite boundary) ✓
@@ -883,15 +883,39 @@ The following product-direction decisions are already locked for this plan:
           - `goby-wasm`: `658 passed, 9 ignored`
           - `wasm exports/smoke`: `62 passed, 2 ignored`
 
-- [ ] **M9: Align string traversal explicit-boundary policy (follow-up debt)**
+- [x] **M9: Align string traversal explicit-boundary policy** (complete, 2026-04-14)
   - scope:
     - remove remaining string traversal name-list wiring (`graphemes` /
       `split`) where feasible;
     - or replace it with the same explicit lowerer/runtime boundary style used
       for `List`.
   - rationale:
-    - M8 intentionally closes publication for `List` while keeping string
+    - M8 intentionally closed publication for `List` while keeping string
       traversal debt explicit and non-hidden.
+  - outcome:
+    - `gen_lower/mod.rs` no longer excludes `graphemes` / `split` from generic
+      stdlib declaration collection.
+    - `string.graphemes` now resolves through ordinary
+      `backend_intrinsic_for("string", "graphemes")`.
+    - `split text ""` no longer rewrites to a dedicated
+      `StringGraphemesList` lowering branch; empty-delimiter handling now lives
+      inside the shared `StringSplit` helper boundary.
+    - `map lines graphemes` remains supported through an explicit wrapper-handle
+      lowering path for intrinsic-backed function values.
+  - verification snapshot (2026-04-14):
+    - focused:
+      - `cargo test -p goby-wasm lower_string_ -- --nocapture`: green
+      - `cargo test -p goby-wasm lower_value_arg_graphemes_prefers_intrinsic_wrapper_over_known_decl_handle -- --nocapture`: green
+      - `cargo test -p goby-wasm c4_s4_split_empty_delimiter -- --nocapture`: green
+    - full gate:
+      - `cargo fmt`: green
+      - `cargo check`: green
+      - `cargo test`: green
+        - `goby-cli`: `25 passed`
+        - `goby-cli integration`: `52 passed`
+        - `goby-core`: `696 passed, 2 ignored`
+        - `goby-wasm`: `660 passed, 9 ignored`
+        - `wasm exports/smoke`: `63 passed, 2 ignored`
 
 ## 10. Open Questions (and Resolved Decisions)
 

@@ -1002,9 +1002,15 @@ Current status:
 Publication note (M8, 2026-04-14):
 - Explicit-boundary policy is now published as complete for `List` traversal,
   indexing, and update surfaces.
-- `string.graphemes` / `string.split` still rely on temporary name-list wiring
-  (`SPECIALLY_LOWERED_STDLIB_NAMES`) and are tracked as explicit temporary debt
-  in `doc/PLAN_SEQUENCE.md` follow-up milestone `M9`.
+
+Follow-up closure (M9, 2026-04-14):
+- `string.graphemes` / `string.split` no longer rely on temporary stdlib
+  name-list wiring.
+- `string.graphemes` now resolves through the ordinary
+  `backend_intrinsic_for("string", "graphemes")` path.
+- `string.split` now keeps empty-delimiter behavior inside the shared
+  `StringSplit` boundary instead of rewriting `split text ""` to a separate
+  stdlib-name-specific lowering path.
 
 ### 7.4 Refactoring Plan
 
@@ -1019,14 +1025,16 @@ Publication note (M8, 2026-04-14):
 - Status: completed. `each`/`map` now route through stdlib wrappers and
   `BackendIntrinsic::{ListFold,ListMap}` paths.
 
-#### Step 2: Rename `SPECIALLY_LOWERED_STDLIB_NAMES` (deferred)
+#### Step 2: Remove remaining string traversal name-list wiring (complete, 2026-04-14)
 
-- Rename to `INTRINSIC_STDLIB_NAMES` (or similar) to reflect that it now only
-  lists names whose `.gb` bodies contain `__goby_` calls and must not be routed
-  through the generic DeclCall path for other reasons.
-- Update the doc comment to reference the `__goby_` convention.
-- Done when: the Rust constant and the `.gb` sources are in 1-to-1 correspondence
-  and the intent is clear without reading both files simultaneously.
+- Remove the remaining `graphemes` / `split` exclusions from generic stdlib
+  declaration collection in `gen_lower/mod.rs`.
+- Route `string.graphemes` through ordinary intrinsic resolution instead of
+  dedicated call-site branches.
+- Keep empty-delimiter `split` behavior inside `emit_string_split_helper`
+  rather than a separate lowering rewrite to `StringGraphemesList`.
+- Status: completed. The explicit-boundary story is now aligned for current
+  `List` and `string` traversal surfaces.
 
 #### Step 3 (future): Stdlib as an integration test suite
 

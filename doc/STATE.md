@@ -4,9 +4,21 @@ Last updated: 2026-04-14
 
 ## Current Focus
 
-Next slice: **Sequence-backed List M9: Align string traversal explicit-boundary
-policy** (`doc/PLAN_SEQUENCE.md`) — close the remaining explicit-boundary debt
-for `string.graphemes` / `string.split` after M8 publication.
+Next slice: **Post-M9 roadmap selection** — M8/M9 publication and explicit
+boundary closure are complete; the next work item should be chosen from the
+remaining roadmap based on product priority.
+
+M9 completion checkpoint (2026-04-14):
+- `doc/PLAN_SEQUENCE.md` now marks `M9` complete.
+- Remaining string traversal name-list wiring is removed:
+  - `string.graphemes` resolves through ordinary intrinsic lookup.
+  - `string.split` keeps empty-delimiter behavior inside the shared
+    `StringSplit` helper boundary.
+- Added regression/validation coverage for the M9 closure:
+  - lowering: direct `graphemes`, alias-resolved `graphemes`, empty-delimiter
+    `split`, graphemes-as-callback wrapper under `known_decls`
+  - end-to-end: empty-delimiter `split` validates and executes for ASCII and
+    multi-grapheme emoji input
 
 M8 completion checkpoint (2026-04-14):
 - M8 parent and sub-steps (`M8-0`..`M8-4`) marked complete in
@@ -79,14 +91,9 @@ TCO contract reminder (stable, no action needed):
 
 Immediate next steps:
 
-- **Sequence M9-0**: inventory current string traversal boundary wiring.
-  - confirm all `graphemes` / `split` routing points in lowering/runtime.
-- **Sequence M9-1**: design explicit boundary equivalent to current `List`
-  policy framing.
-  - decide whether to route via shared lowerer-owned forms or explicit
-    intrinsic wrappers without name-magic lists.
-- **Sequence M9-2**: lock docs for `List complete / string in-progress` to
-  `string complete` once implementation and verification pass.
+- Choose the next milestone after M9 closure.
+- Preserve the published `List`/`string` explicit-boundary contract unless a
+  new roadmap item intentionally broadens it.
 
 Checkpoint update (2026-04-10, later slice):
 - `goby-wasm` Candidate B migration advanced substantially in
