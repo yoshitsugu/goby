@@ -2067,3 +2067,83 @@ fn locks_runtime_output_for_iterator_unified_gb() {
     let output = resolve_module_runtime_output(&module).expect("runtime output should resolve");
     assert_eq!(output, "tick:atick:btick:c31");
 }
+
+/// G0 regression: the BUGS.md minimal repro (50×50 grid, 5000 iterations of in-place
+/// diagonal update via `each` + `AssignIndex`) must complete without E-MEMORY-EXHAUSTION
+/// and print `0`.
+///
+/// Before the ListSetInPlace optimisation this OOM'd under the default 64 MiB ceiling.
+///
+/// The test runs on a thread with an enlarged stack (8 MiB) because `build_grid 50`
+/// uses a cons-recursive helper that depth-walks 50 levels.
+#[test]
+fn each_assign_index_in_place_bugs_md_minimal_repro_completes() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    // Source is the exact BUGS.md minimal repro.
+    let source = r#"
+import goby/list (each)
+import goby/stdio
+
+build_row : Int -> List String can Print
+build_row n =
+  if n == 0
+    []
+  else
+    rest = build_row (n - 1)
+    ["@", ..rest]
+
+build_grid : Int -> List (List String) can Print
+build_grid n =
+  if n == 0
+    []
+  else
+    rest = build_grid (n - 1)
+    [build_row 50, ..rest]
+
+build_indices : Int -> List Int can Print
+build_indices n =
+  if n == 0
+    []
+  else
+    rest = build_indices (n - 1)
+    [n - 1, ..rest]
+
+clear_all : List (List String) -> List Int -> List (List String) can Print
+clear_all rolls indices =
+  mut new_rolls = rolls
+  each indices (fn i ->
+    new_rolls[i][i] := "."
+    ()
+  )
+  new_rolls
+
+loop : List (List String) -> List Int -> Int -> Int can Print
+loop rolls indices n =
+  if n == 0
+    0
+  else
+    next = clear_all rolls indices
+    loop next indices (n - 1)
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  rolls = build_grid 50
+  indices = build_indices 50
+  r = loop rolls indices 5000
+  println "${r}"
+"#;
+    // Run on a larger stack to accommodate cons-recursive build_grid/build_row (depth ≤ 50).
+    let result = std::thread::Builder::new()
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+            let module = parse_module(source).expect("minimal repro should parse");
+            let wasm = crate::compile_module(&module).expect("minimal repro should compile");
+            crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, Some("x\n"))
+                .expect("minimal repro should execute without E-MEMORY-EXHAUSTION")
+        })
+        .expect("thread spawn should succeed")
+        .join()
+        .expect("thread should not panic");
+    assert_eq!(result, "0\n", "expected output 0 after 5000 diagonal-zeroing iterations");
+}

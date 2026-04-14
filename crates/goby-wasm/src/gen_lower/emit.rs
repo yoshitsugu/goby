@@ -562,6 +562,7 @@ pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                         | BackendIntrinsic::StringSplitLines
                         | BackendIntrinsic::ListPushString
                         | BackendIntrinsic::ListSet
+                        | BackendIntrinsic::ListSetInPlace
                         | BackendIntrinsic::ListConcat
                         | BackendIntrinsic::ListFold
                         | BackendIntrinsic::ListMap
@@ -2985,6 +2986,14 @@ fn emit_helper_call(
             })?,
         ),
         BackendIntrinsic::ListSet => emit_list_set_helper(
+            function,
+            heap_state.ok_or_else(|| CodegenError {
+                message: format!(
+                    "gen_lower/emit: intrinsic '{intrinsic:?}' requires heap helper state"
+                ),
+            })?,
+        ),
+        BackendIntrinsic::ListSetInPlace => emit_list_set_in_place_helper(
             function,
             heap_state.ok_or_else(|| CodegenError {
                 message: format!(
@@ -5721,6 +5730,152 @@ fn emit_list_set_helper(
     }));
 
     emit_push_tagged_ptr(function, s_dst_header, TAG_LIST);
+    Ok(())
+}
+
+/// Emit Wasm instructions for `BackendIntrinsic::ListSetInPlace`.
+///
+/// **In-place element update** — does not allocate a new header or chunk.
+/// Directly overwrites the target word in the existing chunk.
+///
+/// Stack contract (on entry): `list_i64`, `index_i64`, `value_i64` (value on top).
+/// Stack contract (on exit): `list_i64` (same handle as input).
+///
+/// Validation prelude is identical to `emit_list_set_helper`:
+/// tag checks, negative-index rejection, bounds check.
+///
+/// Aliasing contract: the caller (`lower_supported_inline_list_fold_mutating_each`)
+/// has already verified that no other live reference to the list exists, so the
+/// mutation is safe without copying.
+///
+/// Scratch slots used (same names as in `emit_list_set_helper`):
+///   i64_base+0 = value_i64
+///   i64_base+1 = list_i64
+///   i64_base+2 = index_i64
+///   HS_TEXT_PTR  (0) = s_src_header
+///   HS_TEXT_LEN  (1) = s_total_len
+///   HS_SEP_PTR   (2) = s_index
+///   HS_SEP_LEN   (3) = s_item_idx
+///   HS_SCAN_POS  (4) = s_chunk_idx
+///   HS_SEG_START (5) = s_dst_chunk_ptr  (points into the *existing* chunk)
+fn emit_list_set_in_place_helper(
+    function: &mut Function,
+    helper_state: &HeapEmitState,
+) -> Result<(), CodegenError> {
+    let value_i64 = helper_state.scratch.i64_base;
+    let list_i64 = helper_state.scratch.i64_base + 1;
+    let index_i64 = helper_state.scratch.i64_base + 2;
+    let s_src_header = helper_state.scratch.i32_base + HS_TEXT_PTR;
+    let s_total_len = helper_state.scratch.i32_base + HS_TEXT_LEN;
+    let s_index = helper_state.scratch.i32_base + HS_SEP_PTR;
+    let s_item_idx = helper_state.scratch.i32_base + HS_SEP_LEN;
+    let s_chunk_idx = helper_state.scratch.i32_base + HS_SCAN_POS;
+    let s_chunk_ptr = helper_state.scratch.i32_base + HS_SEG_START;
+
+    // Stack: list, index, value (value on top)
+    function.instruction(&Instruction::LocalSet(value_i64));
+    function.instruction(&Instruction::LocalSet(index_i64));
+    function.instruction(&Instruction::LocalSet(list_i64));
+
+    // Validate list tag
+    function.instruction(&Instruction::LocalGet(list_i64));
+    function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+    function.instruction(&Instruction::I64Ne);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    // Validate index tag
+    function.instruction(&Instruction::LocalGet(index_i64));
+    function.instruction(&Instruction::I64Const((TAG_INT as i64) << 60));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I64Const((TAG_INT as i64) << 60));
+    function.instruction(&Instruction::I64Ne);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    // Decode index (sign-extend 60-bit payload)
+    function.instruction(&Instruction::LocalGet(index_i64));
+    function.instruction(&Instruction::I64Const(4));
+    function.instruction(&Instruction::I64Shl);
+    function.instruction(&Instruction::I64Const(4));
+    function.instruction(&Instruction::I64ShrS);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::LocalSet(s_index));
+
+    // Reject negative index
+    function.instruction(&Instruction::LocalGet(s_index));
+    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&Instruction::I32LtS);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    // Decode src header ptr
+    function.instruction(&Instruction::LocalGet(list_i64));
+    function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::LocalSet(s_src_header));
+
+    // total_len = src_header[0]
+    function.instruction(&Instruction::LocalGet(s_src_header));
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: header_total_len_offset() as u64,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_total_len));
+
+    // Bounds check: index >= total_len → abort
+    function.instruction(&Instruction::LocalGet(s_index));
+    function.instruction(&Instruction::LocalGet(s_total_len));
+    function.instruction(&Instruction::I32GeU);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    emit_abort(function);
+    function.instruction(&Instruction::End);
+
+    // chunk_idx = index / CHUNK_SIZE ; item_idx = index % CHUNK_SIZE
+    function.instruction(&Instruction::LocalGet(s_index));
+    function.instruction(&Instruction::I32Const(CHUNK_SIZE.trailing_zeros() as i32));
+    function.instruction(&Instruction::I32ShrU);
+    function.instruction(&Instruction::LocalSet(s_chunk_idx));
+    function.instruction(&Instruction::LocalGet(s_index));
+    function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32 - 1));
+    function.instruction(&Instruction::I32And);
+    function.instruction(&Instruction::LocalSet(s_item_idx));
+
+    // chunk_ptr = src_header.chunk_ptrs[chunk_idx]  (pointer into existing chunk)
+    function.instruction(&Instruction::LocalGet(s_src_header));
+    function.instruction(&Instruction::LocalGet(s_chunk_idx));
+    function.instruction(&Instruction::I32Const(4));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::I32Load(MemArg {
+        offset: header_chunk_ptr_offset(0) as u64,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_chunk_ptr));
+
+    // Store value directly into existing chunk[item_idx]  — no allocation.
+    function.instruction(&Instruction::LocalGet(s_chunk_ptr));
+    function.instruction(&Instruction::LocalGet(s_item_idx));
+    function.instruction(&Instruction::I32Const(8));
+    function.instruction(&Instruction::I32Mul);
+    function.instruction(&Instruction::I32Add);
+    function.instruction(&Instruction::LocalGet(value_i64));
+    function.instruction(&Instruction::I64Store(MemArg {
+        offset: chunk_item_offset(0) as u64,
+        align: 3,
+        memory_index: 0,
+    }));
+
+    // Return the original list handle unchanged.
+    function.instruction(&Instruction::LocalGet(list_i64));
     Ok(())
 }
 

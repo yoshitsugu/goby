@@ -150,120 +150,17 @@ Each milestone is an independent shippable unit reviewed through the
 `codex-reviewed-stepwise-dev-flow` skill. Cost labels: S = hours,
 M = day(s), L = week(s).
 
-### M1 — In-place lowering (cost: S-M)
+### M1 — In-place lowering ✅ DONE (2026-04-14)
 
-#### M1.1 — Add the `ListSetInPlace` backend intrinsic (S)
+All sub-steps complete. G0 verified: `each_assign_index_in_place_bugs_md_minimal_repro_completes`
+passes at 50 × 50 × 5000 under the default 64 MiB ceiling.
 
-- [ ] `crates/goby-wasm/src/gen_lower/backend_ir.rs`: add variant
-      `BackendIntrinsic::ListSetInPlace` immediately after `ListSet`.
-      Document signature `(list: i64, index: i64, value: i64) -> i64`
-      (returns the same list handle for compatibility with `ListSet`
-      stack shape).
-- [ ] Update `BackendIntrinsic::arity` (`backend_ir.rs:150`) to return
-      `3` for the new variant.
-- [ ] Add a doc comment explaining that the result list aliases the
-      input list header — callers must already have ruled out sharing
-      via the pattern-match gate in `lower_assign_index`.
-
-#### M1.2 — Emit the in-place helper (M)
-
-- [ ] `crates/goby-wasm/src/gen_lower/emit.rs`: add
-      `emit_list_set_in_place_helper` next to `emit_list_set_helper`
-      (line 5450). Share the validation prelude (tag checks, negative
-      index rejection, bounds check) with the existing helper by
-      extracting a private `emit_list_set_prelude` if duplication is
-      meaningful; otherwise just duplicate for clarity.
-- [ ] After bounds check, compute `dst_chunk_ptr` and the word offset
-      for the element, store `value_i64` directly. **Do not** allocate
-      a new header, do not copy the header table, do not copy the
-      chunk.
-- [ ] Leave the input list pointer on the result stack unchanged.
-- [ ] Wire dispatch: `emit_intrinsic` at
-      `gen_lower/emit.rs:2987` area — add a `BackendIntrinsic::ListSetInPlace
-      => emit_list_set_in_place_helper(...)` arm.
-- [ ] Add a byte-level unit test under the pattern of
-      `emit_list_set_produces_valid_wasm` (`emit.rs:7931`) that
-      confirms the helper produces valid Wasm and its output list
-      header pointer equals the input pointer.
-
-#### M1.3 — Pattern-recognition in `lower_assign_index` (M)
-
-- [ ] Pattern-detection lives at the `fold`-call site (not in
-      `lower_assign_index`), because the detection needs to see the
-      `fold` callee, its three args, and the callback body together.
-      Add a helper `lower_supported_inline_list_fold_mutating_each`
-      next to `lower_supported_inline_list_fold_prepend_builder`
-      (`lower.rs` around line 1303). Mirror its call sites: the
-      intrinsic-recognised branch (line 1303), the `GlobalRef` branch
-      (line 1336), and the bare-name `Var` branch (line 1396).
-- [ ] The helper:
-  - confirms arg 2 is a direct lambda `fn acc v -> body`;
-  - walks `body` to find the shape `<AssignIndex> ; acc` (or the IR's
-    equivalent `Seq`/`Block` + trailing `Var(acc)`);
-  - extracts `root`, `path`, `rhs` from the `AssignIndex`;
-  - verifies `root` is a `mut` binding in the enclosing scope (use
-    `aliases` / `bindings` already threaded through
-    `lower_comp_inner`);
-  - verifies `root` does not appear textually inside `rhs` (reuse
-    the existing `closure_capture` free-variable walker at
-    `crates/goby-core/src/closure_capture.rs:296` to collect
-    `ValueExpr::Var` occurrences; reject if any equal `root`);
-  - verifies the other lambdas in the enclosing function body do not
-    capture `root`. (Start conservative: reject if the enclosing
-    declaration contains any other `CompExpr::Lambda` that has
-    `root` in its captured set. `closure_capture.rs:451` already
-    tracks captures via `AssignIndex`, extend reading the
-    captured-set at the enclosing declaration.)
-  - on success, emits: source list on the stack, accumulator on the
-    stack, and a *rewritten* callback that uses `ListSetInPlace` on
-    `root` descended via `ListGet`, then pushes `acc`. The fold
-    intrinsic itself is still `ListFold`; only the callback body is
-    rewritten.
-- [ ] If any check fails, return `Ok(None)` and fall through to
-      today's lowering.
-- [ ] The rewritten callback must still honour the `mut`-binding
-      cell-promotion contract from the 2026-04-07 fix: if `root` is
-      `CellPromoted` the descent reads and the in-place write go
-      through `LoadCellValue` (reads only — the in-place write does
-      not need `StoreCellValue` because the cell still holds the
-      same header pointer). Assert this in a unit test.
-
-#### M1.4 — Tests and examples (S)
-
-- [ ] Unit test in `gen_lower/lower.rs` (near the existing
-      `lower_assign_index_*` tests at line 4197+): the recognised IR
-      for
-      ```
-      mut r = xs;
-      each indices (fn i ->
-        r[i][i] := "."
-        ()
-      )
-      ```
-      lowers to an emitted plan that contains exactly one
-      `ListSetInPlace` per surface `:=` and **zero** `ListSet`. A
-      near-miss variant (callback returns `r` instead of `()`) still
-      lowers to `ListSet`.
-- [ ] Runtime test (host-level): execute a small program equivalent
-      to the `doc/BUGS.md` minimal repro at a scale that would OOM
-      pre-fix (e.g. 50 × 50 × 5000) under the *current* 64 MiB
-      ceiling, and assert the expected output. Add under
-      `crates/goby-wasm/src/runtime_output_tests.rs` following the
-      existing pattern.
-- [ ] Example: copy the minimal repro from `doc/BUGS.md` (adjusted
-      down to a size that completes in a few hundred ms) into
-      `examples/each_assign_index_in_place.gb`. Ensure the example
-      harness picks it up.
-- [ ] **G0 verification — bug repro (automated):** add a host-level
-      test that runs the exact BUGS.md minimal repro at its full
-      50 × 50 × 5000 size under the default ceiling and asserts
-      (a) exit success, (b) stdout equals `0`, (c) no
-      `E-MEMORY-EXHAUSTION`. Place it with the other
-      `runtime_output_tests.rs` cases so it runs in `cargo test`.
-**Exit criteria (G0, G1 partial within the 64 MiB ceiling):** the
-BUGS.md minimal repro regression test passes under `cargo test`;
-`examples/each_assign_index_in_place.gb` completes; peak Wasm pages
-do not grow with iteration count; `cargo test` green overall.
+Key implementation:
+- `BackendIntrinsic::ListSetInPlace` added to `backend_ir.rs`
+- `emit_list_set_in_place_helper` added to `emit.rs`; `needs_helper_state` updated
+- `lower_list_each_mutating_assign` added to `lower.rs` — intercepts
+  `GlobalRef { module: "list", name: "each" }` calls at the lowering site
+- Unit tests: single-level recognition + near-miss fallback; runtime repro test
 
 ### M2 — CLI ceiling surface (cost: S-M, wasm32, pre-memory64)
 

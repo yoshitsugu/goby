@@ -97,6 +97,19 @@ pub(crate) enum BackendIntrinsic {
     ///   by descending prefixes with `ListGet` and rebuilding outward with
     ///   `ListSet` (see `lower_assign_index`).
     ListSet,
+    /// Set an element of a list by index **in place**, without allocating a new header or chunk.
+    ///
+    /// Signature: `(list: i64, index: i64, value: i64) -> i64` (returns the same list handle).
+    ///
+    /// **Aliasing contract:** the result list aliases the input list header. Callers must have
+    /// ruled out sharing via the pattern-match gate in
+    /// `lower_supported_inline_list_fold_mutating_each`; specifically:
+    /// - the root binding is not captured by any other lambda in the enclosing function body,
+    /// - the RHS does not read from root, and
+    /// - no other active reference to the list exists that could observe the mutation.
+    ///
+    /// Out-of-bounds or non-list/non-int abort (same prelude as `ListSet`).
+    ListSetInPlace,
     ListConcat,
     StringConcat,
     /// Join a `List String` with a separator string into one string.
@@ -158,6 +171,7 @@ impl BackendIntrinsic {
             BackendIntrinsic::StringEachGraphemeState => 2,
             BackendIntrinsic::ListPushString => 2,
             BackendIntrinsic::ListSet => 3,
+            BackendIntrinsic::ListSetInPlace => 3,
             BackendIntrinsic::ListConcat => 2,
             BackendIntrinsic::StringConcat => 2,
             BackendIntrinsic::ListJoinString => 2,
@@ -183,6 +197,7 @@ impl BackendIntrinsic {
             | BackendIntrinsic::StringLength
             | BackendIntrinsic::ListPushString
             | BackendIntrinsic::ListSet
+            | BackendIntrinsic::ListSetInPlace
             | BackendIntrinsic::ListConcat
             | BackendIntrinsic::ListLength
             | BackendIntrinsic::ListFold

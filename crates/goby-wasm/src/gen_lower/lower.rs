@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use goby_core::closure_capture::{
     BindingRepr, CallableEnv, CallableEnvSlotKind, ClosureBindingEnv,
     analyze_lambda_callable_env_for_params, binding_repr_for_let_mut,
+    has_mutable_write_capture_of,
 };
 use goby_core::ir::{CompExpr, IrBinOp, IrInterpPart, ValueExpr};
 
@@ -656,6 +657,634 @@ fn lower_supported_inline_list_fold_prepend_builder(
             prefix_element_instrs,
         },
     ]))
+}
+
+/// Recognise the `each` + nested `AssignIndex` shape and lower the callback to use
+/// `ListSetInPlace` instead of the copy-on-write `ListSet`.
+///
+/// ## Recognised IR shape
+///
+/// ```text
+/// fold_call with args:
+///   args[0] = <source list>
+///   args[1] = unit literal  (each discards the accumulator)
+///   args[2] = Lambda { param: outer_acc, body:
+///               Value(Lambda { param: outer_x, body:
+///                 Call { callee: Lambda { param: v, body:
+///                   Seq { stmts: [AssignIndex { root, path, value: rhs }], tail: Value(Unit) }
+///                 }, args: [Var(outer_x)] }
+///               })
+///             }
+/// ```
+///
+/// This is exactly the IR produced by `each xs (fn v -> root[..] := rhs)` after
+/// `each` expands to `__goby_list_fold xs () (fn _ x -> f x)`.
+///
+/// ## Safety conditions
+///
+/// 1. `root` must not be a known top-level decl.
+/// 2. `rhs` does not mention `root` (no aliased read during write).
+/// 3. No other `Lambda` in `rhs` captures `root` as a mutable write.
+///
+/// Returns `Ok(Some(instrs))` on success, `Ok(None)` to fall through.
+#[allow(clippy::too_many_arguments)]
+fn lower_supported_inline_list_fold_mutating_each(
+    args: &[ValueExpr],
+    aliases: &HashMap<String, AliasValue>,
+    bindings: &ClosureBindingEnv,
+    known_decls: &HashSet<String>,
+    lambda_decls: &mut Vec<LambdaAuxDecl>,
+) -> Result<Option<Vec<WasmBackendInstr>>, LowerError> {
+    // args must be [list, unit-acc, callback-lambda]
+    if args.len() != 3 {
+        return Ok(None);
+    }
+    // args[1] must be unit (each discards the accumulator)
+    if args[1] != ValueExpr::Unit {
+        return Ok(None);
+    }
+
+    // args[2] = outer Lambda (acc param)
+    let ValueExpr::Lambda {
+        param: outer_acc,
+        body: outer_body,
+    } = &args[2]
+    else {
+        return Ok(None);
+    };
+
+    // outer_body = Value(inner Lambda)
+    let CompExpr::Value(ValueExpr::Lambda {
+        param: outer_x,
+        body: inner_body,
+    }) = outer_body.as_ref()
+    else {
+        return Ok(None);
+    };
+
+    // inner_body = Call { callee: Lambda { param: v, body: user_body }, args: [Var(outer_x)] }
+    let CompExpr::Call {
+        callee,
+        args: call_args,
+    } = inner_body.as_ref()
+    else {
+        return Ok(None);
+    };
+    if call_args.len() != 1 || call_args[0] != ValueExpr::Var(outer_x.clone()) {
+        return Ok(None);
+    }
+    let ValueExpr::Lambda {
+        param: v,
+        body: user_body,
+    } = callee.as_ref()
+    else {
+        return Ok(None);
+    };
+
+    // Beta-reduce user body: rename v → outer_x.
+    // Expected shape: Seq { stmts: [AssignIndex { root, path, rhs }], tail: Value(Unit) }
+    let user_body_reduced = rename_comp_var(user_body, v, outer_x);
+    let CompExpr::Seq { stmts, tail } = &user_body_reduced else {
+        return Ok(None);
+    };
+    if stmts.len() != 1 {
+        return Ok(None);
+    }
+    if !matches!(tail.as_ref(), CompExpr::Value(ValueExpr::Unit)) {
+        return Ok(None);
+    }
+    let CompExpr::AssignIndex {
+        root,
+        path,
+        value: rhs,
+    } = &stmts[0]
+    else {
+        return Ok(None);
+    };
+    if path.is_empty() {
+        return Ok(None);
+    }
+
+    // Safety condition 1: root must not be a top-level decl.
+    if known_decls.contains(root.as_str()) {
+        return Ok(None);
+    }
+
+    // Safety condition 2: rhs must not mention root.
+    if comp_expr_mentions_var(rhs, root) {
+        return Ok(None);
+    }
+
+    // Safety condition 3: no nested lambda inside rhs captures root as mutable write.
+    if has_mutable_write_capture_of(root, rhs, bindings, known_decls) {
+        return Ok(None);
+    }
+
+    // All checks passed.
+    // Build a rewritten callback: fn outer_acc outer_x -> <in-place update>; outer_acc
+    // by constructing the body as a new CompExpr and lowering via lower_lambda.
+    //
+    // Rewritten body (as CompExpr):
+    //   Seq {
+    //     stmts: [
+    //       AssignIndexInPlace(root, path, rhs)   — represented via an inline Wasm block
+    //     ],
+    //     tail: Value(Var(outer_acc))
+    //   }
+    //
+    // Since CompExpr has no AssignIndexInPlace node, we lower the callback body
+    // directly as WasmBackendInstr, following the same contract as lower_lambda.
+
+    let root_is_cell = aliases.get(root.as_str()) == Some(&AliasValue::CellPromoted);
+    let depth = path.len();
+
+    // Compute callback captures via env analysis on the *original* user_body_reduced
+    // (AssignIndex shape — this is what the lambda actually accesses at runtime).
+    let cb_params = vec![outer_acc.clone(), outer_x.clone()];
+    let cb_env = analyze_lambda_callable_env_for_params(
+        &cb_params,
+        &user_body_reduced,
+        bindings,
+        known_decls,
+    );
+
+    // Determine param_names (with __clo prefix if capturing).
+    let capture_count = cb_env.slots.len();
+    let mut param_names = if capture_count > 0 {
+        vec!["__clo".to_string()]
+    } else {
+        vec![]
+    };
+    param_names.extend_from_slice(&cb_params);
+
+    // Build body aliases/bindings for the callback scope.
+    const CLO_LOCAL: &str = "__clo";
+    let mut body_aliases: HashMap<String, AliasValue> = HashMap::new();
+    let mut preamble: Vec<WasmBackendInstr> = Vec::new();
+
+    let mut cb_bindings = ClosureBindingEnv::with_decl_params(
+        param_names.iter().map(|s| s.as_str()),
+    );
+
+    for (slot_index, slot) in cb_env.slots.iter().enumerate() {
+        match slot.slot_kind {
+            CallableEnvSlotKind::ByValue => {
+                preamble.push(WasmBackendInstr::DeclareLocal {
+                    name: slot.name.clone(),
+                });
+                preamble.push(WasmBackendInstr::LoadClosureSlot {
+                    closure_local: CLO_LOCAL.to_string(),
+                    slot_index,
+                });
+                preamble.push(WasmBackendInstr::StoreLocal {
+                    name: slot.name.clone(),
+                });
+                cb_bindings.bind_outer_immutable(slot.name.clone());
+            }
+            CallableEnvSlotKind::SharedMutableCell { .. } => {
+                let cell_local = cell_local_name(&slot.name);
+                preamble.push(WasmBackendInstr::DeclareLocal {
+                    name: cell_local.clone(),
+                });
+                preamble.push(WasmBackendInstr::LoadClosureSlot {
+                    closure_local: CLO_LOCAL.to_string(),
+                    slot_index,
+                });
+                preamble.push(WasmBackendInstr::StoreLocal {
+                    name: cell_local,
+                });
+                body_aliases.insert(slot.name.clone(), AliasValue::CellPromoted);
+                cb_bindings.bind_outer_mutable(slot.name.clone());
+            }
+        }
+    }
+    // Params themselves are immutable from the callback's perspective.
+    for p in &cb_params {
+        cb_bindings.bind_outer_immutable(p.clone());
+    }
+
+    // Propagate root cell-promotion into callback aliases.
+    if root_is_cell {
+        body_aliases.insert(root.clone(), AliasValue::CellPromoted);
+    }
+
+    // Build the in-place update instructions.
+    let root_local: String = if root_is_cell {
+        format!("__lsip_{}_root", root)
+    } else {
+        root.clone()
+    };
+    let descent_tmp = |i: usize| format!("__lsip_{}_d{}", root, i);
+
+    let mut body_instrs: Vec<WasmBackendInstr> = preamble;
+
+    if root_is_cell {
+        body_instrs.push(WasmBackendInstr::DeclareLocal {
+            name: root_local.clone(),
+        });
+        body_instrs.extend(lower_value_ctx(
+            &ValueExpr::Var(root.clone()),
+            &body_aliases,
+            &cb_bindings,
+            known_decls,
+        )?);
+        body_instrs.push(WasmBackendInstr::StoreLocal {
+            name: root_local.clone(),
+        });
+    }
+
+    // Descent temporaries (depth-1 of them, for depth > 1).
+    for i in 0..depth.saturating_sub(1) {
+        body_instrs.push(WasmBackendInstr::DeclareLocal {
+            name: descent_tmp(i),
+        });
+    }
+    for (i, index_value) in path.iter().enumerate().take(depth.saturating_sub(1)) {
+        body_instrs.push(WasmBackendInstr::LoadLocal {
+            name: if i == 0 {
+                root_local.clone()
+            } else {
+                descent_tmp(i - 1)
+            },
+        });
+        body_instrs.extend(lower_value_ctx(
+            index_value,
+            &body_aliases,
+            &cb_bindings,
+            known_decls,
+        )?);
+        body_instrs.push(WasmBackendInstr::Intrinsic {
+            intrinsic: BackendIntrinsic::ListGet,
+        });
+        body_instrs.push(WasmBackendInstr::StoreLocal {
+            name: descent_tmp(i),
+        });
+    }
+
+    // In-place write: ListSetInPlace(deepest_list, path[depth-1], rhs); drop result.
+    body_instrs.push(WasmBackendInstr::LoadLocal {
+        name: if depth == 1 {
+            root_local.clone()
+        } else {
+            descent_tmp(depth - 2)
+        },
+    });
+    body_instrs.extend(lower_value_ctx(
+        &path[depth - 1],
+        &body_aliases,
+        &cb_bindings,
+        known_decls,
+    )?);
+    body_instrs.extend(lower_comp_inner(
+        rhs,
+        false,
+        &body_aliases,
+        &cb_bindings,
+        known_decls,
+        lambda_decls,
+    )?);
+    body_instrs.push(WasmBackendInstr::Intrinsic {
+        intrinsic: BackendIntrinsic::ListSetInPlace,
+    });
+    // ListSetInPlace returns the list handle; drop it (we don't need it).
+    body_instrs.push(WasmBackendInstr::Drop);
+
+    // Return the fold accumulator unchanged.
+    body_instrs.push(WasmBackendInstr::LoadLocal {
+        name: outer_acc.clone(),
+    });
+
+    // Register the callback as an aux lambda decl.
+    let n = LAMBDA_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+    let cb_name = format!("__lambda_{n}");
+    lambda_decls.push(LambdaAuxDecl {
+        decl_name: cb_name.clone(),
+        param_names,
+        env: cb_env.clone(),
+        instrs: body_instrs,
+    });
+
+    // Emit: list | unit_acc | callback_handle [| ListFold]
+    let list_instrs = lower_value_as_arg(&args[0], aliases, bindings, known_decls, lambda_decls)?;
+    let mut instrs = Vec::new();
+    instrs.extend(list_instrs);
+    instrs.push(WasmBackendInstr::I64Const(
+        crate::gen_lower::value::encode_unit(),
+    ));
+
+    if capture_count > 0 {
+        // Build CreateClosure: func_handle_instrs = [PushFuncHandle(cb_name)],
+        // slot_instrs = one entry per captured slot.
+        let func_handle_instrs = vec![WasmBackendInstr::PushFuncHandle {
+            decl_name: cb_name,
+        }];
+        let slot_instrs: Vec<Vec<WasmBackendInstr>> = cb_env
+            .slots
+            .iter()
+            .map(|slot| match slot.slot_kind {
+                CallableEnvSlotKind::ByValue => lower_value_ctx(
+                    &ValueExpr::Var(slot.name.clone()),
+                    aliases,
+                    bindings,
+                    known_decls,
+                ),
+                CallableEnvSlotKind::SharedMutableCell { .. } => Ok(vec![
+                    WasmBackendInstr::LoadLocal {
+                        name: cell_local_name(&slot.name),
+                    },
+                ]),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        instrs.push(WasmBackendInstr::CreateClosure {
+            func_handle_instrs,
+            slot_instrs,
+        });
+    } else {
+        instrs.push(WasmBackendInstr::PushFuncHandle { decl_name: cb_name });
+    }
+
+    instrs.push(WasmBackendInstr::Intrinsic {
+        intrinsic: BackendIntrinsic::ListFold,
+    });
+
+    Ok(Some(instrs))
+}
+
+/// Recognise the direct `each xs (fn v -> root[..] := rhs)` call shape
+/// (i.e. `GlobalRef { module: "list", name: "each" }` with 2 args) and lower
+/// the callback to use `ListSetInPlace` instead of copy-on-write `ListSet`.
+///
+/// The key difference from `lower_supported_inline_list_fold_mutating_each` is
+/// that `each` is NOT inlined at the Goby IR level — it remains a `GlobalRef`
+/// call.  The callback is therefore in un-wrapped form:
+/// ```text
+/// args[0] = <source list>
+/// args[1] = Lambda { param: v, body: Seq { stmts: [AssignIndex { root, path, rhs }],
+///                                          tail: Value(Unit) } }
+/// ```
+///
+/// Safety conditions are identical to the fold variant.
+#[allow(clippy::too_many_arguments)]
+fn lower_list_each_mutating_assign(
+    args: &[ValueExpr],
+    aliases: &HashMap<String, AliasValue>,
+    bindings: &ClosureBindingEnv,
+    known_decls: &HashSet<String>,
+    lambda_decls: &mut Vec<LambdaAuxDecl>,
+) -> Result<Option<Vec<WasmBackendInstr>>, LowerError> {
+    if args.len() != 2 {
+        return Ok(None);
+    }
+
+    // args[1] must be a lambda (the callback).
+    let ValueExpr::Lambda {
+        param: v,
+        body: user_body,
+    } = &args[1]
+    else {
+        return Ok(None);
+    };
+
+    // Callback body: Seq { stmts: [AssignIndex { root, path, rhs }], tail: Value(Unit) }
+    let CompExpr::Seq { stmts, tail } = user_body.as_ref() else {
+        return Ok(None);
+    };
+    if stmts.len() != 1 {
+        return Ok(None);
+    }
+    if !matches!(tail.as_ref(), CompExpr::Value(ValueExpr::Unit)) {
+        return Ok(None);
+    }
+    let CompExpr::AssignIndex {
+        root,
+        path,
+        value: rhs,
+    } = &stmts[0]
+    else {
+        return Ok(None);
+    };
+    if path.is_empty() {
+        return Ok(None);
+    }
+
+    // Safety condition 1: root must not be a top-level decl.
+    if known_decls.contains(root.as_str()) {
+        return Ok(None);
+    }
+    // Safety condition 2: rhs must not mention root.
+    if comp_expr_mentions_var(rhs, root) {
+        return Ok(None);
+    }
+    // Safety condition 3: no nested lambda inside rhs captures root as mutable write.
+    if has_mutable_write_capture_of(root, rhs, bindings, known_decls) {
+        return Ok(None);
+    }
+
+    // All checks passed. Build a ListFold callback with ListSetInPlace.
+    // Callback takes (outer_acc, outer_x); outer_x == v (the element).
+    let outer_acc = "__ea_acc".to_string();
+    let outer_x = v.clone();
+
+    let root_is_cell = aliases.get(root.as_str()) == Some(&AliasValue::CellPromoted);
+    let depth = path.len();
+
+    let cb_params = vec![outer_acc.clone(), outer_x.clone()];
+    let cb_env = analyze_lambda_callable_env_for_params(
+        &cb_params,
+        user_body,
+        bindings,
+        known_decls,
+    );
+
+    let capture_count = cb_env.slots.len();
+    let mut param_names = if capture_count > 0 {
+        vec!["__clo".to_string()]
+    } else {
+        vec![]
+    };
+    param_names.extend_from_slice(&cb_params);
+
+    const CLO_LOCAL: &str = "__clo";
+    let mut body_aliases: HashMap<String, AliasValue> = HashMap::new();
+    let mut preamble: Vec<WasmBackendInstr> = Vec::new();
+
+    let mut cb_bindings = ClosureBindingEnv::with_decl_params(
+        param_names.iter().map(|s| s.as_str()),
+    );
+
+    for (slot_index, slot) in cb_env.slots.iter().enumerate() {
+        match slot.slot_kind {
+            CallableEnvSlotKind::ByValue => {
+                preamble.push(WasmBackendInstr::DeclareLocal {
+                    name: slot.name.clone(),
+                });
+                preamble.push(WasmBackendInstr::LoadClosureSlot {
+                    closure_local: CLO_LOCAL.to_string(),
+                    slot_index,
+                });
+                preamble.push(WasmBackendInstr::StoreLocal {
+                    name: slot.name.clone(),
+                });
+                cb_bindings.bind_outer_immutable(slot.name.clone());
+            }
+            CallableEnvSlotKind::SharedMutableCell { .. } => {
+                let cell_local = cell_local_name(&slot.name);
+                preamble.push(WasmBackendInstr::DeclareLocal {
+                    name: cell_local.clone(),
+                });
+                preamble.push(WasmBackendInstr::LoadClosureSlot {
+                    closure_local: CLO_LOCAL.to_string(),
+                    slot_index,
+                });
+                preamble.push(WasmBackendInstr::StoreLocal {
+                    name: cell_local,
+                });
+                body_aliases.insert(slot.name.clone(), AliasValue::CellPromoted);
+                cb_bindings.bind_outer_mutable(slot.name.clone());
+            }
+        }
+    }
+    for p in &cb_params {
+        cb_bindings.bind_outer_immutable(p.clone());
+    }
+    if root_is_cell {
+        body_aliases.insert(root.clone(), AliasValue::CellPromoted);
+    }
+
+    let root_local: String = if root_is_cell {
+        format!("__lsip_{}_root", root)
+    } else {
+        root.clone()
+    };
+    let descent_tmp = |i: usize| format!("__lsip_{}_d{}", root, i);
+
+    let mut body_instrs: Vec<WasmBackendInstr> = preamble;
+
+    if root_is_cell {
+        body_instrs.push(WasmBackendInstr::DeclareLocal {
+            name: root_local.clone(),
+        });
+        body_instrs.extend(lower_value_ctx(
+            &ValueExpr::Var(root.clone()),
+            &body_aliases,
+            &cb_bindings,
+            known_decls,
+        )?);
+        body_instrs.push(WasmBackendInstr::StoreLocal {
+            name: root_local.clone(),
+        });
+    }
+
+    for i in 0..depth.saturating_sub(1) {
+        body_instrs.push(WasmBackendInstr::DeclareLocal {
+            name: descent_tmp(i),
+        });
+    }
+    for (i, index_value) in path.iter().enumerate().take(depth.saturating_sub(1)) {
+        body_instrs.push(WasmBackendInstr::LoadLocal {
+            name: if i == 0 {
+                root_local.clone()
+            } else {
+                descent_tmp(i - 1)
+            },
+        });
+        body_instrs.extend(lower_value_ctx(
+            index_value,
+            &body_aliases,
+            &cb_bindings,
+            known_decls,
+        )?);
+        body_instrs.push(WasmBackendInstr::Intrinsic {
+            intrinsic: BackendIntrinsic::ListGet,
+        });
+        body_instrs.push(WasmBackendInstr::StoreLocal {
+            name: descent_tmp(i),
+        });
+    }
+
+    body_instrs.push(WasmBackendInstr::LoadLocal {
+        name: if depth == 1 {
+            root_local.clone()
+        } else {
+            descent_tmp(depth - 2)
+        },
+    });
+    body_instrs.extend(lower_value_ctx(
+        &path[depth - 1],
+        &body_aliases,
+        &cb_bindings,
+        known_decls,
+    )?);
+    body_instrs.extend(lower_comp_inner(
+        rhs,
+        false,
+        &body_aliases,
+        &cb_bindings,
+        known_decls,
+        lambda_decls,
+    )?);
+    body_instrs.push(WasmBackendInstr::Intrinsic {
+        intrinsic: BackendIntrinsic::ListSetInPlace,
+    });
+    // Drop the returned list handle; caller doesn't use it.
+    body_instrs.push(WasmBackendInstr::Drop);
+
+    // Return accumulator unchanged.
+    body_instrs.push(WasmBackendInstr::LoadLocal {
+        name: outer_acc.clone(),
+    });
+
+    let n = LAMBDA_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+    let cb_name = format!("__lambda_{n}");
+    lambda_decls.push(LambdaAuxDecl {
+        decl_name: cb_name.clone(),
+        param_names,
+        env: cb_env.clone(),
+        instrs: body_instrs,
+    });
+
+    // Emit: list | unit_acc | callback_handle | ListFold
+    let list_instrs = lower_value_as_arg(&args[0], aliases, bindings, known_decls, lambda_decls)?;
+    let mut instrs = Vec::new();
+    instrs.extend(list_instrs);
+    instrs.push(WasmBackendInstr::I64Const(
+        crate::gen_lower::value::encode_unit(),
+    ));
+
+    if capture_count > 0 {
+        let func_handle_instrs = vec![WasmBackendInstr::PushFuncHandle {
+            decl_name: cb_name,
+        }];
+        let slot_instrs: Vec<Vec<WasmBackendInstr>> = cb_env
+            .slots
+            .iter()
+            .map(|slot| match slot.slot_kind {
+                CallableEnvSlotKind::ByValue => lower_value_ctx(
+                    &ValueExpr::Var(slot.name.clone()),
+                    aliases,
+                    bindings,
+                    known_decls,
+                ),
+                CallableEnvSlotKind::SharedMutableCell { .. } => Ok(vec![
+                    WasmBackendInstr::LoadLocal {
+                        name: cell_local_name(&slot.name),
+                    },
+                ]),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        instrs.push(WasmBackendInstr::CreateClosure {
+            func_handle_instrs,
+            slot_instrs,
+        });
+    } else {
+        instrs.push(WasmBackendInstr::PushFuncHandle { decl_name: cb_name });
+    }
+
+    instrs.push(WasmBackendInstr::Intrinsic {
+        intrinsic: BackendIntrinsic::ListFold,
+    });
+
+    Ok(Some(instrs))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1311,6 +1940,17 @@ fn lower_comp_inner(
                 {
                     return Ok(instrs);
                 }
+                if intrinsic == BackendIntrinsic::ListFold
+                    && let Some(instrs) = lower_supported_inline_list_fold_mutating_each(
+                        args,
+                        aliases,
+                        bindings,
+                        known_decls,
+                        lambda_decls,
+                    )?
+                {
+                    return Ok(instrs);
+                }
                 let mut instrs = Vec::new();
                 for arg in args {
                     instrs.extend(lower_value_as_arg(
@@ -1346,6 +1986,14 @@ fn lower_comp_inner(
                     lambda_decls,
                 )? {
                     Ok(instrs)
+                } else if let Some(instrs) = lower_supported_inline_list_fold_mutating_each(
+                    args,
+                    aliases,
+                    bindings,
+                    known_decls,
+                    lambda_decls,
+                )? {
+                    Ok(instrs)
                 } else {
                     let mut instrs = Vec::new();
                     for arg in args {
@@ -1362,7 +2010,19 @@ fn lower_comp_inner(
                     });
                     Ok(instrs)
                 }
-            } else if let goby_core::ir::ValueExpr::GlobalRef { name, .. } = callee.as_ref() {
+            } else if let goby_core::ir::ValueExpr::GlobalRef { module, name } = callee.as_ref() {
+                // Intercept `list.each xs (fn v -> root[..] := rhs)` before the generic call path.
+                if module == "list" && name == "each" && args.len() == 2 {
+                    if let Some(instrs) = lower_list_each_mutating_assign(
+                        args,
+                        aliases,
+                        bindings,
+                        known_decls,
+                        lambda_decls,
+                    )? {
+                        return Ok(instrs);
+                    }
+                }
                 // Top-level user declaration call via GlobalRef.
                 let mut instrs = Vec::new();
                 for arg in args {
@@ -1398,6 +2058,14 @@ fn lower_comp_inner(
                     && args.len() == 3
                 {
                     if let Some(instrs) = lower_supported_inline_list_fold_prepend_builder(
+                        args,
+                        aliases,
+                        bindings,
+                        known_decls,
+                        lambda_decls,
+                    )? {
+                        Ok(instrs)
+                    } else if let Some(instrs) = lower_supported_inline_list_fold_mutating_each(
                         args,
                         aliases,
                         bindings,
@@ -4453,6 +5121,152 @@ build n =
                 // Unit
                 I::I64Const(encode_unit()),
             ]
+        );
+    }
+
+    // ── lower_supported_inline_list_fold_mutating_each ─────────────────────
+
+    /// Helper: lower a CompExpr through lower_comp_inner with given aliases and bindings.
+    fn lower_comp_inner_with_context(
+        comp: &CompExpr,
+        aliases: &HashMap<String, AliasValue>,
+        bindings: &ClosureBindingEnv,
+        known_decls: &HashSet<String>,
+    ) -> Result<(Vec<WasmBackendInstr>, Vec<LambdaAuxDecl>), LowerError> {
+        let mut lambda_decls = Vec::new();
+        let instrs = lower_comp_inner(comp, false, aliases, bindings, known_decls, &mut lambda_decls)?;
+        Ok((instrs, lambda_decls))
+    }
+
+    /// Build the `each xs (fn v -> root[i] := rhs)` IR shape that
+    /// `lower_supported_inline_list_fold_mutating_each` should recognise.
+    ///
+    /// This mirrors `each xs f = __goby_list_fold xs () (fn _ x -> f x)`
+    /// with `f = fn v -> root[i] := rhs`.
+    fn make_each_assign_fold(
+        source_list_var: &str,
+        root: &str,
+        path_var: &str,   // variable used as the index expression
+        rhs: ValueExpr,
+    ) -> CompExpr {
+        // user callback: fn path_var -> root[path_var] := rhs; ()
+        let user_body = CompExpr::Seq {
+            stmts: vec![CompExpr::AssignIndex {
+                root: root.to_string(),
+                path: vec![ValueExpr::Var(path_var.to_string())],
+                value: Box::new(CompExpr::Value(rhs)),
+            }],
+            tail: Box::new(CompExpr::Value(ValueExpr::Unit)),
+        };
+        let user_lambda = ValueExpr::Lambda {
+            param: path_var.to_string(),
+            body: Box::new(user_body),
+        };
+        // each wrapper: fn _ x -> (fn v -> body) x
+        let inner_body = CompExpr::Call {
+            callee: Box::new(user_lambda),
+            args: vec![ValueExpr::Var("__x".to_string())],
+        };
+        let outer_callback = ValueExpr::Lambda {
+            param: "__acc".to_string(),
+            body: Box::new(CompExpr::Value(ValueExpr::Lambda {
+                param: "__x".to_string(),
+                body: Box::new(inner_body),
+            })),
+        };
+        CompExpr::Call {
+            callee: Box::new(ValueExpr::GlobalRef {
+                module: "list".to_string(),
+                name: "fold".to_string(),
+            }),
+            args: vec![
+                ValueExpr::Var(source_list_var.to_string()),
+                ValueExpr::Unit,
+                outer_callback,
+            ],
+        }
+    }
+
+    #[test]
+    fn each_assign_index_single_level_recognised_uses_list_set_in_place() {
+        // mut r = xs; each indices (fn i -> r[i] := 0)
+        // Expected: ListFold with a callback that uses ListSetInPlace (not ListSet).
+        let comp = make_each_assign_fold("indices", "r", "i", ValueExpr::IntLit(0));
+
+        // r is a plain mutable local (not cell-promoted).
+        let aliases: HashMap<String, AliasValue> = HashMap::new();
+        let mut bindings = ClosureBindingEnv::default();
+        bindings.bind_outer_immutable("indices".to_string());
+        bindings.bind_outer_mutable("r".to_string());
+        let known_decls: HashSet<String> = HashSet::new();
+
+        let (instrs, lambda_decls) =
+            lower_comp_inner_with_context(&comp, &aliases, &bindings, &known_decls)
+                .expect("should lower without error");
+
+        // The main instruction stream must contain a ListFold intrinsic.
+        let has_list_fold = instrs.iter().any(|i| {
+            matches!(i, I::Intrinsic { intrinsic: BackendIntrinsic::ListFold })
+        });
+        assert!(has_list_fold, "expected ListFold in output, got: {instrs:?}");
+
+        // There must be at least one lambda_decl (the rewritten callback).
+        assert!(
+            !lambda_decls.is_empty(),
+            "expected lambda_decls to contain the callback"
+        );
+
+        // The callback body must contain ListSetInPlace and must NOT contain ListSet.
+        let cb = &lambda_decls[lambda_decls.len() - 1];
+        let has_in_place = cb.instrs.iter().any(|i| {
+            matches!(i, I::Intrinsic { intrinsic: BackendIntrinsic::ListSetInPlace })
+        });
+        let has_copy = cb.instrs.iter().any(|i| {
+            matches!(i, I::Intrinsic { intrinsic: BackendIntrinsic::ListSet })
+        });
+        assert!(
+            has_in_place,
+            "callback should use ListSetInPlace, got: {:?}",
+            cb.instrs
+        );
+        assert!(
+            !has_copy,
+            "callback should NOT use ListSet, got: {:?}",
+            cb.instrs
+        );
+    }
+
+    #[test]
+    fn each_assign_index_near_miss_rhs_reads_root_falls_back_to_list_set() {
+        // rhs reads from root → safety condition 2 fails → fallback to ListSet.
+        // rhs = r[0]  (root appears in rhs)
+        let rhs = ValueExpr::ListGet {
+            list: Box::new(ValueExpr::Var("r".to_string())),
+            index: Box::new(ValueExpr::IntLit(0)),
+        };
+        let comp = make_each_assign_fold("indices", "r", "i", rhs);
+
+        let aliases: HashMap<String, AliasValue> = HashMap::new();
+        let mut bindings = ClosureBindingEnv::default();
+        bindings.bind_outer_immutable("indices".to_string());
+        bindings.bind_outer_mutable("r".to_string());
+        let known_decls: HashSet<String> = HashSet::new();
+
+        let (instrs, lambda_decls) =
+            lower_comp_inner_with_context(&comp, &aliases, &bindings, &known_decls)
+                .expect("near-miss should still lower (fallback path)");
+
+        // Must NOT use ListSetInPlace anywhere.
+        let has_in_place = instrs.iter().any(|i| {
+            matches!(i, I::Intrinsic { intrinsic: BackendIntrinsic::ListSetInPlace })
+        }) || lambda_decls.iter().any(|ld| {
+            ld.instrs.iter().any(|i| {
+                matches!(i, I::Intrinsic { intrinsic: BackendIntrinsic::ListSetInPlace })
+            })
+        });
+        assert!(
+            !has_in_place,
+            "near-miss (rhs reads root) should NOT use ListSetInPlace"
         );
     }
 }
