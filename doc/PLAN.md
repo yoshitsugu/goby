@@ -418,6 +418,71 @@ Based on `examples/*.gb`:
 - `else if` chaining in `if` expressions.
 - REPL or interactive mode.
 
+### 3.1 List update scaling — structural direction (deferred)
+
+Context: the 2026-04-14 `doc/BUGS.md` entry exposed that `root[i][j] := rhs`
+inside `each` rebuilds the whole list-of-lists per iteration via
+copy-on-write `ListSet`. A targeted lowering fix (tracked separately in
+`doc/PLAN_LIST_FIX.md`) closes the bug without language-level changes, but
+the structural question of how Goby should represent and update collections
+at scale remains open.
+
+Ladder of structural options, recorded so the decision is not lost:
+
+- **L1 — Runtime uniqueness tracking on list values.** Extend the
+  tagged-value layout with a "uniquely owned" bit; allocators mark new
+  lists unique, reads that could alias clear it, `ListSet` on a unique
+  list mutates in place. Catches many alias-free mutations beyond what
+  syntactic lowering can. Conflicts somewhat with Goby's "explicit
+  boundaries" principle because the guarantee is dynamic. Pursue only
+  if post-fix telemetry / user reports show the syntactic lowering
+  leaves important shapes uncovered.
+- **L2 — Uniqueness / ownership in the type system.** Linear / affine /
+  modal modes along the lines of Linear Haskell, Koka, Roc, or OCaml's
+  mode system. Structurally the right long-term home for a typed
+  functional language with effects: the guarantee is static, shows up
+  in signatures, and protects every allocation site uniformly. Large
+  language-design commitment; revisit when Goby exits its early-stage
+  window.
+- **L3 — New list / collection representation.** Persistent RRB-tree,
+  rope-like chunked list, or an explicit mutable `Array` type for `mut`
+  contexts. Adoptable module-by-module and independent of the type
+  system, but without L1/L2 the in-place opportunity is not fully
+  exploited.
+
+Deferred decisions:
+
+- Which of L1/L2/L3 belongs first, and whether L1 is pursued at all
+  given it may be subsumed by L2.
+- Whether a mutable `Array` type should coexist with `List` in the
+  surface language, or whether `List` itself should change
+  representation.
+- Trigger for revisiting: (a) a second `each`/`:=` scaling report that
+  the syntactic lowering does not handle, or (b) Goby leaving
+  early-stage and committing to a long-term collection story.
+
+### 3.2 Wasm memory ceiling policy — long-term shape
+
+Context: `doc/PLAN_LIST_FIX.md` moves the emitter to memory64 and adds a
+`--max-memory-mb` CLI knob with a 1 GiB default. A few policy questions
+are parked for later so the initial CLI surface stays minimal.
+
+- **CLI surface shape.** Single `--max-memory-mb` knob vs exposing
+  `initial` and `max` pages independently. Current default: single
+  knob. Revisit if a concrete workload appears that benefits from a
+  non-default initial reservation (batch jobs with known working set).
+- **Host-refusal semantics under an unbounded cap.** When the user sets
+  `--max-memory-mb=0` ("defer to host"), how `wasmtime` surfaces an
+  allocator-side OOM (trap vs `memory.grow` returning `-1` vs host
+  process abort) determines whether the emitter can rely on `maximum:
+  None` or must always declare a finite ceiling as a safety net. Must
+  be validated at the memory64 migration step; the answer may narrow
+  what `--max-memory-mb=0` is allowed to mean.
+- **Embedder portability (wasmer, browser).** Current plan assumes
+  `wasmtime` only. If a second embedder is added, the ceiling /
+  `StoreLimits` plumbing needs an abstraction; not worth designing
+  before a concrete second embedder is in scope.
+
 ## 4. Next Phase Plan
 
 Post-MVP work focuses on reducing fallback-runtime special cases and making
