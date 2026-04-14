@@ -52,8 +52,8 @@ syntax/semantics.
 - `List` contract (published M8):
   - `List` is Goby's default ordered collection surface.
   - Runtime representation is intentionally not specified as a linked-list
-    identity; the current direction is sequence-backed (see
-    `doc/PLAN_SEQUENCE.md`).
+    identity; the current direction is sequence-backed (chunked sequence
+    representation).
   - practical indexed read is part of the intended ordinary-script contract:
     `xs[i]` and `list.get`.
   - practical immutable point update is part of the intended ordinary-script
@@ -84,8 +84,8 @@ syntax/semantics.
     including nested `List (List a)` values (e.g. `grid[y][x]`)
   - precedence: `expr[expr]` binds tighter than whitespace function application —
     `f xs[0]` parses as `f (xs[0])`
-  - performance: see the `List` framing note above and `doc/PLAN_SEQUENCE.md`
-    for the intended-practicality goal and current limits.
+  - performance: see the `List` framing note above for the
+    intended-practicality goal and current limits.
 - Tuple member access uses numeric qualified form: `pair.0`, `pair.1`, ...
 - Unit value spelling: `()` (canonical).
   - Legacy expression-form `Unit` is rejected.

@@ -9,7 +9,7 @@ boundary closure are complete; the next work item should be chosen from the
 remaining roadmap based on product priority.
 
 M9 completion checkpoint (2026-04-14):
-- `doc/PLAN_SEQUENCE.md` now marks `M9` complete.
+- Sequence-backed List M9 complete.
 - Remaining string traversal name-list wiring is removed:
   - `string.graphemes` resolves through ordinary intrinsic lookup.
   - `string.split` keeps empty-delimiter behavior inside the shared
@@ -21,13 +21,11 @@ M9 completion checkpoint (2026-04-14):
     multi-grapheme emoji input
 
 M8 completion checkpoint (2026-04-14):
-- M8 parent and sub-steps (`M8-0`..`M8-4`) marked complete in
-  `doc/PLAN_SEQUENCE.md`.
+- Sequence-backed List M8 (M8-0..M8-4) complete.
 - Published `List` contract wording aligned across:
   - `README.md` (high-level positioning),
   - `doc/LANGUAGE_SPEC.md` (authoritative semantics and caveats),
-  - `doc/PLAN.md` (policy/debt framing),
-  - `doc/PLAN_SEQUENCE.md` (milestone closure and follow-up).
+  - `doc/PLAN.md` (policy/debt framing).
 - Representative examples are now locked and referenced:
   - `examples/list_index.gb`
   - `examples/list_set.gb`
@@ -46,7 +44,7 @@ M7-5 completion checkpoint (2026-04-13):
   - positioning: `list.each` = recommended default;
     `goby/iterator` + `with ... in ...` = experimental-but-supported
 - LANGUAGE_SPEC.md updated: "List traversal style and positioning" section added
-- M7-5 and M7 parent checkbox marked [x] in PLAN_SEQUENCE.md
+- M7-5 and M7 parent complete.
 
 M7-4 completion checkpoint (2026-04-13):
 - benchmark command:
@@ -188,7 +186,7 @@ M4 completion checkpoint (2026-04-11):
 - Honest performance language for repeated list-pattern extraction was added to
   `doc/LANGUAGE_SPEC.md` (amortized O(1) with chunk-boundary
   O(n/CHUNK_SIZE) header-copy cost under bump allocation).
-- `doc/PLAN_SEQUENCE.md` now marks M4 complete; next focus is M5.
+- Sequence-backed List M4 complete; next focus was M5.
 
 M5 traversal-boundary checkpoint (2026-04-12):
 - M5-6 complete: `stdlib/goby/list.gb` now defines
@@ -216,14 +214,14 @@ M5 completion checkpoint (2026-04-12, runtime regression lock):
   - multi-chunk `map` execution;
   - `ListReverseFoldPrepend` coexistence on both public `fold` and direct
     `__goby_list_fold` lowering/exec paths.
-- Result: all M5 sub-steps in `doc/PLAN_SEQUENCE.md` are now complete; next
-  planned work is M6 baseline capture and boundary definition.
+- Result: all M5 sub-steps are now complete; next
+  planned work was M6 baseline capture and boundary definition.
 
 M6-0 baseline checkpoint (2026-04-12):
 - added ignored baseline harness:
   - `runtime_rr_tests::m6_0_baseline_index_update_workloads`
   - command: `cargo test -p goby-wasm m6_0_baseline_index_update_workloads -- --ignored --nocapture`
-- locked baseline snapshot in `doc/PLAN_SEQUENCE.md` for:
+- locked baseline snapshot for:
   - indexed-read 4k mixed indices (`p50=38353us`, `p95=38913us`, success);
   - point-update 4k (`p50=37132us`, `p95=37519us`, currently traps);
   - nested-update 64x64 (`p50=60874us`, `p95=62130us`, currently traps);
@@ -237,7 +235,7 @@ M6-1 boundary-definition checkpoint (2026-04-12):
   - `xs[i]` and canonical `list.get` both route to `BackendIntrinsic::ListGet`;
   - `xs[i] := v` routes via `CompExpr::AssignIndex` and lowers through shared
     path-copy mechanics (`ListGet` descent + `ListSet` ascent).
-- `doc/PLAN_SEQUENCE.md` now marks M6-1 complete.
+- Sequence-backed List M6-1 complete.
 - next work is M6-2 chunk-aware indexed-read implementation.
 
 M6-2 checkpoint (2026-04-13, complete):
@@ -292,18 +290,17 @@ M6-3/M6-4 checkpoint (2026-04-13, complete):
   via static complexity + allocator-pressure analysis. Locked direction as
   Candidate B (Chunked Sequence). §6.6 workload matrix and success bar recorded.
   Candidate A rejected (O(n) prepend/split, harmful in RR-4). Candidate C
-  rejected (O(n/32) indexed read and update). See `doc/PLAN_SEQUENCE.md`.
+  rejected (O(n/32) indexed read and update).
 
 - **Sequence-backed List M1** (complete, 2026-04-10). Rewrote `List` description
   in `doc/LANGUAGE_SPEC.md` as surface-semantic (not linked-list identity).
   list patterns described as sequence views. Indexed access noted as intended-
-  practical with no current complexity guarantee. `doc/PLAN.md` preamble updated
-  to register `doc/PLAN_SEQUENCE.md`.
+  practical with no current complexity guarantee.
 
-- **Sequence-backed List M0** (complete, 2026-04-10). Product contract locked
-  in `doc/PLAN_SEQUENCE.md`: `List` is the user-facing surface; runtime direction
-  locked toward sequence-backed form; success bar defined as "practical for
-  ordinary scripts"; optimization-boundary policy adopted from §4.3/§4.8.
+- **Sequence-backed List M0** (complete, 2026-04-10). Product contract locked:
+  `List` is the user-facing surface; runtime direction locked toward
+  sequence-backed form; success bar defined as "practical for ordinary scripts";
+  optimization-boundary policy adopted.
 
 - **Track RR, RR-5 published TCO guarantee** (complete for M7, 2026-04-10).
   - the final public wording decision is now locked:
@@ -602,6 +599,4 @@ M6-3/M6-4 checkpoint (2026-04-13, complete):
 - [`doc/PLAN.md`](PLAN.md) — top-level roadmap
 - [`doc/LANGUAGE_SPEC.md`](LANGUAGE_SPEC.md) — current language specification
 - [`doc/PLAN_IR.md`](PLAN_IR.md) — IR lowering boundary design reference
-- [`doc/PLAN_SEQUENCE.md`](PLAN_SEQUENCE.md) — active List redesign roadmap (M5 next)
-- [`doc/PLAN_TCO.md`](PLAN_TCO.md) — TCO plan (all milestones complete)
 - [`doc/BUGS.md`](BUGS.md) — known bug tracker

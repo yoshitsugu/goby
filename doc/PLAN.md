@@ -13,9 +13,6 @@ Notes:
 - `PLAN.md` is the top-level roadmap and execution-planning document.
 - `doc/PLAN_IR.md` is the completed detailed roadmap for IR-lowering convergence and
   remains the reference when new lowering-boundary issues appear.
-- `doc/PLAN_SEQUENCE.md` is the active roadmap for the sequence-backed `List`
-  redesign; it is the reference for List representation direction, benchmark
-  gates, and optimization-boundary policy decisions.
 - When language syntax or semantics change, update
   `doc/LANGUAGE_SPEC.md` in the same change.
 - When language syntax changes, also verify whether syntax
@@ -733,69 +730,26 @@ Design stance:
 Status summary:
 
 - RR-0 through RR-5 are complete and archived in `doc/STATE.md`.
-- all `doc/PLAN_TCO.md` milestones (M0–M7) are complete (2026-04-10).
-- the published TCO guarantee is locked in `doc/LANGUAGE_SPEC.md`:
-  Goby has generic TCO on the compiled Wasm path for statically resolvable
-  direct tail calls among known top-level declarations.
+- generic TCO milestones (M0–M7) are complete (2026-04-10). The published
+  guarantee is locked in `doc/LANGUAGE_SPEC.md`: Goby has generic TCO on the
+  compiled Wasm path for statically resolvable direct tail calls among known
+  top-level declarations.
 - any further RR/TCO work is post-publication extension, not contract
   bootstrapping. RR-6 (limit tuning) remains deferred.
-- active development has moved to the Sequence-backed List track
-  (`doc/PLAN_SEQUENCE.md`), which addresses the list-construction resilience
-  goal originally scoped under RR Stage RR-B.
+- Sequence-backed List milestones (M0–M9) are complete (2026-04-14). The
+  published `List` contract is locked in `doc/LANGUAGE_SPEC.md`.
 
 Active milestones:
 
-1. **RR-5: generic tail-call optimization**
-   - after the current RR-3/RR-4 representative buckets are closed, add a
-     separate optimization track for generic self-tail recursion and, if the
-     Wasm/runtime boundary remains honest enough, broader tail-call shapes.
-   - this track should not become another RR-specific shape rewrite. Its
-     language-level target, architecture, and milestones are defined in
-     `doc/PLAN_TCO.md`.
-   - first locked implementation step:
-     - land a shared IR tail-position analysis boundary in `goby-core`,
-       exercise it through existing legality checks, and use that as the
-       ownership handoff into later direct tail-call normalization work.
-   - current implementation status:
-     - direct known-declaration calls in tail position now normalize to a
-       dedicated `TailDeclCall` backend-IR marker before Wasm emission.
-     - covered aux declarations that participate in the direct `TailDeclCall`
-       graph now execute through one shared dispatcher-based constant-stack
-       engine on the compiled Wasm path.
-     - that shared engine now covers single-member self-tail declarations,
-       sibling/mutual groups, and acyclic direct-tail chains into covered
-       recursive members without introducing a second execution path.
-     - compile/runtime proof now locks that the same covered boundary survives
-       tail `if` joins, `case` joins, let/block tails, and statically
-       resolvable local alias chains to known top-level declarations.
-     - unsupported tail-looking higher-order calls, unresolved local function
-       values, and non-tail recursion are now explicitly classified as outside
-       the current direct-call TCO guarantee; accepted execution may remain on
-       ordinary `IndirectCall`/`DeclCall` paths.
-     - published wording is now locked:
-       Goby has generic TCO on the documented compiled Wasm path for the
-       current statically resolvable direct-call subset, with the unsupported
-       higher-order/non-tail buckets stated explicitly rather than implied.
-     - public aux decl wrappers and funcref-visible entrypoints remain stable,
-       so the implementation change does not alter observable direct-call or
-       function-value behavior for covered declarations.
-     - the current language-level contract is now locked in
-       `doc/LANGUAGE_SPEC.md`: this is a compiled-Wasm-path guarantee for the
-       currently covered direct-call subset, not yet a claim that every
-       statically resolvable direct tail call in Goby has finished generic TCO
-       coverage.
-   - scope guardrails for a future RR-5/TCO track:
-     - do not special-case source symbols or individual fixtures,
-     - prefer a shared control-flow rule that can be described independently of
-       any one stdlib/helper function,
-     - keep diagnostics honest when a recursive shape still falls outside the
-       optimized subset,
-     - keep any future wording stronger than the current compiled-Wasm direct-
-       call guarantee gated on equally explicit proof and documentation.
-   - expected user-facing goal:
-     - this goal is now met for the documented compiled-Wasm direct-call scope;
-       future work may widen backends or call categories, but the current
-       public claim is no longer merely aspirational.
+1. **RR-5: generic tail-call optimization** (complete, 2026-04-10)
+   - generic TCO is published for the compiled Wasm path; the full
+     implementation history is in `doc/STATE.md`.
+   - the language-level contract is locked in `doc/LANGUAGE_SPEC.md`:
+     direct tail calls among known top-level declarations execute in constant
+     stack on the compiled Wasm path; higher-order and non-tail shapes remain
+     outside the guarantee.
+   - any future widening (additional backends, call categories) requires
+     equally explicit proof and documentation before the wording is broadened.
 2. **RR-6: limit tuning and follow-through**
    - revisit stack/memory defaults only after RR-2 through RR-4 give clearer
      ownership and failure modes.
