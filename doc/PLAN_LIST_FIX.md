@@ -57,12 +57,10 @@ larger than the current emitter-baked 64 MiB cap also run to completion.
    `doc/BUGS.md` (50 × 50 grid, 5000 iterations, executed via
    `printf 'x\n' | goby run repro.gb`) completes without
    `E-MEMORY-EXHAUSTION` under the default CLI settings and prints
-   `0`. Additionally, the originating AoC 2025 day 04 part-2 program
-   (`~/src/github.com/yoshitsugu/aoc2025/04/solve2.gb` with the
-   committed `input`) completes and prints a numeric answer. Both are
-   wired into the automated test suite so the regression cannot
-   silently return. G0 is the primary success condition for this
-   plan; G1–G3 are the structural properties that make G0 durable.
+   `0`. Both repros are wired into the automated test suite so the
+   regression cannot silently return. G0 is the primary success
+   condition for this plan; G1–G3 are the structural properties that
+   make G0 durable.
 2. **G1 — Scaling.** For a program that performs *K* cell-updates on
    an *R × C* grid through `each xs (fn v -> root[..] := rhs)`, peak
    steady-state allocation is O(R + C), independent of *K*. Verified
@@ -262,18 +260,8 @@ M = day(s), L = week(s).
       (a) exit success, (b) stdout equals `0`, (c) no
       `E-MEMORY-EXHAUSTION`. Place it with the other
       `runtime_output_tests.rs` cases so it runs in `cargo test`.
-- [ ] **G0 verification — originating AoC program (manual, once):**
-      run `cat input | goby run solve2.gb` against the committed
-      `~/src/github.com/yoshitsugu/aoc2025/04/` tree. Record the
-      observed numeric output in the milestone commit message. If
-      the output can be frozen (no nondeterminism), capture it as a
-      runtime test fixture under `runtime_output_tests.rs` with
-      the input bundled as a fixture so future regressions are
-      caught.
-
 **Exit criteria (G0, G1 partial within the 64 MiB ceiling):** the
-BUGS.md minimal repro regression test passes under `cargo test`; the
-AoC day 04 part-2 program completes with a recorded output;
+BUGS.md minimal repro regression test passes under `cargo test`;
 `examples/each_assign_index_in_place.gb` completes; peak Wasm pages
 do not grow with iteration count; `cargo test` green overall.
 

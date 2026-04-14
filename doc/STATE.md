@@ -528,10 +528,10 @@ M6-3/M6-4 checkpoint (2026-04-13, complete):
   - the experiment was reverted because it broke existing Wasm validation / runtime
     behavior for recursive list-pruning programs such as
     `iterative_grid_pruning_after_render_executes_without_heap_cursor_corruption`
-    and `aoc2025/04/solve2.gb`.
+    and a grid-traversal program exhibiting the same `each` + `AssignIndex` blowup.
   - the failed slice still established two useful facts:
-    - self tail recursion alone is not the dominant issue for the `solve2.gb`
-      class of failures;
+    - self tail recursion alone is not the dominant issue for the
+      `each` + nested `AssignIndex` class of failures;
     - with named Goby frames now present in Wasm backtraces, the hot failing path
       is visible as `fold -> should_prune_cell/check_around_rolls ->
       collect_prune_positions/count_valid_roll`, which points more strongly to

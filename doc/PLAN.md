@@ -689,8 +689,9 @@ Motivation:
 
 - the desired product direction is "prefer code that behaves intuitively even if
   it is not especially efficient".
-- for the `solve2.gb` class of failures, the main fix target should be Goby's
-  runtime/lowering/runtime-diagnostics layers, not the user's program shape.
+- for the `each` + nested `AssignIndex` class of failures, the main fix target
+  should be Goby's runtime/lowering/runtime-diagnostics layers, not the user's
+  program shape.
 - before Goby can avoid these failures entirely, it must at least tell the user
   what kind of resource limit they hit.
 
