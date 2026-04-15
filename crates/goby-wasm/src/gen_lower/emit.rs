@@ -16,6 +16,10 @@ use crate::gen_lower::backend_ir::{
     BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp, SplitIndexOperand,
     WasmBackendInstr,
 };
+use crate::gen_lower::ptr::{
+    PtrWidth, ptr_add, ptr_const, ptr_div_u, ptr_eq, ptr_load, ptr_load_8u, ptr_lt_u, ptr_mul,
+    ptr_neg_one, ptr_store, ptr_sub,
+};
 use goby_core::ir::IrBinOp;
 
 use crate::gen_lower::value::{
@@ -1134,6 +1138,13 @@ pub(crate) fn emit_general_module_with_aux_and_options(
     let main_i64_count = main_named_i64_count + main_helper_i64_scratch_count;
     let main_i32_scratch_count = required_i32_scratch_count(instrs);
     let main_i32_base = main_i64_count;
+    // Under memory64 the "i32 scratch" pool is declared as i64 so that all
+    // address/size locals hold i64 values.  The pool offset (i32_base) is unchanged.
+    let scratch_val_type = if options.memory_config.memory64 {
+        ValType::I64
+    } else {
+        ValType::I32
+    };
 
     // Check whether any instruction list (main or aux) uses host intrinsics.
     let all_slices_iter =
@@ -1391,7 +1402,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             locals_vec.push((main_i64_count, ValType::I64));
         }
         if main_i32_scratch_count > 0 {
-            locals_vec.push((main_i32_scratch_count, ValType::I32));
+            locals_vec.push((main_i32_scratch_count, scratch_val_type));
         }
         let mut function = Function::new(locals_vec);
         let mut ctx = EmitContext::with_module_tables(
@@ -1473,7 +1484,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             locals_vec.push((aux_i64_count, ValType::I64));
         }
         if aux_i32_scratch_count > 0 {
-            locals_vec.push((aux_i32_scratch_count, ValType::I32));
+            locals_vec.push((aux_i32_scratch_count, scratch_val_type));
         }
         let mut function = Function::new(locals_vec);
 
