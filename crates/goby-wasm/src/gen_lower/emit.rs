@@ -433,6 +433,13 @@ struct HeapEmitState {
     ptr_width: crate::gen_lower::ptr::PtrWidth,
 }
 
+impl HeapEmitState {
+    #[inline(always)]
+    fn pw(self) -> PtrWidth {
+        self.ptr_width
+    }
+}
+
 /// Extract scratch state, returning a `CodegenError` if it is absent.
 ///
 /// `context` names the instruction or operation that requires scratch state,
@@ -988,6 +995,7 @@ fn initialize_helper_state_locals(
     i32_base: u32,
     static_strings: &StaticStringPool,
     is_main: bool,
+    pw: PtrWidth,
 ) -> Result<(), CodegenError> {
     let buffer_ptr = layout.heap_base as i32;
     let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
@@ -1003,51 +1011,51 @@ fn initialize_helper_state_locals(
     let initial_floor = align_up_i32(buffer_ptr + 4, 8);
     if is_main {
         // main initializes the global heap cursor in linear memory, then loads it locally.
-        function.instruction(&Instruction::I32Const(GLOBAL_HEAP_CURSOR_OFFSET as i32));
-        function.instruction(&Instruction::I32Const(initial_cursor));
-        function.instruction(&Instruction::I32Store(MemArg {
+        function.instruction(&ptr_const(pw, GLOBAL_HEAP_CURSOR_OFFSET as u64));
+        function.instruction(&ptr_const(pw, initial_cursor as u64));
+        function.instruction(&ptr_store(pw, MemArg {
             offset: 0,
             align: 2,
             memory_index: 0,
         }));
-        function.instruction(&Instruction::I32Const(GLOBAL_RUNTIME_ERROR_OFFSET as i32));
-        function.instruction(&Instruction::I32Const(0));
-        function.instruction(&Instruction::I32Store(MemArg {
+        function.instruction(&ptr_const(pw, GLOBAL_RUNTIME_ERROR_OFFSET as u64));
+        function.instruction(&ptr_const(pw, 0));
+        function.instruction(&ptr_store(pw, MemArg {
             offset: 0,
             align: 2,
             memory_index: 0,
         }));
-        function.instruction(&Instruction::I32Const(GLOBAL_HEAP_FLOOR_OFFSET as i32));
-        function.instruction(&Instruction::I32Const(initial_floor));
-        function.instruction(&Instruction::I32Store(MemArg {
+        function.instruction(&ptr_const(pw, GLOBAL_HEAP_FLOOR_OFFSET as u64));
+        function.instruction(&ptr_const(pw, initial_floor as u64));
+        function.instruction(&ptr_store(pw, MemArg {
             offset: 0,
             align: 2,
             memory_index: 0,
         }));
-        function.instruction(&Instruction::I32Const(GLOBAL_HEAP_CURSOR_OFFSET as i32));
-        function.instruction(&Instruction::I32Load(MemArg {
+        function.instruction(&ptr_const(pw, GLOBAL_HEAP_CURSOR_OFFSET as u64));
+        function.instruction(&ptr_load(pw, MemArg {
             offset: 0,
             align: 2,
             memory_index: 0,
         }));
         function.instruction(&Instruction::LocalSet(alloc_cursor_local));
-        function.instruction(&Instruction::I32Const(GLOBAL_HEAP_FLOOR_OFFSET as i32));
-        function.instruction(&Instruction::I32Load(MemArg {
+        function.instruction(&ptr_const(pw, GLOBAL_HEAP_FLOOR_OFFSET as u64));
+        function.instruction(&ptr_load(pw, MemArg {
             offset: 0,
             align: 2,
             memory_index: 0,
         }));
     } else {
         // aux decls load the current global cursor/floor (may have been advanced by caller).
-        function.instruction(&Instruction::I32Const(GLOBAL_HEAP_CURSOR_OFFSET as i32));
-        function.instruction(&Instruction::I32Load(MemArg {
+        function.instruction(&ptr_const(pw, GLOBAL_HEAP_CURSOR_OFFSET as u64));
+        function.instruction(&ptr_load(pw, MemArg {
             offset: 0,
             align: 2,
             memory_index: 0,
         }));
         function.instruction(&Instruction::LocalSet(alloc_cursor_local));
-        function.instruction(&Instruction::I32Const(GLOBAL_HEAP_FLOOR_OFFSET as i32));
-        function.instruction(&Instruction::I32Load(MemArg {
+        function.instruction(&ptr_const(pw, GLOBAL_HEAP_FLOOR_OFFSET as u64));
+        function.instruction(&ptr_load(pw, MemArg {
             offset: 0,
             align: 2,
             memory_index: 0,
@@ -2987,7 +2995,7 @@ fn emit_helper_call(
         | BackendIntrinsic::StringGraphemesList
         | BackendIntrinsic::StringSplitLines => {
             if let Some(hs) = heap_state {
-                emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
+                emit_sync_cursor_to_global(function, hs.alloc_cursor_local, hs.pw());
             }
             let host_offset = host_import_offset_for_intrinsic(intrinsic)?;
             function.instruction(&Instruction::Call(HOST_IMPORT_BASE_IDX + host_offset));
@@ -3218,12 +3226,14 @@ fn emit_function_body(
     ctx.tail_call_mode = tail_call_mode;
     let has_heap = needs_helper_state(instrs);
     if has_heap {
+        let pw = PtrWidth::from_memory64(options.memory_config.memory64);
         initialize_helper_state_locals(
             function,
             layout,
             i32_base,
             static_strings,
             !emit_epilogue_cursor_sync,
+            pw,
         )?;
     }
     if ctx.tail_call_mode.is_some() {
@@ -3262,8 +3272,9 @@ fn emit_function_body(
     if has_heap && emit_epilogue_cursor_sync {
         let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
         let heap_floor_local = i32_base + HELPER_HEAP_FLOOR_OFFSET;
-        emit_sync_cursor_to_global(function, alloc_cursor_local);
-        emit_sync_floor_to_global(function, heap_floor_local);
+        let pw = PtrWidth::from_memory64(options.memory_config.memory64);
+        emit_sync_cursor_to_global(function, alloc_cursor_local, pw);
+        emit_sync_floor_to_global(function, heap_floor_local, pw);
     }
     function.instruction(&Instruction::End);
     ctx.tail_call_mode = None;
@@ -3334,7 +3345,8 @@ fn emit_tail_call_group_dispatcher(
     let mut function = Function::new(locals_vec);
 
     if needs_heap {
-        initialize_helper_state_locals(&mut function, layout, i32_base, static_strings, false)?;
+        let pw = PtrWidth::from_memory64(options.memory_config.memory64);
+        initialize_helper_state_locals(&mut function, layout, i32_base, static_strings, false, pw)?;
     }
     function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Result(
         wasm_encoder::ValType::I64,
@@ -3366,8 +3378,9 @@ fn emit_tail_call_group_dispatcher(
     if needs_heap {
         let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
         let heap_floor_local = i32_base + HELPER_HEAP_FLOOR_OFFSET;
-        emit_sync_cursor_to_global(&mut function, alloc_cursor_local);
-        emit_sync_floor_to_global(&mut function, heap_floor_local);
+        let pw = PtrWidth::from_memory64(options.memory_config.memory64);
+        emit_sync_cursor_to_global(&mut function, alloc_cursor_local, pw);
+        emit_sync_floor_to_global(&mut function, heap_floor_local, pw);
     }
     function.instruction(&Instruction::End);
     code.function(&function);
@@ -3500,8 +3513,8 @@ fn emit_heap_aware_direct_call(
     callee_uses_heap: bool,
 ) {
     if let Some(hs) = helper_state {
-        emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
-        emit_sync_floor_to_global(function, hs.heap_floor_local);
+        emit_sync_cursor_to_global(function, hs.alloc_cursor_local, hs.pw());
+        emit_sync_floor_to_global(function, hs.heap_floor_local, hs.pw());
     }
     function.instruction(&Instruction::Call(func_idx));
     if let Some(hs) = helper_state {
@@ -3510,14 +3523,14 @@ fn emit_heap_aware_direct_call(
     if (returns_wasm_heap || callee_uses_heap)
         && let Some(hs) = helper_state
     {
-        emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
-        emit_sync_floor_from_global(function, hs.heap_floor_local);
+        emit_sync_cursor_from_global(function, hs.alloc_cursor_local, hs.pw());
+        emit_sync_floor_from_global(function, hs.heap_floor_local, hs.pw());
     }
 }
 
 fn emit_return_if_runtime_error(function: &mut Function, helper_state: &HeapEmitState) {
-    function.instruction(&Instruction::I32Const(GLOBAL_RUNTIME_ERROR_OFFSET as i32));
-    function.instruction(&Instruction::I32Load(MemArg {
+    function.instruction(&ptr_const(helper_state.pw(), GLOBAL_RUNTIME_ERROR_OFFSET as u64));
+    function.instruction(&ptr_load(helper_state.pw(), MemArg {
         offset: 0,
         align: 2,
         memory_index: 0,
@@ -3532,33 +3545,33 @@ fn emit_return_if_runtime_error(function: &mut Function, helper_state: &HeapEmit
     function.instruction(&Instruction::End);
 }
 
-/// Emit `i32.const GLOBAL_HEAP_CURSOR_OFFSET; local.get alloc_cursor_local; i32.store`
+/// Emit `ptr.const GLOBAL_HEAP_CURSOR_OFFSET; local.get alloc_cursor_local; ptr.store`
 /// to flush the local alloc cursor to the global persistent slot before a `call_indirect`.
-fn emit_sync_cursor_to_global(function: &mut Function, alloc_cursor_local: u32) {
-    function.instruction(&Instruction::I32Const(GLOBAL_HEAP_CURSOR_OFFSET as i32));
+fn emit_sync_cursor_to_global(function: &mut Function, alloc_cursor_local: u32, pw: PtrWidth) {
+    function.instruction(&ptr_const(pw, GLOBAL_HEAP_CURSOR_OFFSET as u64));
     function.instruction(&Instruction::LocalGet(alloc_cursor_local));
-    function.instruction(&Instruction::I32Store(MemArg {
+    function.instruction(&ptr_store(pw, MemArg {
         offset: 0,
         align: 2,
         memory_index: 0,
     }));
 }
 
-fn emit_sync_floor_to_global(function: &mut Function, heap_floor_local: u32) {
-    function.instruction(&Instruction::I32Const(GLOBAL_HEAP_FLOOR_OFFSET as i32));
+fn emit_sync_floor_to_global(function: &mut Function, heap_floor_local: u32, pw: PtrWidth) {
+    function.instruction(&ptr_const(pw, GLOBAL_HEAP_FLOOR_OFFSET as u64));
     function.instruction(&Instruction::LocalGet(heap_floor_local));
-    function.instruction(&Instruction::I32Store(MemArg {
+    function.instruction(&ptr_store(pw, MemArg {
         offset: 0,
         align: 2,
         memory_index: 0,
     }));
 }
 
-/// Emit `i32.const GLOBAL_HEAP_CURSOR_OFFSET; i32.load; local.set alloc_cursor_local`
+/// Emit `ptr.const GLOBAL_HEAP_CURSOR_OFFSET; ptr.load; local.set alloc_cursor_local`
 /// to reload the alloc cursor from the global slot after a `call_indirect`.
-fn emit_sync_cursor_from_global(function: &mut Function, alloc_cursor_local: u32) {
-    function.instruction(&Instruction::I32Const(GLOBAL_HEAP_CURSOR_OFFSET as i32));
-    function.instruction(&Instruction::I32Load(MemArg {
+fn emit_sync_cursor_from_global(function: &mut Function, alloc_cursor_local: u32, pw: PtrWidth) {
+    function.instruction(&ptr_const(pw, GLOBAL_HEAP_CURSOR_OFFSET as u64));
+    function.instruction(&ptr_load(pw, MemArg {
         offset: 0,
         align: 2,
         memory_index: 0,
@@ -3566,9 +3579,9 @@ fn emit_sync_cursor_from_global(function: &mut Function, alloc_cursor_local: u32
     function.instruction(&Instruction::LocalSet(alloc_cursor_local));
 }
 
-fn emit_sync_floor_from_global(function: &mut Function, heap_floor_local: u32) {
-    function.instruction(&Instruction::I32Const(GLOBAL_HEAP_FLOOR_OFFSET as i32));
-    function.instruction(&Instruction::I32Load(MemArg {
+fn emit_sync_floor_from_global(function: &mut Function, heap_floor_local: u32, pw: PtrWidth) {
+    function.instruction(&ptr_const(pw, GLOBAL_HEAP_FLOOR_OFFSET as u64));
+    function.instruction(&ptr_load(pw, MemArg {
         offset: 0,
         align: 2,
         memory_index: 0,
@@ -3606,8 +3619,8 @@ fn emit_callable_dispatch(
     function.instruction(&Instruction::I64Const(i64::from(TAG_CLOSURE)));
     function.instruction(&Instruction::I64Eq);
     if let Some(hs) = hs {
-        emit_sync_cursor_to_global(function, hs.alloc_cursor_local);
-        emit_sync_floor_to_global(function, hs.heap_floor_local);
+        emit_sync_cursor_to_global(function, hs.alloc_cursor_local, hs.pw());
+        emit_sync_floor_to_global(function, hs.heap_floor_local, hs.pw());
     }
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
         wasm_encoder::ValType::I64,
@@ -3646,8 +3659,8 @@ fn emit_callable_dispatch(
     });
     function.instruction(&Instruction::End);
     if let Some(hs) = hs {
-        emit_sync_cursor_from_global(function, hs.alloc_cursor_local);
-        emit_sync_floor_from_global(function, hs.heap_floor_local);
+        emit_sync_cursor_from_global(function, hs.alloc_cursor_local, hs.pw());
+        emit_sync_floor_from_global(function, hs.heap_floor_local, hs.pw());
     }
 }
 
@@ -3967,7 +3980,7 @@ fn emit_string_split_helper(
     function.instruction(&Instruction::LocalGet(s_sep_len));
     function.instruction(&Instruction::I32Eqz);
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-    emit_sync_cursor_to_global(function, helper_state.alloc_cursor_local);
+    emit_sync_cursor_to_global(function, helper_state.alloc_cursor_local, helper_state.pw());
     function.instruction(&Instruction::LocalGet(text_i64));
     function.instruction(&Instruction::Call(
         HOST_IMPORT_BASE_IDX + graphemes_host_offset,
