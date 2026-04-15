@@ -30,9 +30,9 @@ use crate::layout::{
     GLOBAL_HEAP_CURSOR_OFFSET, GLOBAL_HEAP_FLOOR_OFFSET, GLOBAL_HOST_BUMP_CURSOR_OFFSET,
     GLOBAL_RUNTIME_ERROR_OFFSET, MemoryLayout, RUNTIME_ERROR_MEMORY_EXHAUSTION,
 };
-use crate::memory_config::{RUNTIME_MEMORY_CONFIG, WASM_PAGE_BYTES};
 #[cfg(test)]
 use crate::memory_config::TEST_MEMORY_CONFIG;
+use crate::memory_config::{RUNTIME_MEMORY_CONFIG, WASM_PAGE_BYTES};
 
 // STATIC_STRING_LIMIT uses initial_linear_memory_bytes(), which depends only on
 // initial_pages (= 4 in both TEST and RUNTIME configs, invariant by design).
@@ -7930,6 +7930,7 @@ mod tests {
                     max_pages: TEST_MEMORY_CONFIG.initial_pages,
                     host_bump_reserved_bytes: TEST_MEMORY_CONFIG.host_bump_reserved_bytes,
                     max_wasm_stack_bytes: TEST_MEMORY_CONFIG.max_wasm_stack_bytes,
+                    memory64: false,
                 },
             },
         )

@@ -8,6 +8,9 @@ pub struct WasmMemoryConfig {
     pub max_pages: u32,
     pub host_bump_reserved_bytes: u32,
     pub max_wasm_stack_bytes: usize,
+    /// Enable the Wasm memory64 proposal for this module's linear memory.
+    /// When `false` (default), wasm32 addressing is used.
+    pub memory64: bool,
 }
 
 impl WasmMemoryConfig {
@@ -27,7 +30,7 @@ impl WasmMemoryConfig {
         MemoryType {
             minimum: self.initial_pages as u64,
             maximum: Some(self.max_pages as u64),
-            memory64: false,
+            memory64: self.memory64,
             shared: false,
             page_size_log2: None,
         }
@@ -41,6 +44,7 @@ pub(crate) const TEST_MEMORY_CONFIG: WasmMemoryConfig = WasmMemoryConfig {
     max_pages: 1024,
     host_bump_reserved_bytes: 49_152,
     max_wasm_stack_bytes: 64 * 1024 * 1024,
+    memory64: false,
 };
 
 /// Runtime config: 1 GiB ceiling used when emitting modules for actual execution.
@@ -51,6 +55,7 @@ pub const RUNTIME_MEMORY_CONFIG: WasmMemoryConfig = WasmMemoryConfig {
     max_pages: 16_384,
     host_bump_reserved_bytes: 49_152,
     max_wasm_stack_bytes: 64 * 1024 * 1024,
+    memory64: false,
 };
 
 /// Deprecated alias for `TEST_MEMORY_CONFIG`.  Do not add new uses.
@@ -72,10 +77,7 @@ mod tests {
     #[test]
     fn runtime_memory_config_locks_1_gib_ceiling() {
         assert_eq!(RUNTIME_MEMORY_CONFIG.initial_pages, 4);
-        assert_eq!(
-            RUNTIME_MEMORY_CONFIG.initial_linear_memory_bytes(),
-            262_144
-        );
+        assert_eq!(RUNTIME_MEMORY_CONFIG.initial_linear_memory_bytes(), 262_144);
         assert_eq!(RUNTIME_MEMORY_CONFIG.max_pages, 16_384);
         assert_eq!(
             RUNTIME_MEMORY_CONFIG.max_linear_memory_bytes(),

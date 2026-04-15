@@ -99,6 +99,8 @@ fn run_wasm_bytes_with_stdin_and_config(
     let mut config = Config::new();
     config.max_wasm_stack(memory_config.max_wasm_stack_bytes);
     config.async_stack_size(memory_config.max_wasm_stack_bytes);
+    // Enable memory64 proposal unconditionally — backward-compatible with wasm32 modules.
+    config.wasm_memory64(true);
     let engine = Engine::new(&config).map_err(|e| format!("engine config: {e}"))?;
     let module = Module::from_binary(&engine, wasm).map_err(|e| format!("wasm load: {e}"))?;
 
@@ -226,12 +228,18 @@ fn run_wasm_bytes_with_stdin_and_config(
     match start.call(&mut store, ()) {
         Ok(()) => {
             if let Some(runtime_err) = take_runtime_error(&mut store, &instance) {
-                return Err(format_runtime_error_with_config(&runtime_err, memory_config));
+                return Err(format_runtime_error_with_config(
+                    &runtime_err,
+                    memory_config,
+                ));
             }
         }
         Err(e) => {
             if let Some(runtime_err) = take_runtime_error(&mut store, &instance) {
-                return Err(format_runtime_error_with_config(&runtime_err, memory_config));
+                return Err(format_runtime_error_with_config(
+                    &runtime_err,
+                    memory_config,
+                ));
             }
             return Err(classify_execution_error(&e, memory_config));
         }
@@ -580,7 +588,10 @@ fn runtime_error_message(code: u32) -> Option<&'static str> {
 
 fn oom_ceiling_suffix(memory_config: crate::memory_config::WasmMemoryConfig) -> String {
     let mb = memory_config.max_linear_memory_bytes() / (1024 * 1024);
-    format!(" (configured ceiling: {} MiB; use --max-memory-mb to raise it)", mb)
+    format!(
+        " (configured ceiling: {} MiB; use --max-memory-mb to raise it)",
+        mb
+    )
 }
 
 fn format_runtime_error_with_config(
@@ -1245,6 +1256,7 @@ main =
             max_pages: TEST_MEMORY_CONFIG.initial_pages,
             host_bump_reserved_bytes: TEST_MEMORY_CONFIG.host_bump_reserved_bytes,
             max_wasm_stack_bytes: TEST_MEMORY_CONFIG.max_wasm_stack_bytes,
+            memory64: false,
         };
         let wasm = build_string_concat_growth_wasm(low_max);
         let err = run_wasm_bytes_with_stdin_and_config(&wasm, None, low_max)

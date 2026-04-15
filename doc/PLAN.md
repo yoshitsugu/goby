@@ -475,9 +475,18 @@ are parked for later so the initial CLI surface stays minimal.
   `--max-memory-mb=0` ("defer to host"), how `wasmtime` surfaces an
   allocator-side OOM (trap vs `memory.grow` returning `-1` vs host
   process abort) determines whether the emitter can rely on `maximum:
-  None` or must always declare a finite ceiling as a safety net. Must
-  be validated at the memory64 migration step; the answer may narrow
-  what `--max-memory-mb=0` is allowed to mean.
+  None` or must always declare a finite ceiling as a safety net.
+  **M3.3 decision (2026-04-15):** Validated via existing OOM tests
+  (`host_string_concat_reports_runtime_error_when_growth_hits_maximum`)
+  that `maximum`-field enforcement surfaces as a `runtime error:
+  E-MEMORY-EXHAUSTION` (trap path, not panic or process abort). Adding
+  `wasmtime::StoreLimits` as a second ceiling layer requires wrapping
+  `WasiP1Ctx` in a limiter-aware store data type — a non-trivial
+  refactor deferred to M4. **Conclusion for CLI:** `--max-memory-mb=0`
+  MUST continue to translate to a finite `RUNTIME_MEMORY_CONFIG` ceiling
+  (not `maximum: None`) until `StoreLimits` is wired. The `None` path
+  is unsafe because host-side OOM without a declared `maximum` cannot
+  be guaranteed to surface as a trap on all embedders.
 - **Embedder portability (wasmer, browser).** Current plan assumes
   `wasmtime` only. If a second embedder is added, the ceiling /
   `StoreLimits` plumbing needs an abstraction; not worth designing

@@ -2145,5 +2145,32 @@ main =
         .expect("thread spawn should succeed")
         .join()
         .expect("thread should not panic");
-    assert_eq!(result, "0\n", "expected output 0 after 5000 diagonal-zeroing iterations");
+    assert_eq!(
+        result, "0\n",
+        "expected output 0 after 5000 diagonal-zeroing iterations"
+    );
+}
+
+// --- M3.2: memory64 end-to-end ---
+
+/// Run hello.gb with a WasmMemoryConfig that has memory64=true.
+/// Verifies that wasmtime (with wasm_memory64 unconditionally enabled) can execute
+/// a module whose *linear memory declaration* uses memory64, even though the emitted
+/// opcodes are still wasm32-style i32 addresses.  Full i64 opcode migration is M4.
+#[test]
+fn memory64_flag_hello_gb_executes_correctly() {
+    use crate::memory_config::{TEST_MEMORY_CONFIG, WasmMemoryConfig};
+    let source = read_example("hello.gb");
+    let module = parse_module(&source).expect("hello.gb should parse");
+    let wasm = crate::compile_module(&module).expect("hello.gb should compile");
+    let mem64_config = WasmMemoryConfig {
+        memory64: true,
+        ..TEST_MEMORY_CONFIG
+    };
+    let output = crate::wasm_exec::run_wasm_bytes_with_config(&wasm, None, mem64_config)
+        .expect("hello.gb should execute with memory64=true");
+    assert_eq!(
+        output, "Hello Goby!",
+        "hello.gb output must match under memory64 config"
+    );
 }
