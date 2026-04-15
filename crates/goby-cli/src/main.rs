@@ -15,7 +15,11 @@ commands:
   lint   <file.gb>           parse, typecheck, and run lint checks
   fmt    [--check] <file.gb> format a Goby source file in-place
                              (comments are stripped — Option A policy)
-                             with --check: exit 1 if the file is not formatted";
+                             with --check: exit 1 if the file is not formatted
+
+options for run:
+  --max-memory-mb <N>        set the Wasm linear memory ceiling to N MiB
+                             (default: 1024; env var GOBY_MAX_MEMORY_MB used as fallback)";
 
 /// Render the error header line.
 ///
@@ -137,6 +141,8 @@ enum Command {
 struct CliArgs {
     command: Command,
     file: String,
+    /// User-supplied value of `--max-memory-mb` (if any).
+    max_memory_mb: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -201,8 +207,21 @@ fn run() -> Result<(), CliError> {
         return Err(CliError::Runtime(rendered.join("\n\n")));
     }
 
+    let memory_config = resolve_memory_config(cli.max_memory_mb);
+
+    // Warn if --max-memory-mb was passed to a command that doesn't execute Wasm.
+    if memory_config.is_some() && !matches!(cli.command, Command::Run) {
+        eprintln!("warning: --max-memory-mb has no effect for the '{}' command",
+            match cli.command {
+                Command::Check => "check",
+                Command::Lint => "lint",
+                _ => unreachable!(),
+            }
+        );
+    }
+
     match cli.command {
-        Command::Run => run_command(&module, &cli.file)?,
+        Command::Run => run_command(&module, &cli.file, memory_config)?,
         Command::Check => {
             print_parse_summary(module.declarations.len(), &cli.file);
         }
@@ -236,7 +255,11 @@ fn run_fmt(file: &str, source: &str, check: bool) -> Result<(), CliError> {
     }
 }
 
-fn run_command(module: &goby_core::Module, file: &str) -> Result<(), CliError> {
+fn run_command(
+    module: &goby_core::Module,
+    file: &str,
+    memory_config: Option<goby_wasm::memory_config::WasmMemoryConfig>,
+) -> Result<(), CliError> {
     // Runtime execution ownership lives in `goby-wasm`.
     // Some modules must execute through the Goby-owned runtime even when they do not
     // consume stdin (for example lambda-driven GeneralLowered programs).  Ask the
@@ -256,7 +279,7 @@ fn run_command(module: &goby_core::Module, file: &str) -> Result<(), CliError> {
         } else {
             None
         };
-        match goby_wasm::execute_runtime_module_with_stdin(module, stdin_text)
+        match goby_wasm::execute_runtime_module_with_stdin_and_config(module, stdin_text, memory_config)
             .map_err(|err| CliError::Runtime(format_runtime_error_message(&err.message)))?
         {
             Some(output) => {
@@ -279,7 +302,7 @@ fn run_command(module: &goby_core::Module, file: &str) -> Result<(), CliError> {
                 })?;
                 print_parse_summary(module.declarations.len(), file);
                 eprintln!("generated wasm: {}", output);
-                match execute_wasm(&output)? {
+                match execute_wasm(&output, memory_config)? {
                     ExecutionOutcome::Executed => {}
                     ExecutionOutcome::SkippedNoWasmtime => {
                         eprintln!("wasmtime not found; skipped wasm execution")
@@ -339,13 +362,39 @@ where
             } else {
                 Command::Check
             };
-            let file = args
-                .next()
-                .ok_or_else(|| CliError::Usage("missing input file".to_string()))?;
-            if let Some(extra) = args.next() {
-                return Err(CliError::Usage(format!("unexpected argument: {}", extra)));
+            // Accept optional `--max-memory-mb <N>` before or after the file argument.
+            let mut file: Option<String> = None;
+            let mut max_memory_mb: Option<u32> = None;
+            while let Some(arg) = args.next() {
+                if arg == "--max-memory-mb" {
+                    let val = args.next().ok_or_else(|| {
+                        CliError::Usage("--max-memory-mb requires a value".to_string())
+                    })?;
+                    let n: u32 = val.parse().map_err(|_| {
+                        CliError::Usage(format!(
+                            "--max-memory-mb value must be a non-negative integer, got: {}",
+                            val
+                        ))
+                    })?;
+                    max_memory_mb = Some(n);
+                } else if arg.starts_with("--max-memory-mb=") {
+                    let val = &arg["--max-memory-mb=".len()..];
+                    let n: u32 = val.parse().map_err(|_| {
+                        CliError::Usage(format!(
+                            "--max-memory-mb value must be a non-negative integer, got: {}",
+                            val
+                        ))
+                    })?;
+                    max_memory_mb = Some(n);
+                } else if !arg.starts_with("--") && file.is_none() {
+                    file = Some(arg);
+                } else {
+                    return Err(CliError::Usage(format!("unexpected argument: {}", arg)));
+                }
             }
-            Ok(CliArgs { command, file })
+            let file = file
+                .ok_or_else(|| CliError::Usage("missing input file".to_string()))?;
+            Ok(CliArgs { command, file, max_memory_mb })
         }
         "fmt" => {
             // Optional --check flag before the file argument.
@@ -366,10 +415,62 @@ where
             Ok(CliArgs {
                 command: Command::Fmt { check },
                 file,
+                max_memory_mb: None,
             })
         }
         _ => Err(CliError::Usage(format!("unknown command: {}", command_raw))),
     }
+}
+
+/// Resolve the effective memory config from the CLI flag and environment.
+///
+/// Precedence: `--max-memory-mb` > `GOBY_MAX_MEMORY_MB` > default (1 GiB = RUNTIME_MEMORY_CONFIG).
+/// Returns `None` to use the default runtime config.
+fn resolve_memory_config(
+    cli_max_mb: Option<u32>,
+) -> Option<goby_wasm::memory_config::WasmMemoryConfig> {
+    use goby_wasm::memory_config::{RUNTIME_MEMORY_CONFIG, WASM_PAGE_BYTES, WasmMemoryConfig};
+
+    let mb = cli_max_mb.or_else(|| {
+        match env::var("GOBY_MAX_MEMORY_MB") {
+            Ok(v) => match v.parse::<u32>() {
+                Ok(n) => Some(n),
+                Err(_) => {
+                    eprintln!(
+                        "warning: GOBY_MAX_MEMORY_MB={:?} is not a valid integer; ignoring",
+                        v
+                    );
+                    None
+                }
+            },
+            Err(_) => None,
+        }
+    })?;
+
+    // 0 means "no user ceiling" → use the default runtime config.
+    if mb == 0 {
+        return None;
+    }
+
+    // Convert MiB to Wasm pages (1 page = 64 KiB).
+    let pages = mb.saturating_mul(1024 * 1024 / WASM_PAGE_BYTES);
+
+    // Warn if the requested ceiling exceeds what the emitted module declares.
+    if pages > RUNTIME_MEMORY_CONFIG.max_pages {
+        eprintln!(
+            "warning: --max-memory-mb {} ({} pages) exceeds the Wasm module's declared maximum \
+             ({} pages = {} MiB); effective ceiling will be the module maximum",
+            mb,
+            pages,
+            RUNTIME_MEMORY_CONFIG.max_pages,
+            RUNTIME_MEMORY_CONFIG.max_pages / (1024 * 1024 / WASM_PAGE_BYTES),
+        );
+    }
+
+    Some(WasmMemoryConfig {
+        max_pages: pages.min(RUNTIME_MEMORY_CONFIG.max_pages),
+        ..RUNTIME_MEMORY_CONFIG
+    })
 }
 
 fn output_wasm_path(input: &str) -> String {
@@ -410,11 +511,22 @@ fn print_parse_summary(declaration_count: usize, file: &str) {
     );
 }
 
-fn execute_wasm(wasm_path: &str) -> Result<ExecutionOutcome, CliError> {
-    let status = match ProcessCommand::new("wasmtime")
-        .arg("run")
-        .arg(wasm_path)
-        .status()
+fn execute_wasm(
+    wasm_path: &str,
+    memory_config: Option<goby_wasm::memory_config::WasmMemoryConfig>,
+) -> Result<ExecutionOutcome, CliError> {
+    let mut cmd = ProcessCommand::new("wasmtime");
+    cmd.arg("run");
+    // Always pass an explicit memory ceiling so file-based execution matches the
+    // runtime-stdin path.  Default to RUNTIME_MEMORY_CONFIG (1 GiB).
+    // wasmtime ≥ 15 uses `-W max-memory-size=<bytes>`.
+    let effective_cfg = memory_config
+        .unwrap_or(goby_wasm::memory_config::RUNTIME_MEMORY_CONFIG);
+    let max_bytes =
+        effective_cfg.max_pages as u64 * goby_wasm::memory_config::WASM_PAGE_BYTES as u64;
+    cmd.arg(format!("-Wmax-memory-size={}", max_bytes));
+    cmd.arg(wasm_path);
+    let status = match cmd.status()
     {
         Ok(status) => status,
         Err(err) if err.kind() == ErrorKind::NotFound => {

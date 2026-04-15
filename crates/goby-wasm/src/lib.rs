@@ -11,7 +11,7 @@ mod grapheme_semantics;
 mod host_runtime;
 mod layout;
 mod lower;
-mod memory_config;
+pub mod memory_config;
 mod planning;
 mod print_codegen;
 mod runtime_apply;
@@ -160,6 +160,20 @@ pub fn execute_runtime_module_with_stdin(
     stdin_seed: Option<String>,
 ) -> Result<Option<String>, CodegenError> {
     execution_plan::execute_runtime_module_with_stdin_entrypoint(module, stdin_seed)
+}
+
+/// Like `execute_runtime_module_with_stdin` but with an explicit memory ceiling.
+/// `memory_config` is passed to the Wasm executor; `None` uses the default (1 GiB).
+pub fn execute_runtime_module_with_stdin_and_config(
+    module: &Module,
+    stdin_seed: Option<String>,
+    memory_config: Option<memory_config::WasmMemoryConfig>,
+) -> Result<Option<String>, CodegenError> {
+    execution_plan::execute_runtime_module_with_stdin_and_config_entrypoint(
+        module,
+        stdin_seed,
+        memory_config,
+    )
 }
 
 pub(crate) struct RuntimeOutputResolver<'m> {

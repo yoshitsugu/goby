@@ -114,14 +114,26 @@ pub(crate) fn execute_runtime_module_with_stdin_entrypoint(
     module: &Module,
     stdin_seed: Option<String>,
 ) -> Result<Option<String>, CodegenError> {
+    execute_runtime_module_with_stdin_and_config_entrypoint(module, stdin_seed, None)
+}
+
+pub(crate) fn execute_runtime_module_with_stdin_and_config_entrypoint(
+    module: &Module,
+    stdin_seed: Option<String>,
+    memory_config: Option<crate::memory_config::WasmMemoryConfig>,
+) -> Result<Option<String>, CodegenError> {
     match runtime_stdin_execution_plan(module)? {
         RuntimeStdinExecutionPlan::GeneralLowered => {
             let wasm = compile_module_entrypoint(module)?;
-            let output = wasm_exec::run_wasm_bytes_with_stdin(&wasm, stdin_seed.as_deref())
-                .map_err(|message| CodegenError { message })?;
+            let output = match memory_config {
+                Some(cfg) => wasm_exec::run_wasm_bytes_with_config(&wasm, stdin_seed.as_deref(), cfg),
+                None => wasm_exec::run_wasm_bytes_with_stdin(&wasm, stdin_seed.as_deref()),
+            }
+            .map_err(|message| CodegenError { message })?;
             Ok(Some(output))
         }
         RuntimeStdinExecutionPlan::InterpreterBridge(context) => {
+            // InterpreterBridge runs in the Rust interpreter; memory_config does not apply.
             execute_interpreter_bridge_with_context(module, context.as_ref(), stdin_seed)
         }
         RuntimeStdinExecutionPlan::UnsupportedWithReason(reason) => Err(CodegenError {

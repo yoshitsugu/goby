@@ -50,7 +50,7 @@ use crate::layout::{
     GLOBAL_HEAP_CURSOR_OFFSET, GLOBAL_HOST_BUMP_CURSOR_OFFSET, GLOBAL_RUNTIME_ERROR_OFFSET,
     RUNTIME_ERROR_MEMORY_EXHAUSTION, RUNTIME_ERROR_NONE,
 };
-use crate::memory_config::{DEFAULT_WASM_MEMORY_CONFIG, WASM_PAGE_BYTES};
+use crate::memory_config::{RUNTIME_MEMORY_CONFIG, WASM_PAGE_BYTES};
 use crate::runtime_env::split_input_lines;
 
 const ERR_MEMORY_EXHAUSTION: &str = "memory exhausted [E-MEMORY-EXHAUSTION]: allocation exceeded the configured Wasm memory limit; consider reducing recursive list-spread construction or other large intermediate allocations";
@@ -64,11 +64,22 @@ const ERR_UNKNOWN_RUNTIME_TRAP: &str = "unknown runtime trap [E-RUNTIME-TRAP]: W
 /// grapheme semantics authority.
 ///
 /// Returns the captured stdout output as a `String`, or an error message.
+/// Execute Wasm bytes with the default runtime memory ceiling (1 GiB).
 pub(crate) fn run_wasm_bytes_with_stdin(
     wasm: &[u8],
     stdin: Option<&str>,
 ) -> Result<String, String> {
-    run_wasm_bytes_with_stdin_and_config(wasm, stdin, DEFAULT_WASM_MEMORY_CONFIG)
+    run_wasm_bytes_with_stdin_and_config(wasm, stdin, RUNTIME_MEMORY_CONFIG)
+}
+
+/// Execute Wasm bytes with an explicit memory config.  Used by the CLI to honour
+/// `--max-memory-mb` / `GOBY_MAX_MEMORY_MB`.
+pub(crate) fn run_wasm_bytes_with_config(
+    wasm: &[u8],
+    stdin: Option<&str>,
+    memory_config: crate::memory_config::WasmMemoryConfig,
+) -> Result<String, String> {
+    run_wasm_bytes_with_stdin_and_config(wasm, stdin, memory_config)
 }
 
 #[cfg(test)]

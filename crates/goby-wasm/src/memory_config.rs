@@ -1,9 +1,9 @@
 use wasm_encoder::MemoryType;
 
-pub(crate) const WASM_PAGE_BYTES: u32 = 65_536;
+pub const WASM_PAGE_BYTES: u32 = 65_536;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct WasmMemoryConfig {
+pub struct WasmMemoryConfig {
     pub initial_pages: u32,
     pub max_pages: u32,
     pub host_bump_reserved_bytes: u32,
@@ -46,7 +46,7 @@ pub(crate) const TEST_MEMORY_CONFIG: WasmMemoryConfig = WasmMemoryConfig {
 /// Runtime config: 1 GiB ceiling used when emitting modules for actual execution.
 /// All modules emitted for `goby run` declare this maximum so the CLI can raise
 /// the effective ceiling up to 1 GiB via `--max-memory-mb` / `GOBY_MAX_MEMORY_MB`.
-pub(crate) const RUNTIME_MEMORY_CONFIG: WasmMemoryConfig = WasmMemoryConfig {
+pub const RUNTIME_MEMORY_CONFIG: WasmMemoryConfig = WasmMemoryConfig {
     initial_pages: 4,
     max_pages: 16_384,
     host_bump_reserved_bytes: 49_152,
