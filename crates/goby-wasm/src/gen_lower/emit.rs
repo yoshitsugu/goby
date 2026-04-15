@@ -426,6 +426,7 @@ struct HeapEmitState {
     scratch: EmitScratchState,
     alloc_cursor_local: u32,
     heap_floor_local: u32,
+    ptr_width: crate::gen_lower::ptr::PtrWidth,
 }
 
 /// Extract scratch state, returning a `CodegenError` if it is absent.
@@ -1631,6 +1632,9 @@ fn emit_instrs_with_heap_depth(
             scratch: scratch_state.expect("heap state requires scratch state"),
             alloc_cursor_local,
             heap_floor_local,
+            ptr_width: crate::gen_lower::ptr::PtrWidth::from_memory64(
+                options.memory_config.memory64,
+            ),
         })
     } else {
         None

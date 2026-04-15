@@ -28,6 +28,7 @@ pub(crate) mod backend_ir;
 pub(crate) mod closure_env;
 pub(crate) mod emit;
 pub(crate) mod lower;
+pub(crate) mod ptr;
 pub(crate) mod value;
 
 use std::collections::{HashMap, HashSet};
