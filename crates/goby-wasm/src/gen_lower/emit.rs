@@ -2922,19 +2922,23 @@ fn emit_update_heap_floor_from_buffer(
     heap_floor_local: u32,
     buffer_ptr: i32,
     nread_offset: i32,
+    pw: PtrWidth,
 ) {
-    function.instruction(&Instruction::I32Const(nread_offset));
-    function.instruction(&Instruction::I32Load(MemArg {
+    function.instruction(&ptr_const(pw, nread_offset as u64));
+    function.instruction(&ptr_load(pw, MemArg {
         offset: 0,
         align: 2,
         memory_index: 0,
     }));
-    function.instruction(&Instruction::I32Const(buffer_ptr + 4));
-    function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Const(7));
-    function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Const(!7));
-    function.instruction(&Instruction::I32And);
+    function.instruction(&ptr_const(pw, (buffer_ptr + 4) as u64));
+    function.instruction(&ptr_add(pw));
+    function.instruction(&ptr_const(pw, 7));
+    function.instruction(&ptr_add(pw));
+    function.instruction(&ptr_const(pw, !7u64));
+    function.instruction(match pw {
+        PtrWidth::W32 => &Instruction::I32And,
+        PtrWidth::W64 => &Instruction::I64And,
+    });
     function.instruction(&Instruction::LocalSet(heap_floor_local));
 }
 
@@ -2943,14 +2947,18 @@ fn emit_update_heap_floor_from_local_len(
     heap_floor_local: u32,
     buffer_ptr: i32,
     len_local: u32,
+    pw: PtrWidth,
 ) {
     function.instruction(&Instruction::LocalGet(len_local));
-    function.instruction(&Instruction::I32Const(buffer_ptr + 4));
-    function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Const(7));
-    function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Const(!7));
-    function.instruction(&Instruction::I32And);
+    function.instruction(&ptr_const(pw, (buffer_ptr + 4) as u64));
+    function.instruction(&ptr_add(pw));
+    function.instruction(&ptr_const(pw, 7));
+    function.instruction(&ptr_add(pw));
+    function.instruction(&ptr_const(pw, !7u64));
+    function.instruction(match pw {
+        PtrWidth::W32 => &Instruction::I32And,
+        PtrWidth::W64 => &Instruction::I64And,
+    });
     function.instruction(&Instruction::LocalSet(heap_floor_local));
 }
 
@@ -3721,49 +3729,60 @@ fn emit_alloc_from_top(
     size_local: u32,
     result_local: u32,
 ) {
+    let pw = helper_state.pw();
     // Always allocate an 8-byte-aligned size so capacity checks and cursor movement
     // consume the same amount of memory.
     function.instruction(&Instruction::LocalGet(size_local));
-    function.instruction(&Instruction::I32Const(7));
-    function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Const(!7));
-    function.instruction(&Instruction::I32And);
+    function.instruction(&ptr_const(pw, 7));
+    function.instruction(&ptr_add(pw));
+    function.instruction(&ptr_const(pw, !7u64));
+    function.instruction(match pw {
+        PtrWidth::W32 => &Instruction::I32And,
+        PtrWidth::W64 => &Instruction::I64And,
+    });
     function.instruction(&Instruction::LocalSet(size_local));
 
     // available = max(alloc_cursor - heap_floor, 0)
     //
-    // Using a raw `i32.sub` here can underflow when cursor < floor and produce a
+    // Using a raw sub here can underflow when cursor < floor and produce a
     // huge unsigned value, which incorrectly skips growth and can drive the
     // cursor to invalid addresses. Guard first, then subtract only when safe.
     function.instruction(&Instruction::LocalGet(helper_state.alloc_cursor_local));
     function.instruction(&Instruction::LocalGet(helper_state.heap_floor_local));
-    function.instruction(&Instruction::I32GeU);
+    function.instruction(match pw {
+        PtrWidth::W32 => &Instruction::I32GeU,
+        PtrWidth::W64 => &Instruction::I64GeU,
+    });
+    let ptr_val_type = match pw {
+        PtrWidth::W32 => ValType::I32,
+        PtrWidth::W64 => ValType::I64,
+    };
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
-        ValType::I32,
+        ptr_val_type,
     )));
     function.instruction(&Instruction::LocalGet(helper_state.alloc_cursor_local));
     function.instruction(&Instruction::LocalGet(helper_state.heap_floor_local));
-    function.instruction(&Instruction::I32Sub);
+    function.instruction(&ptr_sub(pw));
     function.instruction(&Instruction::Else);
-    function.instruction(&Instruction::I32Const(0));
+    function.instruction(&ptr_const(pw, 0));
     function.instruction(&Instruction::End);
     function.instruction(&Instruction::LocalTee(result_local));
     function.instruction(&Instruction::LocalGet(size_local));
-    function.instruction(&Instruction::I32LtU);
+    function.instruction(&ptr_lt_u(pw));
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
     // `result_local` currently holds available bytes between the top-down cursor
     // and the heap floor. Grow by the extra bytes required for this allocation.
     function.instruction(&Instruction::LocalGet(size_local));
     function.instruction(&Instruction::LocalGet(result_local));
-    function.instruction(&Instruction::I32Sub);
-    function.instruction(&Instruction::I32Const((WASM_PAGE_BYTES - 1) as i32));
-    function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Const(WASM_PAGE_BYTES as i32));
-    function.instruction(&Instruction::I32DivU);
+    function.instruction(&ptr_sub(pw));
+    function.instruction(&ptr_const(pw, (WASM_PAGE_BYTES - 1) as u64));
+    function.instruction(&ptr_add(pw));
+    function.instruction(&ptr_const(pw, WASM_PAGE_BYTES as u64));
+    function.instruction(&ptr_div_u(pw));
     function.instruction(&Instruction::MemoryGrow(0));
     function.instruction(&Instruction::LocalTee(result_local)); // old page count
-    function.instruction(&Instruction::I32Const(-1));
-    function.instruction(&Instruction::I32Eq);
+    function.instruction(&ptr_neg_one(pw));
+    function.instruction(&ptr_eq(pw));
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
     emit_memory_exhaustion_abort(function, helper_state);
     function.instruction(&Instruction::End);
@@ -3771,16 +3790,14 @@ fn emit_alloc_from_top(
     // Move the floor up to the previous top so older allocations are never
     // re-entered after a grow.
     function.instruction(&Instruction::LocalGet(result_local));
-    function.instruction(&Instruction::I32Const(WASM_PAGE_BYTES as i32));
-    function.instruction(&Instruction::I32Mul);
-    function.instruction(&Instruction::I32Const(HOST_BUMP_RESERVED_BYTES as i32));
-    function.instruction(&Instruction::I32Sub);
+    function.instruction(&ptr_const(pw, WASM_PAGE_BYTES as u64));
+    function.instruction(&ptr_mul(pw));
+    function.instruction(&ptr_const(pw, HOST_BUMP_RESERVED_BYTES as u64));
+    function.instruction(&ptr_sub(pw));
     function.instruction(&Instruction::LocalSet(helper_state.heap_floor_local));
     // If host bump already advanced beyond this floor, keep floor at host cursor.
-    function.instruction(&Instruction::I32Const(
-        GLOBAL_HOST_BUMP_CURSOR_OFFSET as i32,
-    ));
-    function.instruction(&Instruction::I32Load(MemArg {
+    function.instruction(&ptr_const(pw, GLOBAL_HOST_BUMP_CURSOR_OFFSET as u64));
+    function.instruction(&ptr_load(pw, MemArg {
         offset: 0,
         align: 2,
         memory_index: 0,
@@ -3788,7 +3805,7 @@ fn emit_alloc_from_top(
     function.instruction(&Instruction::LocalSet(result_local));
     function.instruction(&Instruction::LocalGet(helper_state.heap_floor_local));
     function.instruction(&Instruction::LocalGet(result_local));
-    function.instruction(&Instruction::I32LtU);
+    function.instruction(&ptr_lt_u(pw));
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
     function.instruction(&Instruction::LocalGet(result_local));
     function.instruction(&Instruction::LocalSet(helper_state.heap_floor_local));
@@ -3801,15 +3818,15 @@ fn emit_alloc_from_top(
     // already-allocated regions. Pairing this with the floor update above keeps
     // each grown segment disjoint.
     function.instruction(&Instruction::MemorySize(0));
-    function.instruction(&Instruction::I32Const(WASM_PAGE_BYTES as i32));
-    function.instruction(&Instruction::I32Mul);
-    function.instruction(&Instruction::I32Const(HOST_BUMP_RESERVED_BYTES as i32));
-    function.instruction(&Instruction::I32Sub);
+    function.instruction(&ptr_const(pw, WASM_PAGE_BYTES as u64));
+    function.instruction(&ptr_mul(pw));
+    function.instruction(&ptr_const(pw, HOST_BUMP_RESERVED_BYTES as u64));
+    function.instruction(&ptr_sub(pw));
     function.instruction(&Instruction::LocalSet(helper_state.alloc_cursor_local));
     function.instruction(&Instruction::End);
     function.instruction(&Instruction::LocalGet(helper_state.alloc_cursor_local));
     function.instruction(&Instruction::LocalGet(size_local));
-    function.instruction(&Instruction::I32Sub);
+    function.instruction(&ptr_sub(pw));
     function.instruction(&Instruction::LocalTee(result_local));
     function.instruction(&Instruction::LocalSet(helper_state.alloc_cursor_local));
 }
@@ -6277,6 +6294,7 @@ fn emit_effect_op_wb3_direct(
                     helper_state.heap_floor_local,
                     buffer_ptr,
                     nread_offset,
+                    helper_state.pw(),
                 );
             }
 
@@ -6380,6 +6398,7 @@ fn emit_effect_op_wb3_direct(
                     helper_state.heap_floor_local,
                     buffer_ptr,
                     scan_idx_local,
+                    helper_state.pw(),
                 );
             }
 
@@ -7463,11 +7482,10 @@ fn emit_abort(function: &mut Function) {
 }
 
 fn emit_memory_exhaustion_abort(function: &mut Function, helper_state: &HeapEmitState) {
-    function.instruction(&Instruction::I32Const(GLOBAL_RUNTIME_ERROR_OFFSET as i32));
-    function.instruction(&Instruction::I32Const(
-        RUNTIME_ERROR_MEMORY_EXHAUSTION as i32,
-    ));
-    function.instruction(&Instruction::I32Store(MemArg {
+    let pw = helper_state.pw();
+    function.instruction(&ptr_const(pw, GLOBAL_RUNTIME_ERROR_OFFSET as u64));
+    function.instruction(&ptr_const(pw, RUNTIME_ERROR_MEMORY_EXHAUSTION as u64));
+    function.instruction(&ptr_store(pw, MemArg {
         offset: 0,
         align: 2,
         memory_index: 0,
