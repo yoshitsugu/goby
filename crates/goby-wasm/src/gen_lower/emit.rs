@@ -7936,9 +7936,9 @@ mod tests {
         .expect("low-max emit should still produce a module");
         let err = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
             .expect_err("heap growth beyond the configured maximum should fail");
-        assert_eq!(
-            err,
-            "runtime error: memory exhausted [E-MEMORY-EXHAUSTION]: allocation exceeded the configured Wasm memory limit; consider reducing recursive list-spread construction or other large intermediate allocations"
+        assert!(
+            err.starts_with("runtime error: memory exhausted [E-MEMORY-EXHAUSTION]:"),
+            "expected OOM error message, got: {err:?}"
         );
     }
 

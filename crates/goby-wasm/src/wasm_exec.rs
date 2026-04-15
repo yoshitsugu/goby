@@ -226,14 +226,14 @@ fn run_wasm_bytes_with_stdin_and_config(
     match start.call(&mut store, ()) {
         Ok(()) => {
             if let Some(runtime_err) = take_runtime_error(&mut store, &instance) {
-                return Err(format!("runtime error: {runtime_err}"));
+                return Err(format_runtime_error_with_config(&runtime_err, memory_config));
             }
         }
         Err(e) => {
             if let Some(runtime_err) = take_runtime_error(&mut store, &instance) {
-                return Err(format!("runtime error: {runtime_err}"));
+                return Err(format_runtime_error_with_config(&runtime_err, memory_config));
             }
-            return Err(classify_execution_error(&e));
+            return Err(classify_execution_error(&e, memory_config));
         }
     }
 
@@ -578,9 +578,34 @@ fn runtime_error_message(code: u32) -> Option<&'static str> {
     }
 }
 
-fn classify_execution_error(error: &wasmtime::Error) -> String {
+fn oom_ceiling_suffix(memory_config: crate::memory_config::WasmMemoryConfig) -> String {
+    let mb = memory_config.max_linear_memory_bytes() / (1024 * 1024);
+    format!(" (configured ceiling: {} MiB; use --max-memory-mb to raise it)", mb)
+}
+
+fn format_runtime_error_with_config(
+    runtime_err: &str,
+    memory_config: crate::memory_config::WasmMemoryConfig,
+) -> String {
+    if runtime_err.contains("E-MEMORY-EXHAUSTION") {
+        return format!(
+            "runtime error: {}{}",
+            runtime_err,
+            oom_ceiling_suffix(memory_config)
+        );
+    }
+    format!("runtime error: {runtime_err}")
+}
+
+fn classify_execution_error(
+    error: &wasmtime::Error,
+    memory_config: crate::memory_config::WasmMemoryConfig,
+) -> String {
     if is_memory_exhaustion_trap(error) {
-        return format!("runtime error: {ERR_MEMORY_EXHAUSTION}");
+        return format!(
+            "runtime error: {ERR_MEMORY_EXHAUSTION}{}",
+            oom_ceiling_suffix(memory_config)
+        );
     }
     if is_likely_stack_pressure_trap(error) {
         return format!("runtime error: {ERR_LIKELY_STACK_PRESSURE}");
@@ -1224,14 +1249,17 @@ main =
         let wasm = build_string_concat_growth_wasm(low_max);
         let err = run_wasm_bytes_with_stdin_and_config(&wasm, None, low_max)
             .expect_err("bounded host growth should surface a runtime error");
-        assert_eq!(err, format!("runtime error: {ERR_MEMORY_EXHAUSTION}"));
+        assert!(
+            err.starts_with(&format!("runtime error: {ERR_MEMORY_EXHAUSTION}")),
+            "expected OOM message, got: {err:?}"
+        );
     }
 
     #[test]
     fn classify_execution_error_reports_likely_stack_pressure_when_engine_mentions_stack() {
         let err = wasmtime::Error::msg("wasm trap: call stack exhausted");
         assert_eq!(
-            classify_execution_error(&err),
+            classify_execution_error(&err, TEST_MEMORY_CONFIG),
             format!("runtime error: {ERR_LIKELY_STACK_PRESSURE}")
         );
     }
