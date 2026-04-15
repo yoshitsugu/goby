@@ -921,6 +921,7 @@ fn read_wasm_string(caller: &mut Caller<'_, WasiP1Ctx>, tagged: i64) -> Result<S
 mod tests {
     use super::*;
     use crate::layout::GLOBAL_HEAP_CURSOR_OFFSET;
+    use crate::memory_config::TEST_MEMORY_CONFIG;
     use wasm_encoder::{
         CodeSection, ConstExpr, DataSection, EntityType, ExportKind, ExportSection, Function,
         FunctionSection, ImportSection, Instruction, MemArg, MemorySection, Module, TypeSection,
@@ -1189,7 +1190,7 @@ main =
 
     #[test]
     fn host_string_concat_grows_linear_memory_past_initial_pages() {
-        let wasm = build_string_concat_growth_wasm(DEFAULT_WASM_MEMORY_CONFIG);
+        let wasm = build_string_concat_growth_wasm(TEST_MEMORY_CONFIG);
         Validator::new()
             .validate_all(&wasm)
             .expect("handcrafted concat-growth module should validate");
@@ -1204,10 +1205,10 @@ main =
     #[test]
     fn host_string_concat_reports_runtime_error_when_growth_hits_maximum() {
         let low_max = crate::memory_config::WasmMemoryConfig {
-            initial_pages: DEFAULT_WASM_MEMORY_CONFIG.initial_pages,
-            max_pages: DEFAULT_WASM_MEMORY_CONFIG.initial_pages,
-            host_bump_reserved_bytes: DEFAULT_WASM_MEMORY_CONFIG.host_bump_reserved_bytes,
-            max_wasm_stack_bytes: DEFAULT_WASM_MEMORY_CONFIG.max_wasm_stack_bytes,
+            initial_pages: TEST_MEMORY_CONFIG.initial_pages,
+            max_pages: TEST_MEMORY_CONFIG.initial_pages,
+            host_bump_reserved_bytes: TEST_MEMORY_CONFIG.host_bump_reserved_bytes,
+            max_wasm_stack_bytes: TEST_MEMORY_CONFIG.max_wasm_stack_bytes,
         };
         let wasm = build_string_concat_growth_wasm(low_max);
         let err = run_wasm_bytes_with_stdin_and_config(&wasm, None, low_max)
@@ -1238,7 +1239,7 @@ main =
         module.section(&functions);
 
         let mut memories = MemorySection::new();
-        memories.memory(DEFAULT_WASM_MEMORY_CONFIG.memory_type());
+        memories.memory(TEST_MEMORY_CONFIG.memory_type());
         module.section(&memories);
 
         let mut exports = ExportSection::new();

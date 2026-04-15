@@ -30,10 +30,14 @@ use crate::layout::{
     GLOBAL_HEAP_CURSOR_OFFSET, GLOBAL_HEAP_FLOOR_OFFSET, GLOBAL_HOST_BUMP_CURSOR_OFFSET,
     GLOBAL_RUNTIME_ERROR_OFFSET, MemoryLayout, RUNTIME_ERROR_MEMORY_EXHAUSTION,
 };
-use crate::memory_config::{DEFAULT_WASM_MEMORY_CONFIG, WASM_PAGE_BYTES};
+use crate::memory_config::{RUNTIME_MEMORY_CONFIG, WASM_PAGE_BYTES};
+#[cfg(test)]
+use crate::memory_config::TEST_MEMORY_CONFIG;
 
+// STATIC_STRING_LIMIT uses initial_linear_memory_bytes(), which depends only on
+// initial_pages (= 4 in both TEST and RUNTIME configs, invariant by design).
 const STATIC_STRING_LIMIT: u32 =
-    DEFAULT_WASM_MEMORY_CONFIG.initial_linear_memory_bytes() - HOST_BUMP_RESERVED_BYTES;
+    RUNTIME_MEMORY_CONFIG.initial_linear_memory_bytes() - HOST_BUMP_RESERVED_BYTES;
 
 // Import function indices begin with the WASI pair and may be extended with
 // `goby-wasm` owned grapheme host intrinsics.
@@ -960,7 +964,7 @@ impl Default for EmitOptions {
     fn default() -> Self {
         Self {
             effect_emit_strategy: default_effect_emit_strategy(),
-            memory_config: DEFAULT_WASM_MEMORY_CONFIG,
+            memory_config: RUNTIME_MEMORY_CONFIG,
         }
     }
 }
@@ -7751,7 +7755,7 @@ mod tests {
             &default_layout(),
             EmitOptions {
                 effect_emit_strategy: EffectEmitStrategy::Wb3DirectCall,
-                memory_config: DEFAULT_WASM_MEMORY_CONFIG,
+                memory_config: TEST_MEMORY_CONFIG,
             },
         )
         .expect("direct emit should succeed");
@@ -7761,7 +7765,7 @@ mod tests {
             &default_layout(),
             EmitOptions {
                 effect_emit_strategy: EffectEmitStrategy::Wb3BWasmFxExperimental,
-                memory_config: DEFAULT_WASM_MEMORY_CONFIG,
+                memory_config: TEST_MEMORY_CONFIG,
             },
         )
         .expect("experimental wasmfx emit should succeed");
@@ -7922,10 +7926,10 @@ mod tests {
             EmitOptions {
                 effect_emit_strategy: EffectEmitStrategy::Wb3DirectCall,
                 memory_config: crate::memory_config::WasmMemoryConfig {
-                    initial_pages: DEFAULT_WASM_MEMORY_CONFIG.initial_pages,
-                    max_pages: DEFAULT_WASM_MEMORY_CONFIG.initial_pages,
-                    host_bump_reserved_bytes: DEFAULT_WASM_MEMORY_CONFIG.host_bump_reserved_bytes,
-                    max_wasm_stack_bytes: DEFAULT_WASM_MEMORY_CONFIG.max_wasm_stack_bytes,
+                    initial_pages: TEST_MEMORY_CONFIG.initial_pages,
+                    max_pages: TEST_MEMORY_CONFIG.initial_pages,
+                    host_bump_reserved_bytes: TEST_MEMORY_CONFIG.host_bump_reserved_bytes,
+                    max_wasm_stack_bytes: TEST_MEMORY_CONFIG.max_wasm_stack_bytes,
                 },
             },
         )

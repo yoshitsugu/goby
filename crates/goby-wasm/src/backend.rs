@@ -7,7 +7,7 @@ use wasm_encoder::{
 use crate::{
     CodegenError,
     layout::MemoryLayout,
-    memory_config::DEFAULT_WASM_MEMORY_CONFIG,
+    memory_config::RUNTIME_MEMORY_CONFIG,
     runtime_io_plan::{OutputReadMode, StaticPrintSuffix},
 };
 
@@ -73,7 +73,7 @@ impl WasmProgramBuilder {
         module.section(&functions);
 
         let mut memories = MemorySection::new();
-        memories.memory(DEFAULT_WASM_MEMORY_CONFIG.memory_type());
+        memories.memory(RUNTIME_MEMORY_CONFIG.memory_type());
         module.section(&memories);
 
         let mut exports = ExportSection::new();
@@ -314,7 +314,7 @@ impl WasmProgramBuilder {
             })?;
         let buffer_len = i32::try_from(
             usize::try_from(
-                DEFAULT_WASM_MEMORY_CONFIG.initial_linear_memory_bytes() - self.layout.heap_base,
+                RUNTIME_MEMORY_CONFIG.initial_linear_memory_bytes() - self.layout.heap_base,
             )
             .map_err(|_| CodegenError {
                 message: "stdin buffer length does not fit in usize".to_string(),
@@ -328,7 +328,7 @@ impl WasmProgramBuilder {
             message: "stdin buffer length does not fit in i32".to_string(),
         })?;
         let suffix_payload_base =
-            usize::try_from(DEFAULT_WASM_MEMORY_CONFIG.initial_linear_memory_bytes())
+            usize::try_from(RUNTIME_MEMORY_CONFIG.initial_linear_memory_bytes())
                 .map_err(|_| CodegenError {
                     message: "initial wasm memory size does not fit in usize".to_string(),
                 })?
@@ -369,7 +369,7 @@ impl WasmProgramBuilder {
         module.section(&functions);
 
         let mut memories = MemorySection::new();
-        memories.memory(DEFAULT_WASM_MEMORY_CONFIG.memory_type());
+        memories.memory(RUNTIME_MEMORY_CONFIG.memory_type());
         module.section(&memories);
 
         let mut exports = ExportSection::new();
@@ -663,7 +663,7 @@ impl WasmProgramBuilder {
             })?;
         let buffer_len = i32::try_from(
             usize::try_from(
-                DEFAULT_WASM_MEMORY_CONFIG.initial_linear_memory_bytes() - self.layout.heap_base,
+                RUNTIME_MEMORY_CONFIG.initial_linear_memory_bytes() - self.layout.heap_base,
             )
             .map_err(|_| CodegenError {
                 message: "stdin buffer length does not fit in usize".to_string(),
@@ -679,7 +679,7 @@ impl WasmProgramBuilder {
         let newline_ptr = i32::try_from(self.layout.heap_base - 1).map_err(|_| CodegenError {
             message: "newline pointer does not fit in i32".to_string(),
         })?;
-        let suffix_base = usize::try_from(DEFAULT_WASM_MEMORY_CONFIG.initial_linear_memory_bytes())
+        let suffix_base = usize::try_from(RUNTIME_MEMORY_CONFIG.initial_linear_memory_bytes())
             .map_err(|_| CodegenError {
                 message: "initial wasm memory size does not fit in usize".to_string(),
             })?
@@ -738,7 +738,7 @@ impl WasmProgramBuilder {
         module.section(&functions);
 
         let mut memories = MemorySection::new();
-        memories.memory(DEFAULT_WASM_MEMORY_CONFIG.memory_type());
+        memories.memory(RUNTIME_MEMORY_CONFIG.memory_type());
         module.section(&memories);
 
         let mut exports = ExportSection::new();

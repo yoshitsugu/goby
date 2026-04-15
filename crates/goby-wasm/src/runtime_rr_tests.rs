@@ -1,6 +1,6 @@
 use goby_core::parse_module;
 
-use crate::memory_config::DEFAULT_WASM_MEMORY_CONFIG;
+use crate::memory_config::TEST_MEMORY_CONFIG;
 use crate::wasm_exec::run_wasm_bytes_with_stdin_for_tests;
 use crate::{
     RuntimeIoExecutionKind, compile_module, execute_runtime_module_with_stdin,
@@ -523,7 +523,7 @@ main =
 fn rr_tight_stack_config() -> crate::memory_config::WasmMemoryConfig {
     crate::memory_config::WasmMemoryConfig {
         max_wasm_stack_bytes: 64 * 1024,
-        ..DEFAULT_WASM_MEMORY_CONFIG
+        ..TEST_MEMORY_CONFIG
     }
 }
 
@@ -555,7 +555,7 @@ fn measure_wasm_exec_micros(
         match run_wasm_bytes_with_stdin_for_tests(
             wasm,
             Some(stdin_seed),
-            DEFAULT_WASM_MEMORY_CONFIG,
+            TEST_MEMORY_CONFIG,
         ) {
             Ok(text) => {
                 ok_runs += 1;
@@ -573,7 +573,7 @@ fn measure_wasm_exec_micros(
         match run_wasm_bytes_with_stdin_for_tests(
             wasm,
             Some(stdin_seed),
-            DEFAULT_WASM_MEMORY_CONFIG,
+            TEST_MEMORY_CONFIG,
         ) {
             Ok(text) => {
                 ok_runs += 1;
@@ -1638,7 +1638,7 @@ main =
     let aoc_style_output = run_wasm_bytes_with_stdin_for_tests(
         &aoc_style_wasm,
         Some(aoc_stdin),
-        DEFAULT_WASM_MEMORY_CONFIG,
+        TEST_MEMORY_CONFIG,
     )
     .expect("AoC-style baseline should execute");
     assert!(
