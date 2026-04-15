@@ -3838,7 +3838,9 @@ fn emit_chunked_list_item_store(
     item_ptr_local: u32,
     chunk_idx_local: u32,
     item_idx_local: u32,
+    pw: PtrWidth,
 ) {
+    // chunk/item index arithmetic is value (i32), not address
     function.instruction(&Instruction::LocalGet(item_count_local));
     function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32));
     function.instruction(&Instruction::I32DivU);
@@ -3848,12 +3850,13 @@ fn emit_chunked_list_item_store(
     function.instruction(&Instruction::I32RemU);
     function.instruction(&Instruction::LocalSet(item_idx_local));
 
+    // Load chunk pointer (address) from header — ptr_load
     function.instruction(&Instruction::LocalGet(header_ptr_local));
     function.instruction(&Instruction::LocalGet(chunk_idx_local));
     function.instruction(&Instruction::I32Const(4));
     function.instruction(&Instruction::I32Mul);
     function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Load(MemArg {
+    function.instruction(&ptr_load(pw, MemArg {
         offset: header_chunk_ptr_offset(0) as u64,
         align: 2,
         memory_index: 0,
@@ -3869,12 +3872,13 @@ fn emit_chunked_list_item_store(
         memory_index: 0,
     }));
 
+    // Update chunk item_count — ptr_load + ptr_store
     function.instruction(&Instruction::LocalGet(header_ptr_local));
     function.instruction(&Instruction::LocalGet(chunk_idx_local));
     function.instruction(&Instruction::I32Const(4));
     function.instruction(&Instruction::I32Mul);
     function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Load(MemArg {
+    function.instruction(&ptr_load(pw, MemArg {
         offset: header_chunk_ptr_offset(0) as u64,
         align: 2,
         memory_index: 0,
@@ -3882,7 +3886,7 @@ fn emit_chunked_list_item_store(
     function.instruction(&Instruction::LocalGet(item_idx_local));
     function.instruction(&Instruction::I32Const(1));
     function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Store(MemArg {
+    function.instruction(&ptr_store(pw, MemArg {
         offset: 0,
         align: 2,
         memory_index: 0,
@@ -4152,6 +4156,7 @@ fn emit_string_split_helper(
         s_aux_ptr,
         s_iter,
         s_alloc_size,
+        helper_state.pw(),
     );
     function.instruction(&Instruction::LocalGet(s_item_count));
     function.instruction(&Instruction::I32Const(1));
@@ -4189,6 +4194,7 @@ fn emit_string_split_helper(
         s_aux_ptr,
         s_iter,
         s_alloc_size,
+        helper_state.pw(),
     );
     function.instruction(&Instruction::LocalGet(s_item_count));
     function.instruction(&Instruction::I32Const(1));
@@ -4364,15 +4370,16 @@ fn emit_chunked_load(
     s_chunk_idx: u32,
     s_item_idx: u32,
     s_chunk_ptr: u32,
+    pw: PtrWidth,
 ) {
-    // chunk_idx = index / CHUNK_SIZE
+    // chunk_idx = index / CHUNK_SIZE  (i32 value arithmetic — not address)
     // CHUNK_SIZE is a locked power-of-two (32), so use shift instead of div.
     function.instruction(&Instruction::LocalGet(index_local));
     function.instruction(&Instruction::I32Const(CHUNK_SIZE.trailing_zeros() as i32));
     function.instruction(&Instruction::I32ShrU);
     function.instruction(&Instruction::LocalSet(s_chunk_idx));
 
-    // item_idx = index % CHUNK_SIZE
+    // item_idx = index % CHUNK_SIZE  (i32 value arithmetic — not address)
     // CHUNK_SIZE is a locked power-of-two (32), so use mask instead of rem.
     function.instruction(&Instruction::LocalGet(index_local));
     function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32 - 1));
@@ -4380,19 +4387,22 @@ fn emit_chunked_load(
     function.instruction(&Instruction::LocalSet(s_item_idx));
 
     // chunk_ptr = header[8 + chunk_idx * 4]  (header_chunk_ptr_offset)
+    // The chunk_idx*4 part is i32 value arithmetic; the I32Add/I32Mul here advance
+    // into the header's chunk-pointer table, so result is an address → ptr_load.
     function.instruction(&Instruction::LocalGet(header_ptr_local));
     function.instruction(&Instruction::LocalGet(s_chunk_idx));
     function.instruction(&Instruction::I32Const(4));
     function.instruction(&Instruction::I32Mul);
     function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Load(MemArg {
+    function.instruction(&ptr_load(pw, MemArg {
         offset: header_chunk_ptr_offset(0) as u64, // base offset 8; chunk_idx*4 added above
         align: 2,
         memory_index: 0,
     }));
     function.instruction(&Instruction::LocalSet(s_chunk_ptr));
 
-    // item = chunk[4 + item_idx * 8]  (chunk_item_offset)
+    // item = chunk[4 + item_idx * 8]  (chunk_item_offset)  — tagged i64 value
+    // item_idx*8 is value arithmetic; base load is a tagged i64 (not pointer), keep I64Load.
     function.instruction(&Instruction::LocalGet(s_chunk_ptr));
     function.instruction(&Instruction::LocalGet(s_item_idx));
     function.instruction(&Instruction::I32Const(8));
@@ -4408,11 +4418,11 @@ fn emit_chunked_load(
 /// Emit Wasm that loads one tagged i64 item from `header_ptr_local` at a
 /// compile-time constant logical index.
 #[inline]
-fn emit_chunked_load_const(function: &mut Function, header_ptr_local: u32, logical_index: u32) {
+fn emit_chunked_load_const(function: &mut Function, header_ptr_local: u32, logical_index: u32, pw: PtrWidth) {
     let chunk_idx = logical_index / CHUNK_SIZE;
     let item_idx = logical_index % CHUNK_SIZE;
     function.instruction(&Instruction::LocalGet(header_ptr_local));
-    function.instruction(&Instruction::I32Load(MemArg {
+    function.instruction(&ptr_load(pw, MemArg {
         offset: header_chunk_ptr_offset(chunk_idx) as u64,
         align: 2,
         memory_index: 0,
@@ -4524,6 +4534,7 @@ fn emit_case_bind_tail_list(
         s_list_len,
         s_chunk_ptr,
         s_load_chunk_ptr,
+        hs.pw(),
     ); // val on stack (i64)
 
     let val_i64 = hs.scratch.i64_base;
@@ -4652,28 +4663,29 @@ fn emit_chunked_store_address(
     s_chunk_idx: u32,
     s_item_idx: u32,
     s_chunk_ptr: u32,
+    pw: PtrWidth,
 ) {
-    // chunk_idx = index / CHUNK_SIZE
+    // chunk_idx = index / CHUNK_SIZE  (i32 value arithmetic)
     // CHUNK_SIZE is a locked power-of-two (32), so use shift instead of div.
     function.instruction(&Instruction::LocalGet(index_local));
     function.instruction(&Instruction::I32Const(CHUNK_SIZE.trailing_zeros() as i32));
     function.instruction(&Instruction::I32ShrU);
     function.instruction(&Instruction::LocalSet(s_chunk_idx));
 
-    // item_idx = index % CHUNK_SIZE
+    // item_idx = index % CHUNK_SIZE  (i32 value arithmetic)
     // CHUNK_SIZE is a locked power-of-two (32), so use mask instead of rem.
     function.instruction(&Instruction::LocalGet(index_local));
     function.instruction(&Instruction::I32Const(CHUNK_SIZE as i32 - 1));
     function.instruction(&Instruction::I32And);
     function.instruction(&Instruction::LocalSet(s_item_idx));
 
-    // chunk_ptr = header[8 + chunk_idx * 4]
+    // chunk_ptr = header[8 + chunk_idx * 4]  — ptr_load for address slot
     function.instruction(&Instruction::LocalGet(header_ptr_local));
     function.instruction(&Instruction::LocalGet(s_chunk_idx));
     function.instruction(&Instruction::I32Const(4));
     function.instruction(&Instruction::I32Mul);
     function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Load(MemArg {
+    function.instruction(&ptr_load(pw, MemArg {
         offset: header_chunk_ptr_offset(0) as u64,
         align: 2,
         memory_index: 0,
@@ -7393,7 +7405,8 @@ fn emit_case_match(
                     match item {
                         BackendListPatternItem::Bind(name) => {
                             let name_local = ctx.get(name)?;
-                            emit_chunked_load_const(function, s_list_ptr, logical_i);
+                            let pw = PtrWidth::from_memory64(options.memory_config.memory64);
+                            emit_chunked_load_const(function, s_list_ptr, logical_i, pw);
                             function.instruction(&Instruction::LocalSet(name_local));
                         }
                         BackendListPatternItem::IntLit(n) => {
@@ -7404,7 +7417,8 @@ fn emit_case_match(
                                     ),
                                 }
                             })?;
-                            emit_chunked_load_const(function, s_list_ptr, logical_i);
+                            let pw = PtrWidth::from_memory64(options.memory_config.memory64);
+                            emit_chunked_load_const(function, s_list_ptr, logical_i, pw);
                             function.instruction(&Instruction::I64Const(encoded));
                             function.instruction(&Instruction::I64Ne);
                             function.instruction(&Instruction::BrIf(0)); // exit if_len
