@@ -22,9 +22,16 @@ M1 (in-place lowering) is complete as of 2026-04-14.
 - M3.3: Host-refusal semantics validated via existing OOM tests; decision recorded in `doc/PLAN.md` §3.2: `--max-memory-mb=0` must translate to finite `RUNTIME_MEMORY_CONFIG` ceiling until `StoreLimits` is wired (deferred to M4)
 - M3.4: Address-site inventory committed as `doc/PLAN_LIST_FIX_M4_SITES.md`
 
-**Next: M4 — Full emitter migration to memory64**
+**M4 in progress:**
+- M4.1 (ptr.rs helpers) + M4.1b (i64 scratch locals): complete
+- M4.2.0 (HeapEmitState.pw() shorthand): complete
+- M4.2.1 (backend.rs): excluded — all I32Load/Store are WASI Preview 1 iovec (always i32)
+- M4.2.2 (emit_chunked_* in emit_instrs): complete
+- M4.2.3 (all remaining I32Load*/I32Store* in emit.rs): complete — 0 I32Load/I32Store remain
 
-Current state: all cargo tests green; M3 exit criteria met.
+Next: M4.3 (address-typed I32Const → ptr_const), M4.4 (I32Add/Sub on addresses), M4.5 (MemoryGrow/MemorySize), M4.6 (flip memory64 default)
+
+Current state: all cargo tests green; M4.2 exit criteria met.
 
 ## Architecture State
 

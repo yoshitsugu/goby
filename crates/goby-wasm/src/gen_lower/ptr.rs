@@ -98,6 +98,14 @@ pub(crate) fn ptr_div_u(pw: PtrWidth) -> Instruction<'static> {
     }
 }
 
+/// Store a byte value to linear memory (address is pointer-width; value is i32 regardless).
+pub(crate) fn ptr_store_8(pw: PtrWidth, mem_arg: MemArg) -> Instruction<'static> {
+    match pw {
+        PtrWidth::W32 => Instruction::I32Store8(mem_arg),
+        PtrWidth::W64 => Instruction::I64Store8(mem_arg),
+    }
+}
+
 /// Equality comparison: produces an i32 boolean (0 or 1) in both modes.
 pub(crate) fn ptr_eq(pw: PtrWidth) -> Instruction<'static> {
     match pw {

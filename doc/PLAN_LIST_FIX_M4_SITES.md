@@ -125,7 +125,7 @@ preserved as-is after M4.
 
 ## Checklist status
 
-- [ ] A: I32Load*/I32Store* → ptr_load/ptr_store
+- [x] A: I32Load*/I32Store* → ptr_load/ptr_store
 - [ ] B: Address-typed I32Const → ptr_const
 - [ ] C: Address-arithmetic I32Add/Sub → ptr_add/ptr_sub
 - [ ] D: MemoryGrow/MemorySize → i64 operand/result
