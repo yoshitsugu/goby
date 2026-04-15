@@ -7,8 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
 use goby_core::closure_capture::{
     BindingRepr, CallableEnv, CallableEnvSlotKind, ClosureBindingEnv,
-    analyze_lambda_callable_env_for_params, binding_repr_for_let_mut,
-    has_mutable_write_capture_of,
+    analyze_lambda_callable_env_for_params, binding_repr_for_let_mut, has_mutable_write_capture_of,
 };
 use goby_core::ir::{CompExpr, IrBinOp, IrInterpPart, ValueExpr};
 
@@ -822,9 +821,8 @@ fn lower_supported_inline_list_fold_mutating_each(
     let mut body_aliases: HashMap<String, AliasValue> = HashMap::new();
     let mut preamble: Vec<WasmBackendInstr> = Vec::new();
 
-    let mut cb_bindings = ClosureBindingEnv::with_decl_params(
-        param_names.iter().map(|s| s.as_str()),
-    );
+    let mut cb_bindings =
+        ClosureBindingEnv::with_decl_params(param_names.iter().map(|s| s.as_str()));
 
     for (slot_index, slot) in cb_env.slots.iter().enumerate() {
         match slot.slot_kind {
@@ -850,9 +848,7 @@ fn lower_supported_inline_list_fold_mutating_each(
                     closure_local: CLO_LOCAL.to_string(),
                     slot_index,
                 });
-                preamble.push(WasmBackendInstr::StoreLocal {
-                    name: cell_local,
-                });
+                preamble.push(WasmBackendInstr::StoreLocal { name: cell_local });
                 body_aliases.insert(slot.name.clone(), AliasValue::CellPromoted);
                 cb_bindings.bind_outer_mutable(slot.name.clone());
             }
@@ -975,9 +971,7 @@ fn lower_supported_inline_list_fold_mutating_each(
     if capture_count > 0 {
         // Build CreateClosure: func_handle_instrs = [PushFuncHandle(cb_name)],
         // slot_instrs = one entry per captured slot.
-        let func_handle_instrs = vec![WasmBackendInstr::PushFuncHandle {
-            decl_name: cb_name,
-        }];
+        let func_handle_instrs = vec![WasmBackendInstr::PushFuncHandle { decl_name: cb_name }];
         let slot_instrs: Vec<Vec<WasmBackendInstr>> = cb_env
             .slots
             .iter()
@@ -988,11 +982,11 @@ fn lower_supported_inline_list_fold_mutating_each(
                     bindings,
                     known_decls,
                 ),
-                CallableEnvSlotKind::SharedMutableCell { .. } => Ok(vec![
-                    WasmBackendInstr::LoadLocal {
+                CallableEnvSlotKind::SharedMutableCell { .. } => {
+                    Ok(vec![WasmBackendInstr::LoadLocal {
                         name: cell_local_name(&slot.name),
-                    },
-                ]),
+                    }])
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
         instrs.push(WasmBackendInstr::CreateClosure {
@@ -1089,12 +1083,8 @@ fn lower_list_each_mutating_assign(
     let depth = path.len();
 
     let cb_params = vec![outer_acc.clone(), outer_x.clone()];
-    let cb_env = analyze_lambda_callable_env_for_params(
-        &cb_params,
-        user_body,
-        bindings,
-        known_decls,
-    );
+    let cb_env =
+        analyze_lambda_callable_env_for_params(&cb_params, user_body, bindings, known_decls);
 
     let capture_count = cb_env.slots.len();
     let mut param_names = if capture_count > 0 {
@@ -1108,9 +1098,8 @@ fn lower_list_each_mutating_assign(
     let mut body_aliases: HashMap<String, AliasValue> = HashMap::new();
     let mut preamble: Vec<WasmBackendInstr> = Vec::new();
 
-    let mut cb_bindings = ClosureBindingEnv::with_decl_params(
-        param_names.iter().map(|s| s.as_str()),
-    );
+    let mut cb_bindings =
+        ClosureBindingEnv::with_decl_params(param_names.iter().map(|s| s.as_str()));
 
     for (slot_index, slot) in cb_env.slots.iter().enumerate() {
         match slot.slot_kind {
@@ -1136,9 +1125,7 @@ fn lower_list_each_mutating_assign(
                     closure_local: CLO_LOCAL.to_string(),
                     slot_index,
                 });
-                preamble.push(WasmBackendInstr::StoreLocal {
-                    name: cell_local,
-                });
+                preamble.push(WasmBackendInstr::StoreLocal { name: cell_local });
                 body_aliases.insert(slot.name.clone(), AliasValue::CellPromoted);
                 cb_bindings.bind_outer_mutable(slot.name.clone());
             }
@@ -1252,9 +1239,7 @@ fn lower_list_each_mutating_assign(
     ));
 
     if capture_count > 0 {
-        let func_handle_instrs = vec![WasmBackendInstr::PushFuncHandle {
-            decl_name: cb_name,
-        }];
+        let func_handle_instrs = vec![WasmBackendInstr::PushFuncHandle { decl_name: cb_name }];
         let slot_instrs: Vec<Vec<WasmBackendInstr>> = cb_env
             .slots
             .iter()
@@ -1265,11 +1250,11 @@ fn lower_list_each_mutating_assign(
                     bindings,
                     known_decls,
                 ),
-                CallableEnvSlotKind::SharedMutableCell { .. } => Ok(vec![
-                    WasmBackendInstr::LoadLocal {
+                CallableEnvSlotKind::SharedMutableCell { .. } => {
+                    Ok(vec![WasmBackendInstr::LoadLocal {
                         name: cell_local_name(&slot.name),
-                    },
-                ]),
+                    }])
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
         instrs.push(WasmBackendInstr::CreateClosure {
@@ -5134,7 +5119,14 @@ build n =
         known_decls: &HashSet<String>,
     ) -> Result<(Vec<WasmBackendInstr>, Vec<LambdaAuxDecl>), LowerError> {
         let mut lambda_decls = Vec::new();
-        let instrs = lower_comp_inner(comp, false, aliases, bindings, known_decls, &mut lambda_decls)?;
+        let instrs = lower_comp_inner(
+            comp,
+            false,
+            aliases,
+            bindings,
+            known_decls,
+            &mut lambda_decls,
+        )?;
         Ok((instrs, lambda_decls))
     }
 
@@ -5146,7 +5138,7 @@ build n =
     fn make_each_assign_fold(
         source_list_var: &str,
         root: &str,
-        path_var: &str,   // variable used as the index expression
+        path_var: &str, // variable used as the index expression
         rhs: ValueExpr,
     ) -> CompExpr {
         // user callback: fn path_var -> root[path_var] := rhs; ()
@@ -5206,9 +5198,17 @@ build n =
 
         // The main instruction stream must contain a ListFold intrinsic.
         let has_list_fold = instrs.iter().any(|i| {
-            matches!(i, I::Intrinsic { intrinsic: BackendIntrinsic::ListFold })
+            matches!(
+                i,
+                I::Intrinsic {
+                    intrinsic: BackendIntrinsic::ListFold
+                }
+            )
         });
-        assert!(has_list_fold, "expected ListFold in output, got: {instrs:?}");
+        assert!(
+            has_list_fold,
+            "expected ListFold in output, got: {instrs:?}"
+        );
 
         // There must be at least one lambda_decl (the rewritten callback).
         assert!(
@@ -5219,10 +5219,20 @@ build n =
         // The callback body must contain ListSetInPlace and must NOT contain ListSet.
         let cb = &lambda_decls[lambda_decls.len() - 1];
         let has_in_place = cb.instrs.iter().any(|i| {
-            matches!(i, I::Intrinsic { intrinsic: BackendIntrinsic::ListSetInPlace })
+            matches!(
+                i,
+                I::Intrinsic {
+                    intrinsic: BackendIntrinsic::ListSetInPlace
+                }
+            )
         });
         let has_copy = cb.instrs.iter().any(|i| {
-            matches!(i, I::Intrinsic { intrinsic: BackendIntrinsic::ListSet })
+            matches!(
+                i,
+                I::Intrinsic {
+                    intrinsic: BackendIntrinsic::ListSet
+                }
+            )
         });
         assert!(
             has_in_place,
@@ -5258,10 +5268,20 @@ build n =
 
         // Must NOT use ListSetInPlace anywhere.
         let has_in_place = instrs.iter().any(|i| {
-            matches!(i, I::Intrinsic { intrinsic: BackendIntrinsic::ListSetInPlace })
+            matches!(
+                i,
+                I::Intrinsic {
+                    intrinsic: BackendIntrinsic::ListSetInPlace
+                }
+            )
         }) || lambda_decls.iter().any(|ld| {
             ld.instrs.iter().any(|i| {
-                matches!(i, I::Intrinsic { intrinsic: BackendIntrinsic::ListSetInPlace })
+                matches!(
+                    i,
+                    I::Intrinsic {
+                        intrinsic: BackendIntrinsic::ListSetInPlace
+                    }
+                )
             })
         });
         assert!(

@@ -126,7 +126,9 @@ pub(crate) fn execute_runtime_module_with_stdin_and_config_entrypoint(
         RuntimeStdinExecutionPlan::GeneralLowered => {
             let wasm = compile_module_entrypoint(module)?;
             let output = match memory_config {
-                Some(cfg) => wasm_exec::run_wasm_bytes_with_config(&wasm, stdin_seed.as_deref(), cfg),
+                Some(cfg) => {
+                    wasm_exec::run_wasm_bytes_with_config(&wasm, stdin_seed.as_deref(), cfg)
+                }
                 None => wasm_exec::run_wasm_bytes_with_stdin(&wasm, stdin_seed.as_deref()),
             }
             .map_err(|message| CodegenError { message })?;

@@ -552,11 +552,7 @@ fn measure_wasm_exec_micros(
     let mut last_ok = None;
     let mut last_err = None;
     for _ in 0..warmup_runs {
-        match run_wasm_bytes_with_stdin_for_tests(
-            wasm,
-            Some(stdin_seed),
-            TEST_MEMORY_CONFIG,
-        ) {
+        match run_wasm_bytes_with_stdin_for_tests(wasm, Some(stdin_seed), TEST_MEMORY_CONFIG) {
             Ok(text) => {
                 ok_runs += 1;
                 last_ok = Some(text);
@@ -570,11 +566,7 @@ fn measure_wasm_exec_micros(
     let mut samples = Vec::with_capacity(measured_runs);
     for _ in 0..measured_runs {
         let start = std::time::Instant::now();
-        match run_wasm_bytes_with_stdin_for_tests(
-            wasm,
-            Some(stdin_seed),
-            TEST_MEMORY_CONFIG,
-        ) {
+        match run_wasm_bytes_with_stdin_for_tests(wasm, Some(stdin_seed), TEST_MEMORY_CONFIG) {
             Ok(text) => {
                 ok_runs += 1;
                 last_ok = Some(text);
@@ -1635,12 +1627,9 @@ main =
 .@@@@@@@@.\n\
 @.@.@@@.@.\n";
     let aoc_style_wasm = compile_general_lowered_wasm(aoc_style_source);
-    let aoc_style_output = run_wasm_bytes_with_stdin_for_tests(
-        &aoc_style_wasm,
-        Some(aoc_stdin),
-        TEST_MEMORY_CONFIG,
-    )
-    .expect("AoC-style baseline should execute");
+    let aoc_style_output =
+        run_wasm_bytes_with_stdin_for_tests(&aoc_style_wasm, Some(aoc_stdin), TEST_MEMORY_CONFIG)
+            .expect("AoC-style baseline should execute");
     assert!(
         aoc_style_output.ends_with("43\n"),
         "AoC-style output should end with stable-pruning total, got: {:?}",
@@ -2196,7 +2185,10 @@ main =
         iterator_effect_none,
         iterator_effect_last_ok,
     ) = measure_runtime_output_resolve_micros(&iterator_effect_module, warmup_runs, measured_runs);
-    assert_eq!(iterator_effect_none, 0, "M7-4 iterator-effect should resolve");
+    assert_eq!(
+        iterator_effect_none, 0,
+        "M7-4 iterator-effect should resolve"
+    );
     assert_eq!(iterator_effect_last_ok.as_deref(), Some("6"));
     eprintln!(
         "[M7-4][iterator-effect-yield-3] p50={}us p95={}us ok_runs={} none_runs={} output={}",

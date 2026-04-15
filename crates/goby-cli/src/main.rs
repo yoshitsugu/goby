@@ -211,7 +211,8 @@ fn run() -> Result<(), CliError> {
 
     // Warn if --max-memory-mb was passed to a command that doesn't execute Wasm.
     if memory_config.is_some() && !matches!(cli.command, Command::Run) {
-        eprintln!("warning: --max-memory-mb has no effect for the '{}' command",
+        eprintln!(
+            "warning: --max-memory-mb has no effect for the '{}' command",
             match cli.command {
                 Command::Check => "check",
                 Command::Lint => "lint",
@@ -279,8 +280,12 @@ fn run_command(
         } else {
             None
         };
-        match goby_wasm::execute_runtime_module_with_stdin_and_config(module, stdin_text, memory_config)
-            .map_err(|err| CliError::Runtime(format_runtime_error_message(&err.message)))?
+        match goby_wasm::execute_runtime_module_with_stdin_and_config(
+            module,
+            stdin_text,
+            memory_config,
+        )
+        .map_err(|err| CliError::Runtime(format_runtime_error_message(&err.message)))?
         {
             Some(output) => {
                 print_parse_summary(module.declarations.len(), file);
@@ -392,9 +397,12 @@ where
                     return Err(CliError::Usage(format!("unexpected argument: {}", arg)));
                 }
             }
-            let file = file
-                .ok_or_else(|| CliError::Usage("missing input file".to_string()))?;
-            Ok(CliArgs { command, file, max_memory_mb })
+            let file = file.ok_or_else(|| CliError::Usage("missing input file".to_string()))?;
+            Ok(CliArgs {
+                command,
+                file,
+                max_memory_mb,
+            })
         }
         "fmt" => {
             // Optional --check flag before the file argument.
@@ -431,20 +439,18 @@ fn resolve_memory_config(
 ) -> Option<goby_wasm::memory_config::WasmMemoryConfig> {
     use goby_wasm::memory_config::{RUNTIME_MEMORY_CONFIG, WASM_PAGE_BYTES, WasmMemoryConfig};
 
-    let mb = cli_max_mb.or_else(|| {
-        match env::var("GOBY_MAX_MEMORY_MB") {
-            Ok(v) => match v.parse::<u32>() {
-                Ok(n) => Some(n),
-                Err(_) => {
-                    eprintln!(
-                        "warning: GOBY_MAX_MEMORY_MB={:?} is not a valid integer; ignoring",
-                        v
-                    );
-                    None
-                }
-            },
-            Err(_) => None,
-        }
+    let mb = cli_max_mb.or_else(|| match env::var("GOBY_MAX_MEMORY_MB") {
+        Ok(v) => match v.parse::<u32>() {
+            Ok(n) => Some(n),
+            Err(_) => {
+                eprintln!(
+                    "warning: GOBY_MAX_MEMORY_MB={:?} is not a valid integer; ignoring",
+                    v
+                );
+                None
+            }
+        },
+        Err(_) => None,
     })?;
 
     // 0 means "no user ceiling" → use the default runtime config.
@@ -520,14 +526,12 @@ fn execute_wasm(
     // Always pass an explicit memory ceiling so file-based execution matches the
     // runtime-stdin path.  Default to RUNTIME_MEMORY_CONFIG (1 GiB).
     // wasmtime ≥ 15 uses `-W max-memory-size=<bytes>`.
-    let effective_cfg = memory_config
-        .unwrap_or(goby_wasm::memory_config::RUNTIME_MEMORY_CONFIG);
+    let effective_cfg = memory_config.unwrap_or(goby_wasm::memory_config::RUNTIME_MEMORY_CONFIG);
     let max_bytes =
         effective_cfg.max_pages as u64 * goby_wasm::memory_config::WASM_PAGE_BYTES as u64;
     cmd.arg(format!("-Wmax-memory-size={}", max_bytes));
     cmd.arg(wasm_path);
-    let status = match cmd.status()
-    {
+    let status = match cmd.status() {
         Ok(status) => status,
         Err(err) if err.kind() == ErrorKind::NotFound => {
             return Ok(ExecutionOutcome::SkippedNoWasmtime);
@@ -739,7 +743,11 @@ mod tests {
     #[test]
     fn parses_max_memory_mb_space_separated() {
         let cli = parse_args_from(to_args(&[
-            "goby", "run", "--max-memory-mb", "512", "examples/hello.gb",
+            "goby",
+            "run",
+            "--max-memory-mb",
+            "512",
+            "examples/hello.gb",
         ]))
         .expect("--max-memory-mb with space should parse");
         assert_eq!(cli.max_memory_mb, Some(512));
@@ -749,7 +757,10 @@ mod tests {
     #[test]
     fn parses_max_memory_mb_equals_form() {
         let cli = parse_args_from(to_args(&[
-            "goby", "run", "--max-memory-mb=256", "examples/hello.gb",
+            "goby",
+            "run",
+            "--max-memory-mb=256",
+            "examples/hello.gb",
         ]))
         .expect("--max-memory-mb= form should parse");
         assert_eq!(cli.max_memory_mb, Some(256));
@@ -758,7 +769,11 @@ mod tests {
     #[test]
     fn parses_max_memory_mb_before_file() {
         let cli = parse_args_from(to_args(&[
-            "goby", "run", "--max-memory-mb", "64", "examples/hello.gb",
+            "goby",
+            "run",
+            "--max-memory-mb",
+            "64",
+            "examples/hello.gb",
         ]))
         .expect("--max-memory-mb before file should parse");
         assert_eq!(cli.max_memory_mb, Some(64));
@@ -768,7 +783,11 @@ mod tests {
     #[test]
     fn parses_max_memory_mb_after_file() {
         let cli = parse_args_from(to_args(&[
-            "goby", "run", "examples/hello.gb", "--max-memory-mb", "128",
+            "goby",
+            "run",
+            "examples/hello.gb",
+            "--max-memory-mb",
+            "128",
         ]))
         .expect("--max-memory-mb after file should parse");
         assert_eq!(cli.max_memory_mb, Some(128));
@@ -778,7 +797,11 @@ mod tests {
     #[test]
     fn rejects_max_memory_mb_non_integer() {
         let err = parse_args_from(to_args(&[
-            "goby", "run", "--max-memory-mb", "notanumber", "examples/hello.gb",
+            "goby",
+            "run",
+            "--max-memory-mb",
+            "notanumber",
+            "examples/hello.gb",
         ]))
         .expect_err("non-integer --max-memory-mb should fail");
         match err {
@@ -796,8 +819,10 @@ mod tests {
             .expect_err("--max-memory-mb without value should fail");
         match err {
             CliError::Usage(msg) => {
-                assert!(msg.contains("requires a value") || msg.contains("missing input file"),
-                    "expected value-required error, got: {msg}")
+                assert!(
+                    msg.contains("requires a value") || msg.contains("missing input file"),
+                    "expected value-required error, got: {msg}"
+                )
             }
             CliError::Runtime(_) => panic!("expected usage error"),
         }
