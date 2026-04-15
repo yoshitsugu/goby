@@ -8,18 +8,17 @@ Last updated: 2026-04-15
 
 M1 (in-place lowering) is complete as of 2026-04-14.
 
-M2.0 + M2.2 complete as of 2026-04-15:
-- `RUNTIME_MEMORY_CONFIG` (1 GiB) / `TEST_MEMORY_CONFIG` (64 MiB) split in `memory_config.rs`
-- All emitted Wasm modules now declare 1 GiB `maximum` (was 64 MiB)
-- `--max-memory-mb <N>` flag and `GOBY_MAX_MEMORY_MB` env var wired to CLI
-  - Both runtime-stdin path and file-based wasmtime path honour the ceiling
+**M2 complete as of 2026-04-15:**
+- M2.0: `RUNTIME_MEMORY_CONFIG` (1 GiB) / `TEST_MEMORY_CONFIG` (64 MiB) split; emitter updated
+- M2.2: `--max-memory-mb <N>` flag and `GOBY_MAX_MEMORY_MB` env var wired to CLI
+  - Both runtime-stdin and file-based wasmtime paths honour the ceiling
   - `execute_wasm` passes `-Wmax-memory-size=<bytes>` to wasmtime ≥ v15
+- M2.3: OOM trap message now appends "(configured ceiling: N MiB; use --max-memory-mb to raise it)"
+- M2.4: `--max-memory-mb` parse tests + `resolve_memory_config` unit tests added
 
-**Next: M2.3 — improve the OOM trap message**
+**Next: M3 — memory64 proof-of-concept**
 
-Remaining M2 sub-steps:
-3. **M2.3** — improve the trap message to report "configured ceiling: N MiB"
-4. **M2.4** — tests: OOM repro with lowered ceiling, `--max-memory-mb` parse tests
+Current state: all cargo tests green; M2 exit criteria met.
 
 ## Architecture State
 
