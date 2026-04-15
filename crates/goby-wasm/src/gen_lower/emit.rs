@@ -1696,7 +1696,7 @@ fn emit_instrs_with_heap_depth(
                 } else {
                     None
                 };
-                emit_bin_op(function, op, i64_scratch_base, scratch_state)?;
+                emit_bin_op(function, op, i64_scratch_base, scratch_state, PtrWidth::from_memory64(options.memory_config.memory64))?;
             }
 
             WasmBackendInstr::EffectOp { op } => {
@@ -1722,6 +1722,7 @@ fn emit_instrs_with_heap_depth(
                     i32_base,
                     scratch_state.as_ref(),
                     helper_state.as_ref(),
+                    PtrWidth::from_memory64(options.memory_config.memory64),
                 )?;
             }
 
@@ -2969,6 +2970,7 @@ fn emit_helper_call(
     i32_base: u32,
     scratch_state: Option<&EmitScratchState>,
     heap_state: Option<&HeapEmitState>,
+    pw: PtrWidth,
 ) -> Result<(), CodegenError> {
     match intrinsic {
         BackendIntrinsic::StringSplit => emit_string_split_helper(
@@ -2994,6 +2996,7 @@ fn emit_helper_call(
                     "gen_lower/emit: intrinsic '{intrinsic:?}' requires helper scratch state"
                 ),
             })?,
+            pw,
         ),
         BackendIntrinsic::ValueToString
         | BackendIntrinsic::StringEachGraphemeCount
@@ -3098,6 +3101,7 @@ fn emit_decode_string_ptr(
     source_i64_local: u32,
     ptr_local: u32,
     len_local: u32,
+    pw: PtrWidth,
 ) {
     function.instruction(&Instruction::LocalGet(source_i64_local));
     function.instruction(&Instruction::I64Const((TAG_STRING as i64) << 60));
@@ -3114,8 +3118,9 @@ fn emit_decode_string_ptr(
     function.instruction(&Instruction::I32WrapI64);
     function.instruction(&Instruction::LocalSet(ptr_local));
 
+    // Load string length prefix (i32 byte-count stored at ptr_local)
     function.instruction(&Instruction::LocalGet(ptr_local));
-    function.instruction(&Instruction::I32Load(MemArg {
+    function.instruction(&ptr_load(pw, MemArg {
         offset: 0,
         align: 2,
         memory_index: 0,
@@ -3159,6 +3164,7 @@ fn emit_compare_decoded_strings(
     right_len_local: u32,
     iter_local: u32,
     result_local: u32,
+    pw: PtrWidth,
 ) {
     function.instruction(&Instruction::I32Const(0));
     function.instruction(&Instruction::LocalSet(result_local));
@@ -3181,7 +3187,7 @@ fn emit_compare_decoded_strings(
     function.instruction(&Instruction::I32Add);
     function.instruction(&Instruction::LocalGet(iter_local));
     function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Load8U(MemArg {
+    function.instruction(&ptr_load_8u(pw, MemArg {
         offset: 0,
         align: 0,
         memory_index: 0,
@@ -3191,7 +3197,7 @@ fn emit_compare_decoded_strings(
     function.instruction(&Instruction::I32Add);
     function.instruction(&Instruction::LocalGet(iter_local));
     function.instruction(&Instruction::I32Add);
-    function.instruction(&Instruction::I32Load8U(MemArg {
+    function.instruction(&ptr_load_8u(pw, MemArg {
         offset: 0,
         align: 0,
         memory_index: 0,
@@ -3988,6 +3994,7 @@ fn emit_string_split_helper(
         text_i64,
         s_text_ptr,
         s_text_len,
+        helper_state.pw(),
     );
     emit_decode_string_ptr(
         function,
@@ -3995,6 +4002,7 @@ fn emit_string_split_helper(
         sep_i64,
         s_sep_ptr,
         s_sep_len,
+        helper_state.pw(),
     );
 
     function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
@@ -4704,12 +4712,13 @@ fn emit_chunked_store_address(
 fn emit_string_length_helper(
     function: &mut Function,
     helper_state: &EmitScratchState,
+    pw: PtrWidth,
 ) -> Result<(), CodegenError> {
     let string_i64 = helper_state.i64_base;
     let s_ptr = helper_state.i32_base + HS_TEXT_PTR;
     let s_len = helper_state.i32_base + HS_TEXT_LEN;
     function.instruction(&Instruction::LocalSet(string_i64));
-    emit_decode_string_ptr(function, helper_state, string_i64, s_ptr, s_len);
+    emit_decode_string_ptr(function, helper_state, string_i64, s_ptr, s_len, pw);
     function.instruction(&Instruction::LocalGet(s_len));
     function.instruction(&Instruction::I64ExtendI32S);
     function.instruction(&Instruction::I64Const((TAG_INT as i64) << 60));
@@ -4931,6 +4940,7 @@ fn emit_list_push_string_helper(
         string_i64,
         s_string_ptr,
         s_string_len,
+        helper_state.pw(),
     );
 
     // Decode source list header ptr
@@ -5972,6 +5982,7 @@ fn emit_bin_op(
     op: &IrBinOp,
     i64_scratch_base: Option<u32>,
     helper_state: Option<EmitScratchState>,
+    pw: PtrWidth,
 ) -> Result<(), CodegenError> {
     const PAYLOAD_MASK: i64 = (1i64 << 60) - 1;
     const TAG_INT_SHIFT: i64 = (TAG_INT as i64) << 60;
@@ -6145,8 +6156,8 @@ fn emit_bin_op(
             function.instruction(&Instruction::I64Eq);
             function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
 
-            emit_decode_string_ptr(function, &hs, left_i64, s_left_ptr, s_left_len);
-            emit_decode_string_ptr(function, &hs, right_i64, s_right_ptr, s_right_len);
+            emit_decode_string_ptr(function, &hs, left_i64, s_left_ptr, s_left_len, pw);
+            emit_decode_string_ptr(function, &hs, right_i64, s_right_ptr, s_right_len, pw);
             emit_compare_decoded_strings(
                 function,
                 s_left_ptr,
@@ -6155,6 +6166,7 @@ fn emit_bin_op(
                 s_right_len,
                 s_iter,
                 s_result,
+                pw,
             );
             function.instruction(&Instruction::End);
             function.instruction(&Instruction::End);
@@ -7282,8 +7294,9 @@ fn emit_case_match(
                 function.instruction(&Instruction::I64And);
                 function.instruction(&Instruction::I32WrapI64);
                 function.instruction(&Instruction::LocalSet(s_scr_ptr));
+                let pw = PtrWidth::from_memory64(options.memory_config.memory64);
                 function.instruction(&Instruction::LocalGet(s_scr_ptr));
-                function.instruction(&Instruction::I32Load(MemArg {
+                function.instruction(&ptr_load(pw, MemArg {
                     offset: 0,
                     align: 2,
                     memory_index: 0,
@@ -7297,6 +7310,7 @@ fn emit_case_match(
                     s_scr_len,
                     s_loop_iter,
                     s_match,
+                    pw,
                 );
                 function.instruction(&Instruction::End);
                 function.instruction(&Instruction::LocalGet(s_match));
