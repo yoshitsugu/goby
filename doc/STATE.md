@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-17
+Last updated: 2026-04-17 (post-fix)
 
 ## Current Focus
 
@@ -30,38 +30,30 @@ Last updated: 2026-04-17
 - **Tail-call dispatcher scratch locals**: Fixed to use `ValType::I64` when `memory64 = true`.
 - **`_pw` layout functions**: Added `chunk_alloc_size_pw`, `header_alloc_size_pw`, `header_n_chunks_offset_pw`, `header_chunk_ptr_offset_pw`, `chunk_item_offset_pw`, `meta_slot_bytes`, `ptr_slot_bytes` — all sensitive to `PtrWidth`.
 
-### Known Remaining Issues (as of 2026-04-15)
+### Resolved in this slice
 
-**Test status**:
+#### `recursive_multi_part_interpolated_print_after_graphemes_executes` fixed
+
+Root cause:
+- `emit_string_split_helper` still used a hard-coded `* 4` when allocating list header chunk-pointer slots.
+- Under `memory64`, chunk pointers are 8-byte slots, so this under-allocated the header and `ptr_store` overflowed into adjacent static-string memory.
+- The overflow corrupted static string blobs (notably interpolation literals), which then surfaced as `stdout utf8` failures during `StringConcat`.
+
+Fix:
+- In `emit_string_split_helper`, replaced `ptr_const(pw, 4)` with `ptr_const(pw, ptr_slot_bytes(pw) as u64)` for header allocation size.
+
+**Current test status**:
 - `cargo fmt` — pass
 - `cargo check` — pass
-- `cargo test` — workspace passes except for **1 failing `goby-wasm` test**
-
-#### Remaining issue: host temp allocations after grapheme-heavy runtime path
-
-`cargo test -p goby-wasm recursive_multi_part_interpolated_print_after_graphemes_executes -- --test-threads=1`
-still fails with:
-
-- `stdout utf8: invalid utf-8 sequence of 1 bytes from index 405`
-
-Observed shape:
-- `read() -> split() -> list.map graphemes` succeeds
-- subsequent recursive interpolated `println` output becomes corrupted
-- most other general-lowered read/split/grapheme/string-equality tests now pass
-
-Likely root cause:
-- one remaining host-temp / Wasm-heap boundary sync gap after `StringGraphemesList`-driven allocations
-- corruption appears only after host-side grapheme allocations are followed by many interpolated print temporaries
+- `cargo test` — pass (workspace)
 
 ---
 
 ## Immediate Next Actions
 
-1. Reproduce `recursive_multi_part_interpolated_print_after_graphemes_executes` in isolation.
-2. Trace remaining host-temp / heap-floor desync after grapheme host imports.
-3. Re-run `cargo test -p goby-wasm --lib -- --test-threads=1`.
-4. Re-run workspace `cargo test`.
-5. If green, update `doc/PLAN.md` to mark M4 complete.
+1. Update `doc/PLAN.md` M4 checklist/status to reflect workspace-green state.
+2. Decide whether to keep or trim now-redundant M4 migration guard comments in `emit.rs`.
+3. Continue next roadmap slice (post-M4 tasks) from `doc/PLAN.md`.
 
 ---
 
@@ -74,6 +66,6 @@ Likely root cause:
 | Typechecker | Stable |
 | IR (`ir.rs`) | Stable |
 | IR lowering (`ir_lower.rs`) | Stable |
-| Wasm backend | M4 nearly complete — workspace green except 1 `goby-wasm` runtime test |
+| Wasm backend | M4 memory64 migration slice is workspace-green (`fmt/check/test`) |
 | Effect handlers | Non-tail / multi-resume produces `BackendLimitation` |
 | GC / reclamation | Out of scope. Bump allocator only |

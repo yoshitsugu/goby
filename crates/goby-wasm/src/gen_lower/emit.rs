@@ -4369,7 +4369,7 @@ fn emit_string_split_helper(
     function.instruction(&Instruction::LocalSet(s_iter)); // max_chunks
     function.instruction(&ptr_const(pw, header_alloc_size_pw(pw, 0) as u64));
     function.instruction(&Instruction::LocalGet(s_iter));
-    function.instruction(&ptr_const(pw, 4));
+    function.instruction(&ptr_const(pw, ptr_slot_bytes(pw) as u64));
     function.instruction(&ptr_mul(pw));
     function.instruction(&ptr_add(pw));
     function.instruction(&Instruction::LocalSet(s_alloc_size));
