@@ -44,7 +44,7 @@ pub(crate) const TEST_MEMORY_CONFIG: WasmMemoryConfig = WasmMemoryConfig {
     max_pages: 1024,
     host_bump_reserved_bytes: 49_152,
     max_wasm_stack_bytes: 64 * 1024 * 1024,
-    memory64: false,
+    memory64: true,
 };
 
 /// Runtime config: 1 GiB ceiling used when emitting modules for actual execution.
@@ -55,7 +55,7 @@ pub const RUNTIME_MEMORY_CONFIG: WasmMemoryConfig = WasmMemoryConfig {
     max_pages: 16_384,
     host_bump_reserved_bytes: 49_152,
     max_wasm_stack_bytes: 64 * 1024 * 1024,
-    memory64: false,
+    memory64: true,
 };
 
 /// Deprecated alias for `TEST_MEMORY_CONFIG`.  Do not add new uses.

@@ -57,6 +57,57 @@ const ERR_MEMORY_EXHAUSTION: &str = "memory exhausted [E-MEMORY-EXHAUSTION]: all
 const ERR_LIKELY_STACK_PRESSURE: &str = "likely stack pressure [E-STACK-PRESSURE]: WebAssembly execution likely hit a stack limit; consider rewriting deep recursion in a tail-recursive or iterative style";
 const ERR_UNKNOWN_RUNTIME_TRAP: &str = "unknown runtime trap [E-RUNTIME-TRAP]: WebAssembly execution trapped before Goby could classify the cause; this can happen with deep recursion or another runtime resource limit, so consider a tail-recursive or iterative rewrite if applicable";
 
+#[inline]
+fn list_ptr_slot_bytes(memory_config: crate::memory_config::WasmMemoryConfig) -> usize {
+    if memory_config.memory64 { 8 } else { 4 }
+}
+
+#[inline]
+fn list_meta_slot_bytes(memory_config: crate::memory_config::WasmMemoryConfig) -> usize {
+    if memory_config.memory64 { 8 } else { 4 }
+}
+
+#[inline]
+fn list_header_chunk_ptr_offset(
+    memory_config: crate::memory_config::WasmMemoryConfig,
+    chunk_idx: usize,
+) -> usize {
+    2 * list_meta_slot_bytes(memory_config) + chunk_idx * list_ptr_slot_bytes(memory_config)
+}
+
+#[inline]
+fn list_chunk_item_offset(
+    memory_config: crate::memory_config::WasmMemoryConfig,
+    item_idx: usize,
+) -> usize {
+    list_meta_slot_bytes(memory_config) + item_idx * 8
+}
+
+fn read_list_word(
+    caller: &mut Caller<'_, WasiP1Ctx>,
+    ptr: usize,
+    memory_config: crate::memory_config::WasmMemoryConfig,
+) -> Result<usize, ()> {
+    if memory_config.memory64 {
+        usize::try_from(read_i64_le(caller, ptr)?).map_err(|_| ())
+    } else {
+        usize::try_from(read_i32_le(caller, ptr)?).map_err(|_| ())
+    }
+}
+
+fn write_list_word(
+    caller: &mut Caller<'_, WasiP1Ctx>,
+    ptr: u32,
+    value: u32,
+    memory_config: crate::memory_config::WasmMemoryConfig,
+) -> Result<(), ()> {
+    if memory_config.memory64 {
+        write_host_bytes(caller, ptr, &(value as i64).to_le_bytes(), memory_config)
+    } else {
+        write_host_bytes(caller, ptr, &(value as i32).to_le_bytes(), memory_config)
+    }
+}
+
 /// Execute Wasm bytes produced by `compile_module` with optional stdin input.
 ///
 /// WASI Preview 1 is provided via `wasmtime-wasi`. Grapheme host intrinsics
@@ -259,7 +310,7 @@ fn value_to_string_host(
     bump: &AtomicU32,
     memory_config: crate::memory_config::WasmMemoryConfig,
 ) -> i64 {
-    let Ok(rendered) = format_tagged_value(&mut caller, tagged_value) else {
+    let Ok(rendered) = format_tagged_value(&mut caller, tagged_value, memory_config) else {
         return encode_string_in_host_bump(&mut caller, "<unsupported>", bump, memory_config)
             .unwrap_or(tagged_value);
     };
@@ -412,14 +463,16 @@ fn list_join_string_host(
         return tagged_list;
     }
     let header_ptr = decode_payload_ptr(tagged_list) as usize;
-    let Ok(total_len_i32) = read_i32_le(&mut caller, header_ptr) else {
+    let Ok(total_len) = read_list_word(&mut caller, header_ptr, memory_config) else {
         return tagged_list;
     };
-    let Ok(n_chunks_i32) = read_i32_le(&mut caller, header_ptr + 4) else {
+    let Ok(n_chunks) = read_list_word(
+        &mut caller,
+        header_ptr + list_meta_slot_bytes(memory_config),
+        memory_config,
+    ) else {
         return tagged_list;
     };
-    let total_len = total_len_i32.max(0) as usize;
-    let n_chunks = n_chunks_i32.max(0) as usize;
     if total_len == 0 {
         return encode_string_in_host_bump(&mut caller, "", bump, memory_config)
             .unwrap_or(tagged_list);
@@ -428,16 +481,21 @@ fn list_join_string_host(
     let mut parts = Vec::with_capacity(total_len);
     let mut total_bytes = 0usize;
     for chunk_idx in 0..n_chunks {
-        let Ok(chunk_ptr_i32) = read_i32_le(&mut caller, header_ptr + 8 + chunk_idx * 4) else {
+        let Ok(chunk_ptr) = read_list_word(
+            &mut caller,
+            header_ptr + list_header_chunk_ptr_offset(memory_config, chunk_idx),
+            memory_config,
+        ) else {
             return tagged_list;
         };
-        let chunk_ptr = chunk_ptr_i32.max(0) as usize;
-        let Ok(chunk_len_i32) = read_i32_le(&mut caller, chunk_ptr) else {
+        let Ok(chunk_len) = read_list_word(&mut caller, chunk_ptr, memory_config) else {
             return tagged_list;
         };
-        let chunk_len = chunk_len_i32.max(0) as usize;
         for item_idx in 0..chunk_len {
-            let Ok(elem) = read_i64_le(&mut caller, chunk_ptr + 4 + item_idx * 8) else {
+            let Ok(elem) = read_i64_le(
+                &mut caller,
+                chunk_ptr + list_chunk_item_offset(memory_config, item_idx),
+            ) else {
                 return tagged_list;
             };
             let Ok(text) = read_wasm_string(&mut caller, elem) else {
@@ -477,14 +535,18 @@ fn list_join_string_host(
     encode_string_ptr(alloc_ptr)
 }
 
-fn format_tagged_value(caller: &mut Caller<'_, WasiP1Ctx>, tagged: i64) -> Result<String, ()> {
+fn format_tagged_value(
+    caller: &mut Caller<'_, WasiP1Ctx>,
+    tagged: i64,
+    memory_config: crate::memory_config::WasmMemoryConfig,
+) -> Result<String, ()> {
     match decode_tag(tagged) {
         TAG_STRING => read_wasm_string(caller, tagged),
         TAG_INT => Ok(decode_payload_int(tagged).to_string()),
         TAG_BOOL => Ok(if (tagged & 1) == 1 { "True" } else { "False" }.to_string()),
         TAG_UNIT => Ok("Unit".to_string()),
-        TAG_LIST => format_tagged_list(caller, tagged, "[", "]", true),
-        TAG_TUPLE => format_tagged_flat_sequence(caller, tagged, "(", ")", false),
+        TAG_LIST => format_tagged_list(caller, tagged, "[", "]", true, memory_config),
+        TAG_TUPLE => format_tagged_flat_sequence(caller, tagged, "(", ")", false, memory_config),
         TAG_RECORD => Ok("Record".to_string()),
         _ => Err(()),
     }
@@ -496,12 +558,13 @@ fn format_tagged_flat_sequence(
     prefix: &str,
     suffix: &str,
     quote_strings: bool,
+    memory_config: crate::memory_config::WasmMemoryConfig,
 ) -> Result<String, ()> {
     let ptr = decode_payload_ptr(tagged) as usize;
-    let len = read_i32_le(caller, ptr)? as usize;
+    let len = read_list_word(caller, ptr, memory_config)?;
     let mut parts = Vec::with_capacity(len);
     let all_strings = (0..len)
-        .map(|idx| read_i64_le(caller, ptr + 4 + idx * 8))
+        .map(|idx| read_i64_le(caller, ptr + list_chunk_item_offset(memory_config, idx)))
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
         .collect::<Vec<_>>();
@@ -511,7 +574,7 @@ fn format_tagged_flat_sequence(
             let text = read_wasm_string(caller, *elem)?;
             parts.push(format!("\"{}\"", text));
         } else {
-            parts.push(format_tagged_value(caller, *elem)?);
+            parts.push(format_tagged_value(caller, *elem, memory_config)?);
         }
     }
 
@@ -524,22 +587,34 @@ fn format_tagged_list(
     prefix: &str,
     suffix: &str,
     quote_strings: bool,
+    memory_config: crate::memory_config::WasmMemoryConfig,
 ) -> Result<String, ()> {
     let header_ptr = decode_payload_ptr(tagged) as usize;
-    let total_len = read_i32_le(caller, header_ptr)? as usize;
-    let n_chunks = read_i32_le(caller, header_ptr + 4)? as usize;
+    let total_len = read_list_word(caller, header_ptr, memory_config)?;
+    let n_chunks = read_list_word(
+        caller,
+        header_ptr + list_meta_slot_bytes(memory_config),
+        memory_config,
+    )?;
     let mut parts = Vec::with_capacity(total_len);
 
     for chunk_idx in 0..n_chunks {
-        let chunk_ptr = read_i32_le(caller, header_ptr + 8 + chunk_idx * 4)? as usize;
-        let chunk_len = read_i32_le(caller, chunk_ptr)? as usize;
+        let chunk_ptr = read_list_word(
+            caller,
+            header_ptr + list_header_chunk_ptr_offset(memory_config, chunk_idx),
+            memory_config,
+        )?;
+        let chunk_len = read_list_word(caller, chunk_ptr, memory_config)?;
         for item_idx in 0..chunk_len {
-            let elem = read_i64_le(caller, chunk_ptr + 4 + item_idx * 8)?;
+            let elem = read_i64_le(
+                caller,
+                chunk_ptr + list_chunk_item_offset(memory_config, item_idx),
+            )?;
             if quote_strings && decode_tag(elem) == TAG_STRING {
                 let text = read_wasm_string(caller, elem)?;
                 parts.push(format!("\"{}\"", text));
             } else {
-                parts.push(format_tagged_value(caller, elem)?);
+                parts.push(format_tagged_value(caller, elem, memory_config)?);
             }
         }
     }
@@ -838,37 +913,33 @@ fn alloc_list_string_host(
 ) -> Option<u32> {
     let total_len = values.len() as u32;
     let n_chunks = total_len.div_ceil(CHUNK_SIZE);
-    let header_ptr = alloc_from_host_bump(caller, bump, (8 + n_chunks * 4).max(8), memory_config)?;
+    let meta_bytes = list_meta_slot_bytes(memory_config) as u32;
+    let ptr_bytes = list_ptr_slot_bytes(memory_config) as u32;
+    let header_ptr = alloc_from_host_bump(
+        caller,
+        bump,
+        (2 * meta_bytes + n_chunks * ptr_bytes).max(2 * meta_bytes),
+        memory_config,
+    )?;
 
-    write_host_bytes(
-        caller,
-        header_ptr,
-        &(total_len as i32).to_le_bytes(),
-        memory_config,
-    )
-    .ok()?;
-    write_host_bytes(
-        caller,
-        header_ptr + 4,
-        &(n_chunks as i32).to_le_bytes(),
-        memory_config,
-    )
-    .ok()?;
+    write_list_word(caller, header_ptr, total_len, memory_config).ok()?;
+    write_list_word(caller, header_ptr + meta_bytes, n_chunks, memory_config).ok()?;
 
     for chunk_idx in 0..n_chunks {
-        let chunk_ptr = alloc_from_host_bump(caller, bump, 4 + CHUNK_SIZE * 8, memory_config)?;
-        write_host_bytes(
+        let chunk_ptr =
+            alloc_from_host_bump(caller, bump, meta_bytes + CHUNK_SIZE * 8, memory_config)?;
+        write_list_word(
             caller,
-            header_ptr + 8 + chunk_idx * 4,
-            &(chunk_ptr as i32).to_le_bytes(),
+            header_ptr + list_header_chunk_ptr_offset(memory_config, chunk_idx as usize) as u32,
+            chunk_ptr,
             memory_config,
         )
         .ok()?;
 
         let start = (chunk_idx * CHUNK_SIZE) as usize;
         let end = ((chunk_idx + 1) * CHUNK_SIZE).min(total_len) as usize;
-        let chunk_len = (end - start) as i32;
-        write_host_bytes(caller, chunk_ptr, &chunk_len.to_le_bytes(), memory_config).ok()?;
+        let chunk_len = (end - start) as u32;
+        write_list_word(caller, chunk_ptr, chunk_len, memory_config).ok()?;
 
         for (item_idx, value) in values[start..end].iter().enumerate() {
             let str_bytes = value.as_bytes();
@@ -884,7 +955,7 @@ fn alloc_list_string_host(
             write_host_bytes(caller, str_ptr + 4, str_bytes, memory_config).ok()?;
 
             let tagged_elem = encode_string_ptr(str_ptr);
-            let elem_ptr = chunk_ptr + 4 + item_idx as u32 * 8;
+            let elem_ptr = chunk_ptr + list_chunk_item_offset(memory_config, item_idx) as u32;
             write_host_bytes(caller, elem_ptr, &tagged_elem.to_le_bytes(), memory_config).ok()?;
         }
     }
@@ -1085,8 +1156,25 @@ mod tests {
         exports.export("_start", ExportKind::Func, 2);
         module.section(&exports);
 
+        let pw = crate::gen_lower::ptr::PtrWidth::from_memory64(memory_config.memory64);
+        use crate::gen_lower::ptr::{ptr_add, ptr_const, ptr_load, ptr_store};
+
+        let mem_arg = MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        };
+
+        // Under W64, local 1 holds the raw pointer as i64 (low 32 bits of tagged value).
+        // Under W32, local 1 holds i32 (via I32WrapI64).
+        let ptr_local_type = if memory_config.memory64 {
+            ValType::I64
+        } else {
+            ValType::I32
+        };
+
         let mut code = CodeSection::new();
-        let mut function = Function::new([(1, ValType::I64), (1, ValType::I32)]);
+        let mut function = Function::new([(1, ValType::I64), (1, ptr_local_type)]);
         function.instruction(&Instruction::I64Const(encode_string_ptr(a_ptr)));
         function.instruction(&Instruction::I64Const(encode_string_ptr(b_ptr)));
         function.instruction(&Instruction::Call(1));
@@ -1100,32 +1188,28 @@ mod tests {
         function.instruction(&Instruction::LocalGet(0));
         function.instruction(&Instruction::LocalGet(0));
         function.instruction(&Instruction::Call(1));
-        function.instruction(&Instruction::I32WrapI64);
+        // Extract raw pointer from tagged i64: mask off low 32 bits
+        function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+        function.instruction(&Instruction::I64And);
+        if !memory_config.memory64 {
+            function.instruction(&Instruction::I32WrapI64);
+        }
         function.instruction(&Instruction::LocalSet(1));
 
-        function.instruction(&Instruction::I32Const(iovec_ptr as i32));
+        // iovec[0].ptr = result_ptr + 4
+        function.instruction(&ptr_const(pw, iovec_ptr as u64));
         function.instruction(&Instruction::LocalGet(1));
-        function.instruction(&Instruction::I32Const(4));
-        function.instruction(&Instruction::I32Add);
-        function.instruction(&Instruction::I32Store(MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        }));
+        function.instruction(&ptr_const(pw, 4));
+        function.instruction(&ptr_add(pw));
+        function.instruction(&ptr_store(pw, mem_arg));
 
-        function.instruction(&Instruction::I32Const((iovec_ptr + 4) as i32));
+        // iovec[0].len = *result_ptr
+        function.instruction(&ptr_const(pw, (iovec_ptr + 4) as u64));
         function.instruction(&Instruction::LocalGet(1));
-        function.instruction(&Instruction::I32Load(MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        }));
-        function.instruction(&Instruction::I32Store(MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        }));
+        function.instruction(&ptr_load(pw, mem_arg));
+        function.instruction(&ptr_store(pw, mem_arg));
 
+        // fd_write(1, iovec_ptr, 1, nwritten_ptr)  — WASI args are always i32
         function.instruction(&Instruction::I32Const(1));
         function.instruction(&Instruction::I32Const(iovec_ptr as i32));
         function.instruction(&Instruction::I32Const(1));
@@ -1136,19 +1220,28 @@ mod tests {
         code.function(&function);
         module.section(&code);
 
+        // Data section: active segment offset must be i64 under memory64
+        let data_const = |addr: u32| -> ConstExpr {
+            if memory_config.memory64 {
+                ConstExpr::i64_const(addr as i64)
+            } else {
+                ConstExpr::i32_const(addr as i32)
+            }
+        };
+
         let mut data = DataSection::new();
         data.active(
             0,
-            &ConstExpr::i32_const(GLOBAL_HEAP_CURSOR_OFFSET as i32),
+            &data_const(GLOBAL_HEAP_CURSOR_OFFSET),
             initial_cursor.to_le_bytes().to_vec(),
         );
         data.active(
             0,
-            &ConstExpr::i32_const(GLOBAL_RUNTIME_ERROR_OFFSET as i32),
+            &data_const(GLOBAL_RUNTIME_ERROR_OFFSET),
             0u32.to_le_bytes().to_vec(),
         );
-        data.active(0, &ConstExpr::i32_const(a_ptr as i32), a_blob);
-        data.active(0, &ConstExpr::i32_const(b_ptr as i32), b_blob);
+        data.active(0, &data_const(a_ptr), a_blob);
+        data.active(0, &data_const(b_ptr), b_blob);
         module.section(&data);
 
         module.finish()
@@ -1305,12 +1398,13 @@ main =
         code.function(&function);
         module.section(&code);
 
+        let data_offset = if TEST_MEMORY_CONFIG.memory64 {
+            ConstExpr::i64_const(GLOBAL_RUNTIME_ERROR_OFFSET as i64)
+        } else {
+            ConstExpr::i32_const(GLOBAL_RUNTIME_ERROR_OFFSET as i32)
+        };
         let mut data = DataSection::new();
-        data.active(
-            0,
-            &ConstExpr::i32_const(GLOBAL_RUNTIME_ERROR_OFFSET as i32),
-            0u32.to_le_bytes().to_vec(),
-        );
+        data.active(0, &data_offset, 0u32.to_le_bytes().to_vec());
         module.section(&data);
 
         let err = run_wasm_bytes_with_stdin(&module.finish(), None)

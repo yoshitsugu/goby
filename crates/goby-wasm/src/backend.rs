@@ -6,10 +6,19 @@ use wasm_encoder::{
 
 use crate::{
     CodegenError,
+    gen_lower::ptr::{PtrWidth, ptr_add, ptr_const},
     layout::MemoryLayout,
     memory_config::RUNTIME_MEMORY_CONFIG,
     runtime_io_plan::{OutputReadMode, StaticPrintSuffix},
 };
+
+/// Emit a data section active segment with the correct ConstExpr offset type for memory64.
+fn data_const(pw: PtrWidth, addr: u32) -> ConstExpr {
+    match pw {
+        PtrWidth::W32 => ConstExpr::i32_const(addr as i32),
+        PtrWidth::W64 => ConstExpr::i64_const(addr as i64),
+    }
+}
 
 struct RuntimeIoMemoryPlan {
     buffer_ptr: i32,
@@ -81,23 +90,23 @@ impl WasmProgramBuilder {
         exports.export("_start", ExportKind::Func, 1);
         module.section(&exports);
 
+        let pw = PtrWidth::from_memory64(RUNTIME_MEMORY_CONFIG.memory64);
+        let mem_arg = MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        };
+
         // Code section (id=10) must come before Data section (id=11) per Wasm spec §5.5.2.
         let mut code = CodeSection::new();
         let mut function = Function::new([]);
-        function.instruction(&Instruction::I32Const(iovec_offset));
+        function.instruction(&ptr_const(pw, iovec_offset as u64));
         function.instruction(&Instruction::I32Const(text_ptr));
-        function.instruction(&Instruction::I32Store(MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        }));
-        function.instruction(&Instruction::I32Const(iovec_offset + 4));
+        function.instruction(&Instruction::I32Store(mem_arg));
+        function.instruction(&ptr_const(pw, iovec_offset as u64 + 4));
         function.instruction(&Instruction::I32Const(text_len_i32));
-        function.instruction(&Instruction::I32Store(MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        }));
+        function.instruction(&Instruction::I32Store(mem_arg));
+        // WASI fd_write: all args i32 ABI
         function.instruction(&Instruction::I32Const(1));
         function.instruction(&Instruction::I32Const(iovec_offset));
         function.instruction(&Instruction::I32Const(1));
@@ -109,7 +118,11 @@ impl WasmProgramBuilder {
         module.section(&code);
 
         let mut data = DataSection::new();
-        data.active(0, &ConstExpr::i32_const(text_ptr), text.as_bytes().to_vec());
+        data.active(
+            0,
+            &data_const(pw, text_ptr as u32),
+            text.as_bytes().to_vec(),
+        );
         module.section(&data);
 
         Ok(module.finish())
@@ -121,19 +134,21 @@ impl WasmProgramBuilder {
         suffix_prints: &[StaticPrintSuffix],
     ) -> Result<Vec<u8>, CodegenError> {
         let plan = self.runtime_io_memory_plan(suffix_prints)?;
-        self.build_runtime_io_module(&plan, &[], append_newline, |function, plan| {
+        self.build_runtime_io_module(&plan, &[], append_newline, |pw, function, plan| {
             emit_prepare_iovec(
                 function,
+                pw,
                 plan.iovec_offset,
                 plan.buffer_ptr,
                 plan.buffer_len,
             );
             emit_fd_read_stdin(function, plan.iovec_offset, plan.nread_offset);
-            emit_set_iovec_len_from_nread(function, plan.iovec_offset, plan.nread_offset);
+            emit_set_iovec_len_from_nread(function, pw, plan.iovec_offset, plan.nread_offset);
             emit_fd_write_stdout(function, plan.iovec_offset, plan.nread_offset);
             if append_newline {
                 emit_write_newline(
                     function,
+                    pw,
                     plan.iovec_offset,
                     plan.nread_offset,
                     plan.newline_ptr,
@@ -141,6 +156,7 @@ impl WasmProgramBuilder {
             }
             emit_static_suffix_writes(
                 function,
+                pw,
                 plan.iovec_offset,
                 plan.nread_offset,
                 plan.suffix_base,
@@ -159,56 +175,65 @@ impl WasmProgramBuilder {
             &plan,
             &[(2, ValType::I32)],
             append_newline,
-            |function, plan| {
+            |pw, function, plan| {
+                let mem_arg_i32 = MemArg {
+                    offset: 0,
+                    align: 2,
+                    memory_index: 0,
+                };
+                let mem_arg_u8 = MemArg {
+                    offset: 0,
+                    align: 0,
+                    memory_index: 0,
+                };
                 emit_prepare_iovec(
                     function,
+                    pw,
                     plan.iovec_offset,
                     plan.buffer_ptr,
                     plan.buffer_len,
                 );
                 emit_fd_read_stdin(function, plan.iovec_offset, plan.nread_offset);
 
-                function.instruction(&Instruction::I32Const(plan.nread_offset));
-                function.instruction(&Instruction::I32Load(MemArg {
-                    offset: 0,
-                    align: 2,
-                    memory_index: 0,
-                }));
+                // nread = i32.load[nread_offset]
+                function.instruction(&ptr_const(pw, plan.nread_offset as u64));
+                function.instruction(&Instruction::I32Load(mem_arg_i32));
                 function.instruction(&Instruction::LocalSet(1));
                 function.instruction(&Instruction::I32Const(0));
                 function.instruction(&Instruction::LocalSet(0));
 
                 function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
                 function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+                // pos >= nread (i32 value comparison)
                 function.instruction(&Instruction::LocalGet(0));
                 function.instruction(&Instruction::LocalGet(1));
                 function.instruction(&Instruction::I32GeU);
                 function.instruction(&Instruction::BrIf(1));
 
-                emit_load_buffer_byte(function, plan.buffer_ptr);
+                // byte = i32.load8_u[buffer_ptr + pos]
+                emit_load_buffer_byte(function, pw, plan.buffer_ptr);
                 function.instruction(&Instruction::LocalGet(0));
-                function.instruction(&Instruction::I32Add);
-                function.instruction(&Instruction::I32Load8U(MemArg {
-                    offset: 0,
-                    align: 0,
-                    memory_index: 0,
-                }));
+                if pw == PtrWidth::W64 {
+                    function.instruction(&Instruction::I64ExtendI32U);
+                }
+                function.instruction(&ptr_add(pw));
+                function.instruction(&Instruction::I32Load8U(mem_arg_u8));
                 function.instruction(&Instruction::I32Const(10));
                 function.instruction(&Instruction::I32Eq);
                 function.instruction(&Instruction::BrIf(1));
 
-                emit_load_buffer_byte(function, plan.buffer_ptr);
+                emit_load_buffer_byte(function, pw, plan.buffer_ptr);
                 function.instruction(&Instruction::LocalGet(0));
-                function.instruction(&Instruction::I32Add);
-                function.instruction(&Instruction::I32Load8U(MemArg {
-                    offset: 0,
-                    align: 0,
-                    memory_index: 0,
-                }));
+                if pw == PtrWidth::W64 {
+                    function.instruction(&Instruction::I64ExtendI32U);
+                }
+                function.instruction(&ptr_add(pw));
+                function.instruction(&Instruction::I32Load8U(mem_arg_u8));
                 function.instruction(&Instruction::I32Const(13));
                 function.instruction(&Instruction::I32Eq);
                 function.instruction(&Instruction::BrIf(1));
 
+                // pos += 1 (i32 value arithmetic)
                 function.instruction(&Instruction::LocalGet(0));
                 function.instruction(&Instruction::I32Const(1));
                 function.instruction(&Instruction::I32Add);
@@ -217,17 +242,15 @@ impl WasmProgramBuilder {
                 function.instruction(&Instruction::End);
                 function.instruction(&Instruction::End);
 
-                function.instruction(&Instruction::I32Const(plan.iovec_offset + 4));
+                // iovec[1] = pos (line length)
+                function.instruction(&ptr_const(pw, plan.iovec_offset as u64 + 4));
                 function.instruction(&Instruction::LocalGet(0));
-                function.instruction(&Instruction::I32Store(MemArg {
-                    offset: 0,
-                    align: 2,
-                    memory_index: 0,
-                }));
+                function.instruction(&Instruction::I32Store(mem_arg_i32));
                 emit_fd_write_stdout(function, plan.iovec_offset, plan.nread_offset);
                 if append_newline {
                     emit_write_newline(
                         function,
+                        pw,
                         plan.iovec_offset,
                         plan.nread_offset,
                         plan.newline_ptr,
@@ -235,6 +258,7 @@ impl WasmProgramBuilder {
                 }
                 emit_static_suffix_writes(
                     function,
+                    pw,
                     plan.iovec_offset,
                     plan.nread_offset,
                     plan.suffix_base,
@@ -377,22 +401,30 @@ impl WasmProgramBuilder {
         exports.export("_start", ExportKind::Func, 2);
         module.section(&exports);
 
-        // Locals: 0=pos, 1=nread, 2=line_start
+        let pw = PtrWidth::from_memory64(RUNTIME_MEMORY_CONFIG.memory64);
+        let mem_arg_i32 = MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        };
+        let mem_arg_u8 = MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        };
+
+        // Locals: 0=pos, 1=nread, 2=line_start  (all i32 value counters)
         let locals = [(3u32, ValType::I32)];
         let mut code = CodeSection::new();
         let mut function = Function::new(locals.iter().copied());
 
         // --- Read all of stdin ---
-        emit_prepare_iovec(&mut function, iovec_offset, buffer_ptr, buffer_len);
+        emit_prepare_iovec(&mut function, pw, iovec_offset, buffer_ptr, buffer_len);
         emit_fd_read_stdin(&mut function, iovec_offset, nread_offset);
 
-        // nread = memory[nread_offset]
-        function.instruction(&Instruction::I32Const(nread_offset));
-        function.instruction(&Instruction::I32Load(MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        }));
+        // nread = i32.load[nread_offset]
+        function.instruction(&ptr_const(pw, nread_offset as u64));
+        function.instruction(&Instruction::I32Load(mem_arg_i32));
         function.instruction(&Instruction::LocalSet(1)); // local 1 = nread
 
         // pos = 0; line_start = 0
@@ -408,79 +440,70 @@ impl WasmProgramBuilder {
         function.instruction(&Instruction::Else);
 
         // Block/Loop: scan for '\n' boundaries
-        // Outer block: used to break out of the loop
         function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty)); // block 0
         function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty)); // loop 0
 
-        // if pos >= nread: break out
+        // if pos >= nread: break out  (i32 value comparison)
         function.instruction(&Instruction::LocalGet(0));
         function.instruction(&Instruction::LocalGet(1));
         function.instruction(&Instruction::I32GeU);
-        function.instruction(&Instruction::BrIf(1)); // break block 0
+        function.instruction(&Instruction::BrIf(1));
 
-        // byte = memory[buffer_ptr + pos]
-        function.instruction(&Instruction::I32Const(buffer_ptr));
+        // byte = i32.load8_u[buffer_ptr + pos]
+        function.instruction(&ptr_const(pw, buffer_ptr as u64));
         function.instruction(&Instruction::LocalGet(0));
-        function.instruction(&Instruction::I32Add);
-        function.instruction(&Instruction::I32Load8U(MemArg {
-            offset: 0,
-            align: 0,
-            memory_index: 0,
-        }));
+        if pw == PtrWidth::W64 {
+            function.instruction(&Instruction::I64ExtendI32U);
+        }
+        function.instruction(&ptr_add(pw));
+        function.instruction(&Instruction::I32Load8U(mem_arg_u8));
         // if byte == '\n'
         function.instruction(&Instruction::I32Const(10));
         function.instruction(&Instruction::I32Eq);
         function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
 
-        // --- Emit: prefix + line_slice + suffix + optional_newline ---
-        // Write prefix (if non-empty)
+        // Write prefix
         if !prefix_bytes.is_empty() {
             emit_static_write(
                 &mut function,
+                pw,
                 iovec_offset,
                 nread_offset,
                 prefix_str_ptr,
                 prefix_len,
             );
         }
-        // Write line_slice: [buffer_ptr + line_start .. pos)
         // iovec[0] = buffer_ptr + line_start
-        function.instruction(&Instruction::I32Const(iovec_offset));
-        function.instruction(&Instruction::I32Const(buffer_ptr));
+        function.instruction(&ptr_const(pw, iovec_offset as u64));
+        function.instruction(&ptr_const(pw, buffer_ptr as u64));
         function.instruction(&Instruction::LocalGet(2));
-        function.instruction(&Instruction::I32Add);
-        function.instruction(&Instruction::I32Store(MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        }));
-        // iovec[1] = pos - line_start
-        function.instruction(&Instruction::I32Const(iovec_offset + 4));
+        if pw == PtrWidth::W64 {
+            function.instruction(&Instruction::I64ExtendI32U);
+        }
+        function.instruction(&ptr_add(pw));
+        function.instruction(&Instruction::I32Store(mem_arg_i32));
+        // iovec[1] = pos - line_start  (i32 value subtraction)
+        function.instruction(&ptr_const(pw, iovec_offset as u64 + 4));
         function.instruction(&Instruction::LocalGet(0));
         function.instruction(&Instruction::LocalGet(2));
         function.instruction(&Instruction::I32Sub);
-        function.instruction(&Instruction::I32Store(MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        }));
+        function.instruction(&Instruction::I32Store(mem_arg_i32));
         emit_fd_write_stdout(&mut function, iovec_offset, nread_offset);
-        // Write suffix (if non-empty)
         if !suffix_bytes.is_empty() {
             emit_static_write(
                 &mut function,
+                pw,
                 iovec_offset,
                 nread_offset,
                 suffix_str_ptr,
                 suffix_len,
             );
         }
-        // Append newline if requested
         if append_newline {
-            emit_write_newline(&mut function, iovec_offset, nread_offset, newline_ptr);
+            emit_write_newline(&mut function, pw, iovec_offset, nread_offset, newline_ptr);
         }
 
-        // line_start = pos + 1
+        // line_start = pos + 1  (i32 value arithmetic)
         function.instruction(&Instruction::LocalGet(0));
         function.instruction(&Instruction::I32Const(1));
         function.instruction(&Instruction::I32Add);
@@ -488,55 +511,50 @@ impl WasmProgramBuilder {
 
         function.instruction(&Instruction::End); // end if byte == '\n'
 
-        // pos += 1
+        // pos += 1  (i32 value arithmetic)
         function.instruction(&Instruction::LocalGet(0));
         function.instruction(&Instruction::I32Const(1));
         function.instruction(&Instruction::I32Add);
         function.instruction(&Instruction::LocalSet(0));
-        function.instruction(&Instruction::Br(0)); // continue loop
+        function.instruction(&Instruction::Br(0));
         function.instruction(&Instruction::End); // end loop
         function.instruction(&Instruction::End); // end block 0
 
-        // After loop: emit final line if line_start < nread (last line without trailing '\n')
-        // if line_start < nread:
+        // After loop: emit final line if line_start < nread (i32 value comparison)
         function.instruction(&Instruction::LocalGet(2));
         function.instruction(&Instruction::LocalGet(1));
         function.instruction(&Instruction::I32LtU);
         function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
-        // Write prefix
         if !prefix_bytes.is_empty() {
             emit_static_write(
                 &mut function,
+                pw,
                 iovec_offset,
                 nread_offset,
                 prefix_str_ptr,
                 prefix_len,
             );
         }
-        // Write last line slice [line_start .. nread)
-        function.instruction(&Instruction::I32Const(iovec_offset));
-        function.instruction(&Instruction::I32Const(buffer_ptr));
+        // iovec[0] = buffer_ptr + line_start
+        function.instruction(&ptr_const(pw, iovec_offset as u64));
+        function.instruction(&ptr_const(pw, buffer_ptr as u64));
         function.instruction(&Instruction::LocalGet(2));
-        function.instruction(&Instruction::I32Add);
-        function.instruction(&Instruction::I32Store(MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        }));
-        function.instruction(&Instruction::I32Const(iovec_offset + 4));
+        if pw == PtrWidth::W64 {
+            function.instruction(&Instruction::I64ExtendI32U);
+        }
+        function.instruction(&ptr_add(pw));
+        function.instruction(&Instruction::I32Store(mem_arg_i32));
+        // iovec[1] = nread - line_start  (i32 value subtraction)
+        function.instruction(&ptr_const(pw, iovec_offset as u64 + 4));
         function.instruction(&Instruction::LocalGet(1));
         function.instruction(&Instruction::LocalGet(2));
         function.instruction(&Instruction::I32Sub);
-        function.instruction(&Instruction::I32Store(MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        }));
+        function.instruction(&Instruction::I32Store(mem_arg_i32));
         emit_fd_write_stdout(&mut function, iovec_offset, nread_offset);
-        // Write suffix
         if !suffix_bytes.is_empty() {
             emit_static_write(
                 &mut function,
+                pw,
                 iovec_offset,
                 nread_offset,
                 suffix_str_ptr,
@@ -544,13 +562,13 @@ impl WasmProgramBuilder {
             );
         }
         if append_newline {
-            emit_write_newline(&mut function, iovec_offset, nread_offset, newline_ptr);
+            emit_write_newline(&mut function, pw, iovec_offset, nread_offset, newline_ptr);
         }
         function.instruction(&Instruction::End); // end if last line
 
-        // Static suffix_prints after the each
         emit_static_suffix_writes(
             &mut function,
+            pw,
             iovec_offset,
             nread_offset,
             suffix_payload_base,
@@ -563,21 +581,20 @@ impl WasmProgramBuilder {
         code.function(&function);
         module.section(&code);
 
-        // Data section: newline, suffix_str, prefix_str, then suffix_payloads
+        // Data section
         let mut data = DataSection::new();
-        // Always emit newline slot (used when append_newline=true or for consistency)
-        data.active(0, &ConstExpr::i32_const(newline_ptr), b"\n".to_vec());
+        data.active(0, &data_const(pw, newline_ptr as u32), b"\n".to_vec());
         if !suffix_bytes.is_empty() {
             data.active(
                 0,
-                &ConstExpr::i32_const(suffix_str_ptr),
+                &data_const(pw, suffix_str_ptr as u32),
                 suffix_bytes.to_vec(),
             );
         }
         if !prefix_bytes.is_empty() {
             data.active(
                 0,
-                &ConstExpr::i32_const(prefix_str_ptr),
+                &data_const(pw, prefix_str_ptr as u32),
                 prefix_bytes.to_vec(),
             );
         }
@@ -585,7 +602,7 @@ impl WasmProgramBuilder {
             message: "suffix payload base does not fit in i32".to_string(),
         })?;
         for payload in &suffix_payload_bytes {
-            data.active(0, &ConstExpr::i32_const(sp), payload.clone());
+            data.active(0, &data_const(pw, sp as u32), payload.clone());
             sp += i32::try_from(payload.len()).map_err(|_| CodegenError {
                 message: "suffix payload length does not fit in i32".to_string(),
             })?;
@@ -601,30 +618,33 @@ impl WasmProgramBuilder {
         suffix_prints: &[StaticPrintSuffix],
     ) -> Result<Vec<u8>, CodegenError> {
         let plan = self.runtime_io_memory_plan(suffix_prints)?;
-        self.build_runtime_io_module(&plan, &[], append_newline, |function, plan| {
+        self.build_runtime_io_module(&plan, &[], append_newline, |pw, function, plan| {
+            let mem_arg_i32 = MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            };
             emit_prepare_iovec(
                 function,
+                pw,
                 plan.iovec_offset,
                 plan.buffer_ptr,
                 plan.buffer_len,
             );
             emit_fd_read_stdin(function, plan.iovec_offset, plan.nread_offset);
 
-            function.instruction(&Instruction::I32Const(plan.nread_offset));
-            function.instruction(&Instruction::I32Load(MemArg {
-                offset: 0,
-                align: 2,
-                memory_index: 0,
-            }));
+            function.instruction(&ptr_const(pw, plan.nread_offset as u64));
+            function.instruction(&Instruction::I32Load(mem_arg_i32));
             function.instruction(&Instruction::I32Eqz);
             function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
             function.instruction(&Instruction::Else);
 
-            emit_set_iovec_len_from_nread(function, plan.iovec_offset, plan.nread_offset);
+            emit_set_iovec_len_from_nread(function, pw, plan.iovec_offset, plan.nread_offset);
             emit_fd_write_stdout(function, plan.iovec_offset, plan.nread_offset);
             if append_newline {
                 emit_write_newline(
                     function,
+                    pw,
                     plan.iovec_offset,
                     plan.nread_offset,
                     plan.newline_ptr,
@@ -632,6 +652,7 @@ impl WasmProgramBuilder {
             }
             emit_static_suffix_writes(
                 function,
+                pw,
                 plan.iovec_offset,
                 plan.nread_offset,
                 plan.suffix_base,
@@ -706,8 +727,10 @@ impl WasmProgramBuilder {
         build_body: F,
     ) -> Result<Vec<u8>, CodegenError>
     where
-        F: FnOnce(&mut Function, &RuntimeIoMemoryPlan) -> Result<(), CodegenError>,
+        F: FnOnce(PtrWidth, &mut Function, &RuntimeIoMemoryPlan) -> Result<(), CodegenError>,
     {
+        let pw = PtrWidth::from_memory64(RUNTIME_MEMORY_CONFIG.memory64);
+
         let mut module = Module::new();
 
         let mut types = TypeSection::new();
@@ -748,13 +771,14 @@ impl WasmProgramBuilder {
 
         let mut code = CodeSection::new();
         let mut function = Function::new(locals.iter().copied());
-        build_body(&mut function, plan)?;
+        build_body(pw, &mut function, plan)?;
         function.instruction(&Instruction::End);
         code.function(&function);
         module.section(&code);
 
         emit_runtime_io_data_section(
             &mut module,
+            pw,
             append_newline.then_some(plan.newline_ptr),
             plan.suffix_base,
             &plan.suffix_payloads,
@@ -766,27 +790,26 @@ impl WasmProgramBuilder {
 
 fn emit_prepare_iovec(
     function: &mut Function,
+    pw: PtrWidth,
     iovec_offset: i32,
     buffer_ptr: i32,
     buffer_len: i32,
 ) {
-    function.instruction(&Instruction::I32Const(iovec_offset));
+    let mem_arg = MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    };
+    function.instruction(&ptr_const(pw, iovec_offset as u64));
     function.instruction(&Instruction::I32Const(buffer_ptr));
-    function.instruction(&Instruction::I32Store(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    function.instruction(&Instruction::I32Const(iovec_offset + 4));
+    function.instruction(&Instruction::I32Store(mem_arg));
+    function.instruction(&ptr_const(pw, iovec_offset as u64 + 4));
     function.instruction(&Instruction::I32Const(buffer_len));
-    function.instruction(&Instruction::I32Store(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
+    function.instruction(&Instruction::I32Store(mem_arg));
 }
 
 fn emit_fd_read_stdin(function: &mut Function, iovec_offset: i32, nread_offset: i32) {
+    // WASI fd_read(fd=0, iovs_ptr, iovs_len=1, nread_ptr): all args are i32 ABI
     function.instruction(&Instruction::I32Const(0));
     function.instruction(&Instruction::I32Const(iovec_offset));
     function.instruction(&Instruction::I32Const(1));
@@ -795,22 +818,25 @@ fn emit_fd_read_stdin(function: &mut Function, iovec_offset: i32, nread_offset: 
     function.instruction(&Instruction::Drop);
 }
 
-fn emit_set_iovec_len_from_nread(function: &mut Function, iovec_offset: i32, nread_offset: i32) {
-    function.instruction(&Instruction::I32Const(iovec_offset + 4));
-    function.instruction(&Instruction::I32Const(nread_offset));
-    function.instruction(&Instruction::I32Load(MemArg {
+fn emit_set_iovec_len_from_nread(
+    function: &mut Function,
+    pw: PtrWidth,
+    iovec_offset: i32,
+    nread_offset: i32,
+) {
+    let mem_arg = MemArg {
         offset: 0,
         align: 2,
         memory_index: 0,
-    }));
-    function.instruction(&Instruction::I32Store(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
+    };
+    function.instruction(&ptr_const(pw, iovec_offset as u64 + 4));
+    function.instruction(&ptr_const(pw, nread_offset as u64));
+    function.instruction(&Instruction::I32Load(mem_arg));
+    function.instruction(&Instruction::I32Store(mem_arg));
 }
 
 fn emit_fd_write_stdout(function: &mut Function, iovec_offset: i32, nread_offset: i32) {
+    // WASI fd_write(fd=1, iovs_ptr, iovs_len=1, nwritten_ptr): all args are i32 ABI
     function.instruction(&Instruction::I32Const(1));
     function.instruction(&Instruction::I32Const(iovec_offset));
     function.instruction(&Instruction::I32Const(1));
@@ -821,64 +847,65 @@ fn emit_fd_write_stdout(function: &mut Function, iovec_offset: i32, nread_offset
 
 fn emit_write_newline(
     function: &mut Function,
+    pw: PtrWidth,
     iovec_offset: i32,
     nread_offset: i32,
     newline_ptr: i32,
 ) {
-    function.instruction(&Instruction::I32Const(iovec_offset));
+    let mem_arg = MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    };
+    function.instruction(&ptr_const(pw, iovec_offset as u64));
     function.instruction(&Instruction::I32Const(newline_ptr));
-    function.instruction(&Instruction::I32Store(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    function.instruction(&Instruction::I32Const(iovec_offset + 4));
+    function.instruction(&Instruction::I32Store(mem_arg));
+    function.instruction(&ptr_const(pw, iovec_offset as u64 + 4));
     function.instruction(&Instruction::I32Const(1));
-    function.instruction(&Instruction::I32Store(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
+    function.instruction(&Instruction::I32Store(mem_arg));
     emit_fd_write_stdout(function, iovec_offset, nread_offset);
 }
 
-fn emit_load_buffer_byte(function: &mut Function, buffer_ptr: i32) {
-    function.instruction(&Instruction::I32Const(buffer_ptr));
+fn emit_load_buffer_byte(function: &mut Function, pw: PtrWidth, buffer_ptr: i32) {
+    function.instruction(&ptr_const(pw, buffer_ptr as u64));
 }
 
 /// Write a static byte slice (known at compile time) to stdout via a single fd_write call.
-/// `ptr` and `len` must be i32 values suitable for Wasm memory addressing.
 fn emit_static_write(
     function: &mut Function,
+    pw: PtrWidth,
     iovec_offset: i32,
     nread_offset: i32,
     ptr: i32,
     len: i32,
 ) {
-    function.instruction(&Instruction::I32Const(iovec_offset));
+    let mem_arg = MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    };
+    function.instruction(&ptr_const(pw, iovec_offset as u64));
     function.instruction(&Instruction::I32Const(ptr));
-    function.instruction(&Instruction::I32Store(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    function.instruction(&Instruction::I32Const(iovec_offset + 4));
+    function.instruction(&Instruction::I32Store(mem_arg));
+    function.instruction(&ptr_const(pw, iovec_offset as u64 + 4));
     function.instruction(&Instruction::I32Const(len));
-    function.instruction(&Instruction::I32Store(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
+    function.instruction(&Instruction::I32Store(mem_arg));
     emit_fd_write_stdout(function, iovec_offset, nread_offset);
 }
 
 fn emit_static_suffix_writes(
     function: &mut Function,
+    pw: PtrWidth,
     iovec_offset: i32,
     nread_offset: i32,
     suffix_base: usize,
     suffix_payloads: &[Vec<u8>],
 ) -> Result<(), CodegenError> {
+    let mem_arg = MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    };
     let mut suffix_ptr = i32::try_from(suffix_base).map_err(|_| CodegenError {
         message: "static print suffix base does not fit in i32".to_string(),
     })?;
@@ -886,20 +913,13 @@ fn emit_static_suffix_writes(
         let payload_len = i32::try_from(payload.len()).map_err(|_| CodegenError {
             message: "static print suffix length does not fit in i32".to_string(),
         })?;
-        function.instruction(&Instruction::I32Const(iovec_offset));
+        function.instruction(&ptr_const(pw, iovec_offset as u64));
         function.instruction(&Instruction::I32Const(suffix_ptr));
-        function.instruction(&Instruction::I32Store(MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        }));
-        function.instruction(&Instruction::I32Const(iovec_offset + 4));
+        function.instruction(&Instruction::I32Store(mem_arg));
+        function.instruction(&ptr_const(pw, iovec_offset as u64 + 4));
         function.instruction(&Instruction::I32Const(payload_len));
-        function.instruction(&Instruction::I32Store(MemArg {
-            offset: 0,
-            align: 2,
-            memory_index: 0,
-        }));
+        function.instruction(&Instruction::I32Store(mem_arg));
+        // WASI fd_write: all args i32 ABI
         function.instruction(&Instruction::I32Const(1));
         function.instruction(&Instruction::I32Const(iovec_offset));
         function.instruction(&Instruction::I32Const(1));
@@ -913,6 +933,7 @@ fn emit_static_suffix_writes(
 
 fn emit_runtime_io_data_section(
     module: &mut Module,
+    pw: PtrWidth,
     newline_ptr: Option<i32>,
     suffix_base: usize,
     suffix_payloads: &[Vec<u8>],
@@ -922,13 +943,13 @@ fn emit_runtime_io_data_section(
     }
     let mut data = DataSection::new();
     if let Some(newline_ptr) = newline_ptr {
-        data.active(0, &ConstExpr::i32_const(newline_ptr), b"\n".to_vec());
+        data.active(0, &data_const(pw, newline_ptr as u32), b"\n".to_vec());
     }
     let mut suffix_ptr = i32::try_from(suffix_base).map_err(|_| CodegenError {
         message: "static print suffix base does not fit in i32".to_string(),
     })?;
     for payload in suffix_payloads {
-        data.active(0, &ConstExpr::i32_const(suffix_ptr), payload.clone());
+        data.active(0, &data_const(pw, suffix_ptr as u32), payload.clone());
         suffix_ptr += i32::try_from(payload.len()).map_err(|_| CodegenError {
             message: "static print suffix length does not fit in i32".to_string(),
         })?;

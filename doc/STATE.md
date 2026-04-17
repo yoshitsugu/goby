@@ -1,37 +1,69 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-15
+Last updated: 2026-04-17
 
 ## Current Focus
 
-**PLAN_LIST_FIX M2 — CLI ceiling surface**
+**M4 — memory64 full migration (i32 → i64 pointer widths)**
 
-M1 (in-place lowering) is complete as of 2026-04-14.
+---
 
-**M2 complete as of 2026-04-15:**
-- M2.0: `RUNTIME_MEMORY_CONFIG` (1 GiB) / `TEST_MEMORY_CONFIG` (64 MiB) split; emitter updated
-- M2.2: `--max-memory-mb <N>` flag and `GOBY_MAX_MEMORY_MB` env var wired to CLI
-  - Both runtime-stdin and file-based wasmtime paths honour the ceiling
-  - `execute_wasm` passes `-Wmax-memory-size=<bytes>` to wasmtime ≥ v15
-- M2.3: OOM trap message now appends "(configured ceiling: N MiB; use --max-memory-mb to raise it)"
-- M2.4: `--max-memory-mb` parse tests + `resolve_memory_config` unit tests added
+## M4 Completion Status
 
-**M3 complete as of 2026-04-15:**
-- M3.1: `WasmMemoryConfig::memory64: bool` field added (default `false`); `memory_type()` honours it; `config.wasm_memory64(true)` unconditionally enabled in wasmtime `Engine`
-- M3.2: `memory64_flag_hello_gb_executes_correctly` test — hello.gb executes correctly under `memory64: true` memory declaration (wasm32 opcodes, memory64 memory type)
-- M3.3: Host-refusal semantics validated via existing OOM tests; decision recorded in `doc/PLAN.md` §3.2: `--max-memory-mb=0` must translate to finite `RUNTIME_MEMORY_CONFIG` ceiling until `StoreLimits` is wired (deferred to M4)
-- M3.4: Address-site inventory committed as `doc/PLAN_LIST_FIX_M4_SITES.md`
+### Completed sub-milestones
 
-**M4 in progress:**
-- M4.1 (ptr.rs helpers) + M4.1b (i64 scratch locals): complete
-- M4.2.0 (HeapEmitState.pw() shorthand): complete
-- M4.2.1 (backend.rs): excluded — all I32Load/Store are WASI Preview 1 iovec (always i32)
-- M4.2.2 (emit_chunked_* in emit_instrs): complete
-- M4.2.3 (all remaining I32Load*/I32Store* in emit.rs): complete — 0 I32Load/I32Store remain
+- **M4.1** (`ptr.rs` helpers): `PtrWidth` enum + `ptr_load/store/const/add/...` helpers added to `gen_lower/ptr.rs`. All pointer operations now dispatched through these helpers.
+- **M4.1b** (i64 scratch locals): All `i32_scratch` pool locals declared as `ValType::I64` when `memory64 = true`. `HeapEmitState.pw()` shorthand wired in.
+- **M4.2.0** (`HeapEmitState.pw()` shorthand): Added `pw()` accessor on `HeapEmitState`; propagated through all callers.
+- **M4.2.1** (`backend.rs`): Excluded — all `I32Load`/`I32Store` in `backend.rs` are for WASI Preview 1 iovec ABI (always i32, never pointer-width).
+- **M4.2.2** (emit_chunked_* in emit_instrs): All chunked-list emitters converted to `ptr_load`/`ptr_store`.
+- **M4.2.3** (remaining `I32Load*`/`I32Store*` in `emit.rs`): 0 bare `I32Load`/`I32Store` remain for address operations.
+- **M4.3** (address-typed `I32Const` → `ptr_const`): Complete. All fixed address constants use `ptr_const(pw, ...)`.
+- **M4.4** (`I32Add`/`Sub` on addresses → `ptr_add`/`ptr_sub`): Complete.
+- **M4.5** (`MemoryGrow`/`MemorySize`): Already pointer-width-correct.
+- **M4.6** (flip `memory64` default to `true`): `RUNTIME_MEMORY_CONFIG.memory64 = true` and `TEST_MEMORY_CONFIG.memory64 = true` are both permanently set.
+- **Data section fix**: Active data segment offsets use `ConstExpr::i64_const` when `memory64 = true`.
+- **Global slot I/O fix** (critical): `heap_cursor`, `heap_floor`, `runtime_error`, `host_bump_cursor` are always 4-byte i32 fields at fixed offsets in linear memory. Fixed all read/write sites to use `I32Store`/`I32Load` (not `ptr_store`/`ptr_load`), with `I32WrapI64`/`I64ExtendI32U` conversions as needed. This eliminated the runtime trap from 8-byte writes corrupting adjacent global slots.
+- **`bool_from_i64!` macro**: Added for `IrBinOp::Eq` in W64 — `s_result` scratch local is `i64` in W64, so we need `I64Or` (not `I64ExtendI32U + I64Or`).
+- **`emit_push_tagged_ptr` fix**: Added `pw` parameter; `I64ExtendI32U` emitted only in W32 (in W64 the ptr local is already i64).
+- **`BlockType::Result(ptr_val_type(pw))`**: Fixed two `If` blocks in `emit_list_concat_helper` and `emit_filter_map_helper` that yielded ptr-width values but declared `ValType::I32`.
+- **Tail-call dispatcher scratch locals**: Fixed to use `ValType::I64` when `memory64 = true`.
+- **`_pw` layout functions**: Added `chunk_alloc_size_pw`, `header_alloc_size_pw`, `header_n_chunks_offset_pw`, `header_chunk_ptr_offset_pw`, `chunk_item_offset_pw`, `meta_slot_bytes`, `ptr_slot_bytes` — all sensitive to `PtrWidth`.
 
-Next: M4.3 (address-typed I32Const → ptr_const), M4.4 (I32Add/Sub on addresses), M4.5 (MemoryGrow/MemorySize), M4.6 (flip memory64 default)
+### Known Remaining Issues (as of 2026-04-15)
 
-Current state: all cargo tests green; M4.2 exit criteria met.
+**Test status**:
+- `cargo fmt` — pass
+- `cargo check` — pass
+- `cargo test` — workspace passes except for **1 failing `goby-wasm` test**
+
+#### Remaining issue: host temp allocations after grapheme-heavy runtime path
+
+`cargo test -p goby-wasm recursive_multi_part_interpolated_print_after_graphemes_executes -- --test-threads=1`
+still fails with:
+
+- `stdout utf8: invalid utf-8 sequence of 1 bytes from index 405`
+
+Observed shape:
+- `read() -> split() -> list.map graphemes` succeeds
+- subsequent recursive interpolated `println` output becomes corrupted
+- most other general-lowered read/split/grapheme/string-equality tests now pass
+
+Likely root cause:
+- one remaining host-temp / Wasm-heap boundary sync gap after `StringGraphemesList`-driven allocations
+- corruption appears only after host-side grapheme allocations are followed by many interpolated print temporaries
+
+---
+
+## Immediate Next Actions
+
+1. Reproduce `recursive_multi_part_interpolated_print_after_graphemes_executes` in isolation.
+2. Trace remaining host-temp / heap-floor desync after grapheme host imports.
+3. Re-run `cargo test -p goby-wasm --lib -- --test-threads=1`.
+4. Re-run workspace `cargo test`.
+5. If green, update `doc/PLAN.md` to mark M4 complete.
+
+---
 
 ## Architecture State
 
@@ -42,6 +74,6 @@ Current state: all cargo tests green; M4.2 exit criteria met.
 | Typechecker | Stable |
 | IR (`ir.rs`) | Stable |
 | IR lowering (`ir_lower.rs`) | Stable |
-| Wasm backend | Stable. `ListSetInPlace` added for each+AssignIndex in-place path |
+| Wasm backend | M4 nearly complete — workspace green except 1 `goby-wasm` runtime test |
 | Effect handlers | Non-tail / multi-resume produces `BackendLimitation` |
 | GC / reclamation | Out of scope. Bump allocator only |

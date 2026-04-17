@@ -15,7 +15,15 @@
 //! - WASI ABI call arguments (always i32 even under memory64)
 //! - `MemArg.offset` and `MemArg.align` fields
 
-use wasm_encoder::{Instruction, MemArg};
+use wasm_encoder::{Instruction, MemArg, ValType};
+
+/// The Wasm value type used for pointer-width values.
+pub(crate) fn ptr_val_type(pw: PtrWidth) -> ValType {
+    match pw {
+        PtrWidth::W32 => ValType::I32,
+        PtrWidth::W64 => ValType::I64,
+    }
+}
 
 /// Whether the module's linear memory uses 32-bit or 64-bit addresses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +130,14 @@ pub(crate) fn ptr_lt_u(pw: PtrWidth) -> Instruction<'static> {
     }
 }
 
+/// Unsigned greater-than-or-equal comparison: produces an i32 boolean in both modes.
+pub(crate) fn ptr_ge_u(pw: PtrWidth) -> Instruction<'static> {
+    match pw {
+        PtrWidth::W32 => Instruction::I32GeU,
+        PtrWidth::W64 => Instruction::I64GeU,
+    }
+}
+
 /// The sentinel value returned by `memory.grow` on failure (-1 in the pointer width).
 pub(crate) fn ptr_neg_one(pw: PtrWidth) -> Instruction<'static> {
     match pw {
@@ -136,6 +152,105 @@ pub(crate) fn ptr_extend_to_i64(pw: PtrWidth) -> Option<Instruction<'static>> {
     match pw {
         PtrWidth::W32 => Some(Instruction::I64ExtendI32U),
         PtrWidth::W64 => None,
+    }
+}
+
+/// After `I64Const(0xFFFF_FFFF) + I64And`, convert to the pointer width.
+/// W32: emit `I32WrapI64` to produce an i32 address.
+/// W64: emit nothing — i64 is already the right address type.
+///
+/// Pattern:
+/// ```ignore
+/// function.instruction(&Instruction::I64Const(0xFFFF_FFFFi64));
+/// function.instruction(&Instruction::I64And);
+/// if let Some(wrap) = ptr_wrap_from_i64(pw) {
+///     function.instruction(&wrap);
+/// }
+/// ```
+pub(crate) fn ptr_wrap_from_i64(pw: PtrWidth) -> Option<Instruction<'static>> {
+    match pw {
+        PtrWidth::W32 => Some(Instruction::I32WrapI64),
+        PtrWidth::W64 => None,
+    }
+}
+
+/// Unsigned less-than-or-equal comparison: produces an i32 boolean in both modes.
+pub(crate) fn ptr_le_u(pw: PtrWidth) -> Instruction<'static> {
+    match pw {
+        PtrWidth::W32 => Instruction::I32LeU,
+        PtrWidth::W64 => Instruction::I64LeU,
+    }
+}
+
+/// Signed less-than comparison: produces an i32 boolean in both modes.
+pub(crate) fn ptr_lt_s(pw: PtrWidth) -> Instruction<'static> {
+    match pw {
+        PtrWidth::W32 => Instruction::I32LtS,
+        PtrWidth::W64 => Instruction::I64LtS,
+    }
+}
+
+/// Bitwise AND of two pointer-width values.
+pub(crate) fn ptr_and(pw: PtrWidth) -> Instruction<'static> {
+    match pw {
+        PtrWidth::W32 => Instruction::I32And,
+        PtrWidth::W64 => Instruction::I64And,
+    }
+}
+
+/// Bitwise OR of two pointer-width values.
+pub(crate) fn ptr_or(pw: PtrWidth) -> Instruction<'static> {
+    match pw {
+        PtrWidth::W32 => Instruction::I32Or,
+        PtrWidth::W64 => Instruction::I64Or,
+    }
+}
+
+/// Unsigned remainder of two pointer-width values.
+pub(crate) fn ptr_rem_u(pw: PtrWidth) -> Instruction<'static> {
+    match pw {
+        PtrWidth::W32 => Instruction::I32RemU,
+        PtrWidth::W64 => Instruction::I64RemU,
+    }
+}
+
+/// Logical right shift of a pointer-width value by a constant.
+pub(crate) fn ptr_shr_u(pw: PtrWidth) -> Instruction<'static> {
+    match pw {
+        PtrWidth::W32 => Instruction::I32ShrU,
+        PtrWidth::W64 => Instruction::I64ShrU,
+    }
+}
+
+/// Equality comparison against zero: produces an i32 boolean.
+pub(crate) fn ptr_eqz(pw: PtrWidth) -> Instruction<'static> {
+    match pw {
+        PtrWidth::W32 => Instruction::I32Eqz,
+        PtrWidth::W64 => Instruction::I64Eqz,
+    }
+}
+
+/// Not-equal comparison: produces an i32 boolean in both modes.
+pub(crate) fn ptr_ne(pw: PtrWidth) -> Instruction<'static> {
+    match pw {
+        PtrWidth::W32 => Instruction::I32Ne,
+        PtrWidth::W64 => Instruction::I64Ne,
+    }
+}
+
+/// Unsigned greater-than comparison: produces an i32 boolean in both modes.
+pub(crate) fn ptr_gt_u(pw: PtrWidth) -> Instruction<'static> {
+    match pw {
+        PtrWidth::W32 => Instruction::I32GtU,
+        PtrWidth::W64 => Instruction::I64GtU,
+    }
+}
+
+/// Signed greater-than comparison: produces an i32 boolean in both modes.
+pub(crate) fn ptr_gt_s(pw: PtrWidth) -> Instruction<'static> {
+    match pw {
+        PtrWidth::W32 => Instruction::I32GtS,
+        PtrWidth::W64 => Instruction::I64GtS,
     }
 }
 
