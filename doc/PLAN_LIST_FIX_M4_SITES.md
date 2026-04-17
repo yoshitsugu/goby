@@ -126,9 +126,13 @@ preserved as-is after M4.
 ## Checklist status
 
 - [x] A: I32Load*/I32Store* → ptr_load/ptr_store
-- [ ] B: Address-typed I32Const → ptr_const
-- [ ] C: Address-arithmetic I32Add/Sub → ptr_add/ptr_sub
-- [ ] D: MemoryGrow/MemorySize → i64 operand/result
-- [ ] E: WASM_PAGE_BYTES multiplies in emit.rs → i64
-- [ ] Flip RUNTIME_MEMORY_CONFIG.memory64 = true
-- [ ] Comment/doc audit
+- [x] B: Address-typed I32Const → ptr_const
+- [x] C: Address-arithmetic I32Add/Sub → ptr_add/ptr_sub
+- [x] D: MemoryGrow/MemorySize → i64 operand/result
+- [x] E: WASM_PAGE_BYTES multiplies in emit.rs → i64
+- [x] Flip RUNTIME_MEMORY_CONFIG.memory64 = true
+- [x] Comment/doc audit
+
+Archive note (2026-04-18):
+- This inventory is complete and now serves as the historical checklist for the
+  memory64 migration that unblocks `doc/PLAN_PERCEUS.md` M0.

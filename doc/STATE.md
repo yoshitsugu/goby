@@ -1,12 +1,23 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-17 (post-fix)
+Last updated: 2026-04-18
 
 ## Current Focus
 
-**M4 — memory64 full migration (i32 → i64 pointer widths)**
+**Perceus plan M0 completed; next implementation slice is M1**
 
 ---
+
+## Current Status
+
+### Perceus precondition gate
+
+- `doc/PLAN_LIST_FIX_M4_SITES.md` is now fully checked off; memory64 is the only
+  supported pointer width in the Wasm backend.
+- `doc/BUGS.md` has no open issues touching `emit.rs` allocation paths or
+  runtime tagged-value layout.
+- `doc/PLAN_PERCEUS.md` M0 is unblocked and can proceed to M1 without further
+  prerequisite work.
 
 ## M4 Completion Status
 
@@ -51,9 +62,10 @@ Fix:
 
 ## Immediate Next Actions
 
-1. Update `doc/PLAN.md` M4 checklist/status to reflect workspace-green state.
-2. Decide whether to keep or trim now-redundant M4 migration guard comments in `emit.rs`.
-3. Continue next roadmap slice (post-M4 tasks) from `doc/PLAN.md`.
+1. Implement `doc/PLAN_PERCEUS.md` M1: closed-literal detection in shared IR.
+2. Add `examples/refcount_reuse_loop.gb` and its integration harness.
+3. Record the checksum literal from `goby check` and keep `cargo fmt`, `cargo check`,
+   and `cargo test` green while landing M1.
 
 ---
 
@@ -66,6 +78,6 @@ Fix:
 | Typechecker | Stable |
 | IR (`ir.rs`) | Stable |
 | IR lowering (`ir_lower.rs`) | Stable |
-| Wasm backend | M4 memory64 migration slice is workspace-green (`fmt/check/test`) |
+| Wasm backend | memory64 migration complete; Perceus M0 unblocked |
 | Effect handlers | Non-tail / multi-resume produces `BackendLimitation` |
 | GC / reclamation | Out of scope. Bump allocator only |

@@ -426,13 +426,13 @@ test or a fixture file, not by inspection.
 
 ### M0 — Precondition gate
 
-- [ ] `doc/PLAN_LIST_FIX_M4_SITES.md` milestones fully complete;
+- [x] `doc/PLAN_LIST_FIX_M4_SITES.md` milestones fully complete;
       memory64 is the only supported width (`doc/STATE.md` already
       records M4.6 — reconfirm at this plan's start).
-- [ ] No outstanding tasks in `doc/BUGS.md` that touch `emit.rs`
+- [x] No outstanding tasks in `doc/BUGS.md` that touch `emit.rs`
       allocation paths or `runtime_value.rs` tag layout.
-- [ ] **Acceptance:** open a PR that changes only `doc/STATE.md` to
-      record "Perceus plan unblocked"; no code change.
+- [x] **Acceptance:** `doc/STATE.md` records "Perceus plan unblocked";
+      the implementation track can proceed to M1.
 
 ### M1 — Literal hoisting and goal harness
 

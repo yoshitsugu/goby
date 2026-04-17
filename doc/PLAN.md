@@ -541,7 +541,20 @@ Output format: human-readable (default) and JSON lines (`--json`).
   and Neovim/Vim syntax files.
 - **D6b-ts: Tree-sitter grammar** — defer until after D6c.
 
-### 4.2 Review Follow-ups (Backlog)
+### 4.2 Active Track E: Perceus memory management
+
+- `doc/PLAN_PERCEUS.md` is the execution plan for replacing the current
+  bump-only allocator with refcount + reuse.
+- M0 is complete as of 2026-04-18:
+  - memory64 migration is complete,
+  - `doc/BUGS.md` has no open allocator/tag-layout blockers,
+  - `doc/STATE.md` records the plan as unblocked.
+- Immediate next slice is M1:
+  - closed-literal detection in shared IR,
+  - static literal hoisting in the Wasm emitter,
+  - `examples/refcount_reuse_loop.gb` plus its integration harness.
+
+### 4.3 Review Follow-ups (Backlog)
 
 The following items were identified in a focused code review and are tracked as
 near/mid-term engineering debt after current active tracks.
@@ -575,7 +588,7 @@ Note:
 - Critical correctness items from the same review batch were already fixed:
   parser explicit early-return clarity and planning `u16` overflow fail-fast behavior.
 
-### 4.3 `Float` / Wasm `f64` Support
+### 4.4 `Float` / Wasm `f64` Support
 
 Goal: add a first-class `Float` type with predictable parser/typechecker/runtime/Wasm behavior.
 
@@ -631,7 +644,7 @@ Acceptance criteria:
 - diagnostics clearly distinguish `Int` from `Float`.
 - docs/examples/spec are updated in the same slice that lands behavior.
 
-### 4.4 Track OOB: List Index Out-of-Bounds Error Message
+### 4.5 Track OOB: List Index Out-of-Bounds Error Message
 
 Goal: when `xs[i]` uses an index that is negative or at least the list length,
 report a human-readable runtime error instead of an internal abort marker or raw
