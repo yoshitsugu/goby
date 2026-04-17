@@ -5,6 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
+use goby_core::closed_literals::is_closed_literal;
 use goby_core::closure_capture::{
     BindingRepr, CallableEnv, CallableEnvSlotKind, ClosureBindingEnv,
     analyze_lambda_callable_env_for_params, binding_repr_for_let_mut, has_mutable_write_capture_of,
@@ -12,7 +13,8 @@ use goby_core::closure_capture::{
 use goby_core::ir::{CompExpr, IrBinOp, IrInterpPart, ValueExpr};
 
 use crate::gen_lower::backend_ir::{
-    BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp, WasmBackendInstr,
+    BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp, StaticHeapValue,
+    WasmBackendInstr,
 };
 use crate::gen_lower::value::{ValueError, encode_bool, encode_int, encode_unit};
 
@@ -2611,6 +2613,15 @@ fn lower_value_ctx(
     bindings: &ClosureBindingEnv,
     known_decls: &HashSet<String>,
 ) -> Result<Vec<WasmBackendInstr>, LowerError> {
+    if matches!(v, ValueExpr::TupleLit(items) if items.is_empty()) {
+        return Ok(vec![WasmBackendInstr::I64Const(encode_unit())]);
+    }
+    if is_closed_literal(v)
+        && let Some(value) = static_heap_value(v)
+    {
+        return Ok(vec![WasmBackendInstr::PushStaticHeap { value }]);
+    }
+
     match v {
         ValueExpr::Unit => Ok(vec![WasmBackendInstr::I64Const(encode_unit())]),
         ValueExpr::IntLit(n) => Ok(vec![WasmBackendInstr::I64Const(encode_int(*n)?)]),
@@ -2750,6 +2761,49 @@ fn lower_value_ctx(
         other => Err(LowerError::UnsupportedForm {
             node: format!("{:?}", other),
         }),
+    }
+}
+
+fn static_heap_value(value: &ValueExpr) -> Option<StaticHeapValue> {
+    match value {
+        ValueExpr::IntLit(n) => Some(StaticHeapValue::Int(*n)),
+        ValueExpr::BoolLit(b) => Some(StaticHeapValue::Bool(*b)),
+        ValueExpr::StrLit(text) => Some(StaticHeapValue::Str(text.clone())),
+        ValueExpr::Unit => Some(StaticHeapValue::Unit),
+        ValueExpr::ListLit { elements, spread } => {
+            if spread.is_some() {
+                return None;
+            }
+            Some(StaticHeapValue::List(
+                elements
+                    .iter()
+                    .map(static_heap_value)
+                    .collect::<Option<Vec<_>>>()?,
+            ))
+        }
+        ValueExpr::TupleLit(items) => Some(StaticHeapValue::Tuple(
+            items
+                .iter()
+                .map(static_heap_value)
+                .collect::<Option<Vec<_>>>()?,
+        )),
+        ValueExpr::RecordLit {
+            constructor,
+            fields,
+        } => Some(StaticHeapValue::Record {
+            constructor: constructor.clone(),
+            fields: fields
+                .iter()
+                .map(|(name, value)| Some((name.clone(), static_heap_value(value)?)))
+                .collect::<Option<Vec<_>>>()?,
+        }),
+        ValueExpr::Interp(_)
+        | ValueExpr::Var(_)
+        | ValueExpr::GlobalRef { .. }
+        | ValueExpr::Lambda { .. }
+        | ValueExpr::BinOp { .. }
+        | ValueExpr::TupleProject { .. }
+        | ValueExpr::ListGet { .. } => None,
     }
 }
 
@@ -4305,10 +4359,15 @@ build n =
         ]))
         .expect("TupleLit lowering should succeed");
 
-        let [WasmBackendInstr::TupleLit { element_instrs }] = result.as_slice() else {
-            panic!("expected a single TupleLit backend instruction");
+        let [
+            WasmBackendInstr::PushStaticHeap {
+                value: StaticHeapValue::Tuple(items),
+            },
+        ] = result.as_slice()
+        else {
+            panic!("expected a single hoisted tuple literal");
         };
-        assert_eq!(element_instrs.len(), 2, "tuple arity should be preserved");
+        assert_eq!(items.len(), 2, "tuple arity should be preserved");
     }
 
     #[test]
@@ -4335,20 +4394,19 @@ build n =
         .expect("RecordLit lowering should succeed");
 
         let [
-            WasmBackendInstr::RecordLit {
-                constructor,
-                field_instrs,
+            WasmBackendInstr::PushStaticHeap {
+                value:
+                    StaticHeapValue::Record {
+                        constructor,
+                        fields,
+                    },
             },
         ] = result.as_slice()
         else {
-            panic!("expected a single RecordLit backend instruction");
+            panic!("expected a single hoisted record literal");
         };
         assert_eq!(constructor, "Pair");
-        assert_eq!(
-            field_instrs.len(),
-            2,
-            "record field count should be preserved"
-        );
+        assert_eq!(fields.len(), 2, "record field count should be preserved");
     }
 
     // Lambda lowering tests

@@ -14,7 +14,7 @@ use wasm_encoder::{
 use crate::CodegenError;
 use crate::gen_lower::backend_ir::{
     BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp, SplitIndexOperand,
-    WasmBackendInstr,
+    StaticHeapValue, WasmBackendInstr,
 };
 use crate::gen_lower::ptr::{
     PtrWidth, ptr_add, ptr_and, ptr_const, ptr_div_u, ptr_eq, ptr_eqz, ptr_extend_to_i64, ptr_ge_u,
@@ -25,7 +25,8 @@ use goby_core::ir::IrBinOp;
 
 use crate::gen_lower::value::{
     TAG_BOOL, TAG_CELL, TAG_CLOSURE, TAG_INT, TAG_LIST, TAG_RECORD, TAG_STRING, TAG_TUPLE,
-    encode_string_ptr, encode_unit,
+    encode_bool, encode_int, encode_list_ptr, encode_record_ptr, encode_string_ptr,
+    encode_tuple_ptr, encode_unit,
 };
 use crate::host_runtime::{
     HOST_BUMP_RESERVED_BYTES, HOST_INTRINSIC_IMPORTS, IntrinsicExecutionBoundary,
@@ -43,6 +44,7 @@ use crate::memory_config::{RUNTIME_MEMORY_CONFIG, WASM_PAGE_BYTES};
 // initial_pages (= 4 in both TEST and RUNTIME configs, invariant by design).
 const STATIC_STRING_LIMIT: u32 =
     RUNTIME_MEMORY_CONFIG.initial_linear_memory_bytes() - HOST_BUMP_RESERVED_BYTES;
+const STATIC_REFCOUNT_SENTINEL: u64 = u64::MAX;
 
 // Import function indices begin with the WASI pair and may be extended with
 // `goby-wasm` owned grapheme host intrinsics.
@@ -179,7 +181,6 @@ pub(crate) fn chunk_item_offset_pw(pw: PtrWidth, item_idx: u32) -> u32 {
     meta_slot_bytes(pw) + item_idx * 8
 }
 
-
 #[derive(Debug, Clone)]
 struct StaticStringPool {
     ptrs: HashMap<String, i32>,
@@ -207,39 +208,15 @@ impl StaticStringPool {
         }
 
         for instr in all_instrs {
-            let WasmBackendInstr::PushStaticString { text } = instr else {
-                continue;
-            };
-            if ptrs.contains_key(text) {
-                continue;
+            match instr {
+                WasmBackendInstr::PushStaticString { text } => {
+                    intern_static_string(text, &mut ptrs, &mut segments, &mut cursor)?
+                }
+                WasmBackendInstr::PushStaticHeap { value } => {
+                    collect_static_heap_strings(value, &mut ptrs, &mut segments, &mut cursor)?
+                }
+                _ => {}
             }
-
-            let text_len = u32::try_from(text.len()).map_err(|_| CodegenError {
-                message: "gen_lower/emit: static string is too large to encode".to_string(),
-            })?;
-            let blob_len = 4u32.checked_add(text_len).ok_or_else(|| CodegenError {
-                message: "gen_lower/emit: static string blob size overflow".to_string(),
-            })?;
-            cursor = cursor.checked_sub(blob_len).ok_or_else(|| CodegenError {
-                message: "gen_lower/emit: static string pool overflow".to_string(),
-            })?;
-            let ptr = i32::try_from(cursor).map_err(|_| CodegenError {
-                message: "gen_lower/emit: static string pointer does not fit in i32".to_string(),
-            })?;
-
-            let mut blob = Vec::with_capacity(blob_len as usize);
-            blob.extend_from_slice(
-                &i32::try_from(text_len)
-                    .map_err(|_| CodegenError {
-                        message: "gen_lower/emit: static string length does not fit in i32"
-                            .to_string(),
-                    })?
-                    .to_le_bytes(),
-            );
-            blob.extend_from_slice(text.as_bytes());
-
-            ptrs.insert(text.clone(), ptr);
-            segments.push((ptr, blob));
         }
 
         Ok(Self {
@@ -257,6 +234,326 @@ impl StaticStringPool {
 
     fn is_empty(&self) -> bool {
         self.segments.is_empty()
+    }
+}
+
+fn collect_static_heap_strings(
+    value: &StaticHeapValue,
+    ptrs: &mut HashMap<String, i32>,
+    segments: &mut Vec<(i32, Vec<u8>)>,
+    cursor: &mut u32,
+) -> Result<(), CodegenError> {
+    match value {
+        StaticHeapValue::Str(text) => intern_static_string(text, ptrs, segments, cursor),
+        StaticHeapValue::List(items) | StaticHeapValue::Tuple(items) => {
+            for item in items {
+                collect_static_heap_strings(item, ptrs, segments, cursor)?;
+            }
+            Ok(())
+        }
+        StaticHeapValue::Record { fields, .. } => {
+            for (_, value) in fields {
+                collect_static_heap_strings(value, ptrs, segments, cursor)?;
+            }
+            Ok(())
+        }
+        StaticHeapValue::Int(_) | StaticHeapValue::Bool(_) | StaticHeapValue::Unit => Ok(()),
+    }
+}
+
+fn intern_static_string(
+    text: &str,
+    ptrs: &mut HashMap<String, i32>,
+    segments: &mut Vec<(i32, Vec<u8>)>,
+    cursor: &mut u32,
+) -> Result<(), CodegenError> {
+    if ptrs.contains_key(text) {
+        return Ok(());
+    }
+
+    let text_len = u32::try_from(text.len()).map_err(|_| CodegenError {
+        message: "gen_lower/emit: static string is too large to encode".to_string(),
+    })?;
+    let blob_len = 4u32.checked_add(text_len).ok_or_else(|| CodegenError {
+        message: "gen_lower/emit: static string blob size overflow".to_string(),
+    })?;
+    *cursor = cursor.checked_sub(blob_len).ok_or_else(|| CodegenError {
+        message: "gen_lower/emit: static string pool overflow".to_string(),
+    })?;
+    let ptr = i32::try_from(*cursor).map_err(|_| CodegenError {
+        message: "gen_lower/emit: static string pointer does not fit in i32".to_string(),
+    })?;
+
+    let mut blob = Vec::with_capacity(blob_len as usize);
+    blob.extend_from_slice(
+        &i32::try_from(text_len)
+            .map_err(|_| CodegenError {
+                message: "gen_lower/emit: static string length does not fit in i32".to_string(),
+            })?
+            .to_le_bytes(),
+    );
+    blob.extend_from_slice(text.as_bytes());
+
+    ptrs.insert(text.to_string(), ptr);
+    segments.push((ptr, blob));
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct StaticHeapPool {
+    ptrs: HashMap<StaticHeapValue, i32>,
+    segments: Vec<(i32, Vec<u8>)>,
+    bytes_used: u32,
+}
+
+impl StaticHeapPool {
+    fn build_from_all<'a>(
+        all_slices: impl Iterator<Item = &'a [WasmBackendInstr]>,
+        static_strings: &StaticStringPool,
+        record_ctor_tags: &HashMap<String, u32>,
+        pw: PtrWidth,
+    ) -> Result<Self, CodegenError> {
+        let mut values = Vec::new();
+        for slice in all_slices {
+            for instr in collect_all_instrs(slice) {
+                if let WasmBackendInstr::PushStaticHeap { value } = instr {
+                    values.push(value.clone());
+                }
+            }
+        }
+
+        let mut builder = StaticHeapPoolBuilder {
+            ptrs: HashMap::new(),
+            segments: Vec::new(),
+            cursor: STATIC_STRING_LIMIT
+                .checked_sub(static_strings.bytes_used)
+                .ok_or_else(|| CodegenError {
+                    message: "gen_lower/emit: static heap overlaps static string pool".to_string(),
+                })?,
+            static_strings,
+            record_ctor_tags,
+            pw,
+        };
+
+        for value in values {
+            builder.intern(&value)?;
+        }
+
+        Ok(Self {
+            ptrs: builder.ptrs,
+            segments: builder.segments,
+            bytes_used: STATIC_STRING_LIMIT - builder.cursor - static_strings.bytes_used,
+        })
+    }
+
+    fn ptr(&self, value: &StaticHeapValue) -> Result<i32, CodegenError> {
+        self.ptrs.get(value).copied().ok_or_else(|| CodegenError {
+            message: "gen_lower/emit: missing static heap pointer".to_string(),
+        })
+    }
+
+    fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
+}
+
+struct StaticHeapPoolBuilder<'a> {
+    ptrs: HashMap<StaticHeapValue, i32>,
+    segments: Vec<(i32, Vec<u8>)>,
+    cursor: u32,
+    static_strings: &'a StaticStringPool,
+    record_ctor_tags: &'a HashMap<String, u32>,
+    pw: PtrWidth,
+}
+
+impl<'a> StaticHeapPoolBuilder<'a> {
+    fn intern(&mut self, value: &StaticHeapValue) -> Result<i32, CodegenError> {
+        if let Some(ptr) = self.ptrs.get(value) {
+            return Ok(*ptr);
+        }
+
+        let ptr = match value {
+            StaticHeapValue::List(items) => self.alloc_static_list(items)?,
+            StaticHeapValue::Tuple(items) => self.alloc_static_tuple(items)?,
+            StaticHeapValue::Record {
+                constructor,
+                fields,
+            } => self.alloc_static_record(constructor, fields)?,
+            StaticHeapValue::Int(_)
+            | StaticHeapValue::Bool(_)
+            | StaticHeapValue::Str(_)
+            | StaticHeapValue::Unit => {
+                return Err(CodegenError {
+                    message: "gen_lower/emit: scalar static heap value cannot be interned"
+                        .to_string(),
+                });
+            }
+        };
+        self.ptrs.insert(value.clone(), ptr);
+        Ok(ptr)
+    }
+
+    fn alloc_static_list(&mut self, items: &[StaticHeapValue]) -> Result<i32, CodegenError> {
+        let n = u32::try_from(items.len()).map_err(|_| CodegenError {
+            message: "gen_lower/emit: static list literal too large".to_string(),
+        })?;
+        let n_chunks = n.div_ceil(CHUNK_SIZE);
+        let mut chunk_ptrs = Vec::new();
+
+        for c in (0..n_chunks).rev() {
+            let elem_start = (c * CHUNK_SIZE) as usize;
+            let elem_end = ((c + 1) * CHUNK_SIZE).min(n) as usize;
+            let chunk_len = (elem_end - elem_start) as u64;
+            let payload_size = chunk_alloc_size_pw(self.pw);
+            let chunk_ptr = self.alloc_payload(payload_size, 8)?;
+            let mut bytes = vec![0; payload_size as usize];
+            self.write_meta(&mut bytes, 0, chunk_len)?;
+            for (idx, item) in items[elem_start..elem_end].iter().enumerate() {
+                let encoded = self.encode_static_value(item)?;
+                let start = chunk_item_offset_pw(self.pw, idx as u32) as usize;
+                bytes[start..start + 8].copy_from_slice(&encoded.to_le_bytes());
+            }
+            self.segments.push((chunk_ptr, bytes));
+            chunk_ptrs.push((c, chunk_ptr));
+        }
+
+        let header_ptr = self.alloc_payload(header_alloc_size_pw(self.pw, n_chunks), 8)?;
+        let mut header = vec![0; header_alloc_size_pw(self.pw, n_chunks) as usize];
+        self.write_meta(&mut header, header_total_len_offset() as usize, n as u64)?;
+        self.write_meta(
+            &mut header,
+            header_n_chunks_offset_pw(self.pw) as usize,
+            n_chunks as u64,
+        )?;
+        for (chunk_idx, chunk_ptr) in chunk_ptrs {
+            self.write_ptr(
+                &mut header,
+                header_chunk_ptr_offset_pw(self.pw, chunk_idx) as usize,
+                chunk_ptr as u64,
+            )?;
+        }
+        self.segments.push((header_ptr, header));
+        Ok(header_ptr)
+    }
+
+    fn alloc_static_tuple(&mut self, items: &[StaticHeapValue]) -> Result<i32, CodegenError> {
+        let payload_size = meta_slot_bytes(self.pw)
+            + 8 * u32::try_from(items.len()).map_err(|_| CodegenError {
+                message: "gen_lower/emit: static tuple literal too large".to_string(),
+            })?;
+        let ptr = self.alloc_payload(payload_size, 8)?;
+        let mut bytes = vec![0; payload_size as usize];
+        self.write_meta(&mut bytes, 0, items.len() as u64)?;
+        for (idx, item) in items.iter().enumerate() {
+            let encoded = self.encode_static_value(item)?;
+            let start = (meta_slot_bytes(self.pw) as usize) + idx * 8;
+            bytes[start..start + 8].copy_from_slice(&encoded.to_le_bytes());
+        }
+        self.segments.push((ptr, bytes));
+        Ok(ptr)
+    }
+
+    fn alloc_static_record(
+        &mut self,
+        constructor: &str,
+        fields: &[(String, StaticHeapValue)],
+    ) -> Result<i32, CodegenError> {
+        let payload_size = 8 + 8 * u32::try_from(fields.len()).map_err(|_| CodegenError {
+            message: "gen_lower/emit: static record literal too large".to_string(),
+        })?;
+        let ptr = self.alloc_payload(payload_size, 8)?;
+        let mut bytes = vec![0; payload_size as usize];
+        let ctor_tag = *self
+            .record_ctor_tags
+            .get(constructor)
+            .ok_or_else(|| CodegenError {
+                message: format!("gen_lower/emit: missing ctor tag for '{constructor}'"),
+            })? as u64;
+        bytes[0..8].copy_from_slice(&ctor_tag.to_le_bytes());
+        for (idx, (_, value)) in fields.iter().enumerate() {
+            let encoded = self.encode_static_value(value)?;
+            let start = 8 + idx * 8;
+            bytes[start..start + 8].copy_from_slice(&encoded.to_le_bytes());
+        }
+        self.segments.push((ptr, bytes));
+        Ok(ptr)
+    }
+
+    fn encode_static_value(&mut self, value: &StaticHeapValue) -> Result<i64, CodegenError> {
+        match value {
+            StaticHeapValue::Int(n) => encode_int(*n).map_err(|err| CodegenError {
+                message: err.to_string(),
+            }),
+            StaticHeapValue::Bool(b) => Ok(encode_bool(*b)),
+            StaticHeapValue::Str(text) => {
+                let ptr = self.static_strings.ptr(text)?;
+                Ok(encode_string_ptr(ptr as u32))
+            }
+            StaticHeapValue::Unit => Ok(encode_unit()),
+            StaticHeapValue::List(_) => Ok(encode_list_ptr(self.intern(value)? as u32)),
+            StaticHeapValue::Tuple(_) => Ok(encode_tuple_ptr(self.intern(value)? as u32)),
+            StaticHeapValue::Record { .. } => Ok(encode_record_ptr(self.intern(value)? as u32)),
+        }
+    }
+
+    fn alloc_payload(&mut self, payload_size: u32, align: u32) -> Result<i32, CodegenError> {
+        let total_size = payload_size
+            .checked_add(ptr_slot_bytes(self.pw))
+            .ok_or_else(|| CodegenError {
+                message: "gen_lower/emit: static heap size overflow".to_string(),
+            })?;
+        let next = align_down_i32(
+            i32::try_from(
+                self.cursor
+                    .checked_sub(total_size)
+                    .ok_or_else(|| CodegenError {
+                        message: "gen_lower/emit: static heap exhausted initial memory".to_string(),
+                    })?,
+            )
+            .map_err(|_| CodegenError {
+                message: "gen_lower/emit: static heap cursor does not fit in i32".to_string(),
+            })?,
+            align as i32,
+        );
+        let aligned_next = u32::try_from(next).map_err(|_| CodegenError {
+            message: "gen_lower/emit: static heap alignment underflow".to_string(),
+        })?;
+        self.cursor = aligned_next;
+
+        let header_addr = aligned_next;
+        let payload_addr = header_addr + ptr_slot_bytes(self.pw);
+        let header_bytes = match self.pw {
+            PtrWidth::W32 => 0xFFFF_FFFFu32.to_le_bytes().to_vec(),
+            PtrWidth::W64 => STATIC_REFCOUNT_SENTINEL.to_le_bytes().to_vec(),
+        };
+        self.segments.push((header_addr as i32, header_bytes));
+        Ok(payload_addr as i32)
+    }
+
+    fn write_meta(&self, bytes: &mut [u8], offset: usize, value: u64) -> Result<(), CodegenError> {
+        match self.pw {
+            PtrWidth::W32 => {
+                let value = u32::try_from(value).map_err(|_| CodegenError {
+                    message: "gen_lower/emit: static meta value exceeds u32".to_string(),
+                })?;
+                bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            PtrWidth::W64 => bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes()),
+        }
+        Ok(())
+    }
+
+    fn write_ptr(&self, bytes: &mut [u8], offset: usize, value: u64) -> Result<(), CodegenError> {
+        match self.pw {
+            PtrWidth::W32 => {
+                let value = u32::try_from(value).map_err(|_| CodegenError {
+                    message: "gen_lower/emit: static pointer exceeds u32".to_string(),
+                })?;
+                bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            PtrWidth::W64 => bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes()),
+        }
+        Ok(())
     }
 }
 
@@ -1014,7 +1311,7 @@ fn initialize_helper_state_locals(
     function: &mut Function,
     layout: &MemoryLayout,
     i32_base: u32,
-    static_strings: &StaticStringPool,
+    total_static_reserved_bytes: u32,
     is_main: bool,
     pw: PtrWidth,
 ) -> Result<(), CodegenError> {
@@ -1022,7 +1319,7 @@ fn initialize_helper_state_locals(
     let alloc_cursor_local = i32_base + HELPER_ALLOC_CURSOR_OFFSET;
     let heap_floor_local = i32_base + HELPER_HEAP_FLOOR_OFFSET;
     let initial_cursor = align_down_i32(
-        i32::try_from(STATIC_STRING_LIMIT - static_strings.bytes_used).map_err(|_| {
+        i32::try_from(STATIC_STRING_LIMIT - total_static_reserved_bytes).map_err(|_| {
             CodegenError {
                 message: "gen_lower/emit: helper allocation cursor does not fit in i32".to_string(),
             }
@@ -1117,25 +1414,52 @@ pub(crate) fn emit_general_module_with_aux_and_options(
     layout: &MemoryLayout,
     options: EmitOptions,
 ) -> Result<Vec<u8>, CodegenError> {
+    let pw = if options.memory_config.memory64 {
+        PtrWidth::W64
+    } else {
+        PtrWidth::W32
+    };
     let static_strings = StaticStringPool::build_from_all(
         std::iter::once(instrs).chain(aux_decls.iter().map(|d| d.instrs.as_slice())),
     )?;
-    if layout.heap_base + static_strings.bytes_used + 4 > STATIC_STRING_LIMIT {
-        return Err(CodegenError {
-            message: "gen_lower/emit: static string pool leaves no room for runtime stdin buffer"
-                .to_string(),
-        });
-    }
     let mut record_ctor_tags = HashMap::new();
     for instr in std::iter::once(instrs).chain(aux_decls.iter().map(|d| d.instrs.as_slice())) {
         for nested in collect_all_instrs(instr) {
-            if let WasmBackendInstr::RecordLit { constructor, .. } = nested
-                && !record_ctor_tags.contains_key(constructor)
-            {
-                let next = record_ctor_tags.len() as u32;
-                record_ctor_tags.insert(constructor.clone(), next);
+            match nested {
+                WasmBackendInstr::RecordLit { constructor, .. } => {
+                    if !record_ctor_tags.contains_key(constructor) {
+                        let next = record_ctor_tags.len() as u32;
+                        record_ctor_tags.insert(constructor.clone(), next);
+                    }
+                }
+                WasmBackendInstr::PushStaticHeap {
+                    value:
+                        StaticHeapValue::Record {
+                            constructor,
+                            fields: _,
+                        },
+                } => {
+                    if !record_ctor_tags.contains_key(constructor) {
+                        let next = record_ctor_tags.len() as u32;
+                        record_ctor_tags.insert(constructor.clone(), next);
+                    }
+                }
+                _ => {}
             }
         }
+    }
+    let static_heap = StaticHeapPool::build_from_all(
+        std::iter::once(instrs).chain(aux_decls.iter().map(|d| d.instrs.as_slice())),
+        &static_strings,
+        &record_ctor_tags,
+        pw,
+    )?;
+    let total_static_reserved_bytes = static_strings.bytes_used + static_heap.bytes_used;
+    if layout.heap_base + total_static_reserved_bytes + 4 > STATIC_STRING_LIMIT {
+        return Err(CodegenError {
+            message: "gen_lower/emit: static pools leave no room for runtime stdin buffer"
+                .to_string(),
+        });
     }
     let tail_group_plans = compute_tail_call_group_plans(aux_decls);
     let tail_group_plan_by_member: HashMap<String, TailCallGroupPlan> = tail_group_plans
@@ -1446,6 +1770,8 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             main_helper_i64_scratch_count,
             main_i32_base,
             &static_strings,
+            &static_heap,
+            total_static_reserved_bytes,
             options,
             false, // emit_epilogue_cursor_sync
             None,
@@ -1532,6 +1858,8 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             aux_helper_i64_scratch_count,
             aux_i32_base,
             &static_strings,
+            &static_heap,
+            total_static_reserved_bytes,
             options,
             true,
             None,
@@ -1552,6 +1880,8 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             indirect_call_type_idx_3,
             &record_ctor_tags,
             &static_strings,
+            &static_heap,
+            total_static_reserved_bytes,
             layout,
             options,
         )?;
@@ -1577,7 +1907,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
     // Data section: newline byte for println (if needed).
     let needs_newline =
         needs_newline_data(instrs) || aux_decls.iter().any(|d| needs_newline_data(&d.instrs));
-    if needs_newline || !static_strings.is_empty() {
+    if needs_newline || !static_strings.is_empty() || !static_heap.is_empty() {
         let newline_ptr = (layout.heap_base - 1) as i32;
         let data_offset = |addr: i32| -> ConstExpr {
             if options.memory_config.memory64 {
@@ -1589,6 +1919,9 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         let mut data = DataSection::new();
         if needs_newline {
             data.active(0, &data_offset(newline_ptr), b"\n".to_vec());
+        }
+        for (ptr, bytes) in &static_heap.segments {
+            data.active(0, &data_offset(*ptr), bytes.clone());
         }
         for (ptr, bytes) in &static_strings.segments {
             data.active(0, &data_offset(*ptr), bytes.clone());
@@ -1609,6 +1942,7 @@ fn emit_instrs(
     helper_i64_scratch_count: u32,
     i32_base: u32,
     static_strings: &StaticStringPool,
+    static_heap: &StaticHeapPool,
     options: EmitOptions,
     function_returns_i64: bool,
     self_tail_loop_depth: u32,
@@ -1622,6 +1956,7 @@ fn emit_instrs(
         helper_i64_scratch_count,
         i32_base,
         static_strings,
+        static_heap,
         options,
         function_returns_i64,
         0,
@@ -1639,6 +1974,7 @@ fn emit_instrs_with_heap_depth(
     helper_i64_scratch_count: u32,
     i32_base: u32,
     static_strings: &StaticStringPool,
+    static_heap: &StaticHeapPool,
     options: EmitOptions,
     function_returns_i64: bool,
     heap_base_depth: u32,
@@ -1648,8 +1984,11 @@ fn emit_instrs_with_heap_depth(
     let iovec_offset = layout.iovec_offset as i32;
     let nread_offset = layout.nwritten_offset as i32;
     let buffer_ptr = layout.heap_base as i32;
-    let buffer_len =
-        (STATIC_STRING_LIMIT - layout.heap_base - static_strings.bytes_used) as i32 - 4; // reserve 4 bytes for len prefix
+    let buffer_len = (STATIC_STRING_LIMIT
+        - layout.heap_base
+        - static_strings.bytes_used
+        - static_heap.bytes_used) as i32
+        - 4; // reserve 4 bytes for len prefix
     let newline_ptr = (layout.heap_base - 1) as i32;
     let helper_i64_base = i32_base
         .checked_sub(helper_i64_scratch_count)
@@ -1699,6 +2038,25 @@ fn emit_instrs_with_heap_depth(
 
             WasmBackendInstr::I64Const(v) => {
                 function.instruction(&Instruction::I64Const(*v));
+            }
+
+            WasmBackendInstr::PushStaticHeap { value } => {
+                let ptr = static_heap.ptr(value)?;
+                let encoded = match value {
+                    StaticHeapValue::List(_) => encode_list_ptr(ptr as u32),
+                    StaticHeapValue::Tuple(_) => encode_tuple_ptr(ptr as u32),
+                    StaticHeapValue::Record { .. } => encode_record_ptr(ptr as u32),
+                    StaticHeapValue::Int(_)
+                    | StaticHeapValue::Bool(_)
+                    | StaticHeapValue::Str(_)
+                    | StaticHeapValue::Unit => {
+                        return Err(CodegenError {
+                            message: "gen_lower/emit: PushStaticHeap expects aggregate value"
+                                .to_string(),
+                        });
+                    }
+                };
+                function.instruction(&Instruction::I64Const(encoded));
             }
 
             WasmBackendInstr::PushStaticString { text } => {
@@ -1831,6 +2189,7 @@ fn emit_instrs_with_heap_depth(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    static_heap,
                     options,
                     function_returns_i64,
                     heap_base_depth,
@@ -1846,6 +2205,7 @@ fn emit_instrs_with_heap_depth(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    static_heap,
                     options,
                     function_returns_i64,
                     heap_base_depth,
@@ -1867,6 +2227,7 @@ fn emit_instrs_with_heap_depth(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    static_heap,
                     options,
                     function_returns_i64,
                     heap_base_depth,
@@ -1954,6 +2315,7 @@ fn emit_instrs_with_heap_depth(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    static_heap,
                     &scratch_state,
                     &helper_state,
                     options,
@@ -2071,6 +2433,7 @@ fn emit_instrs_with_heap_depth(
                             helper_i64_scratch_count,
                             i32_base,
                             static_strings,
+                            static_heap,
                             options,
                             function_returns_i64,
                             heap_base_depth + 1,
@@ -2439,6 +2802,7 @@ fn emit_instrs_with_heap_depth(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    static_heap,
                     options,
                     function_returns_i64,
                     heap_base_depth + 1,
@@ -2713,6 +3077,7 @@ fn emit_instrs_with_heap_depth(
                         helper_i64_scratch_count,
                         i32_base,
                         static_strings,
+                        static_heap,
                         options,
                         function_returns_i64,
                         heap_base_depth + 1,
@@ -2765,6 +3130,7 @@ fn emit_instrs_with_heap_depth(
                         helper_i64_scratch_count,
                         i32_base,
                         static_strings,
+                        static_heap,
                         options,
                         function_returns_i64,
                         heap_base_depth + 1,
@@ -2813,6 +3179,7 @@ fn emit_instrs_with_heap_depth(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    static_heap,
                     options,
                     function_returns_i64,
                     self_tail_loop_depth,
@@ -2828,6 +3195,7 @@ fn emit_instrs_with_heap_depth(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    static_heap,
                     &options,
                     function_returns_i64,
                 )?;
@@ -2907,6 +3275,7 @@ fn emit_instrs_with_heap_depth(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    static_heap,
                     options,
                     function_returns_i64,
                     heap_base_depth + 1,
@@ -2932,6 +3301,7 @@ fn emit_instrs_with_heap_depth(
                         helper_i64_scratch_count,
                         i32_base,
                         static_strings,
+                        static_heap,
                         options,
                         function_returns_i64,
                         heap_base_depth + 1,
@@ -3008,6 +3378,7 @@ fn emit_instrs_with_heap_depth(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    static_heap,
                     options,
                     function_returns_i64,
                     self_tail_loop_depth,
@@ -3050,6 +3421,7 @@ fn emit_instrs_with_heap_depth(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    static_heap,
                     options,
                     function_returns_i64,
                     self_tail_loop_depth,
@@ -3069,6 +3441,7 @@ fn emit_instrs_with_heap_depth(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    static_heap,
                     options,
                     function_returns_i64,
                     self_tail_loop_depth,
@@ -3478,6 +3851,8 @@ fn emit_function_body(
     helper_i64_scratch_count: u32,
     i32_base: u32,
     static_strings: &StaticStringPool,
+    static_heap: &StaticHeapPool,
+    total_static_reserved_bytes: u32,
     options: EmitOptions,
     emit_epilogue_cursor_sync: bool,
     tail_call_mode: Option<TailCallMode>,
@@ -3490,7 +3865,7 @@ fn emit_function_body(
             function,
             layout,
             i32_base,
-            static_strings,
+            total_static_reserved_bytes,
             !emit_epilogue_cursor_sync,
             pw,
         )?;
@@ -3508,6 +3883,7 @@ fn emit_function_body(
             helper_i64_scratch_count,
             i32_base,
             static_strings,
+            static_heap,
             options,
             emit_epilogue_cursor_sync,
             0,
@@ -3523,6 +3899,7 @@ fn emit_function_body(
             helper_i64_scratch_count,
             i32_base,
             static_strings,
+            static_heap,
             options,
             emit_epilogue_cursor_sync,
             0,
@@ -3554,6 +3931,8 @@ fn emit_tail_call_group_dispatcher(
     indirect_call_type_idx_3: Option<u32>,
     record_ctor_tags: &HashMap<String, u32>,
     static_strings: &StaticStringPool,
+    static_heap: &StaticHeapPool,
+    total_static_reserved_bytes: u32,
     layout: &MemoryLayout,
     options: EmitOptions,
 ) -> Result<(), CodegenError> {
@@ -3611,7 +3990,14 @@ fn emit_tail_call_group_dispatcher(
 
     if needs_heap {
         let pw = PtrWidth::from_memory64(options.memory_config.memory64);
-        initialize_helper_state_locals(&mut function, layout, i32_base, static_strings, false, pw)?;
+        initialize_helper_state_locals(
+            &mut function,
+            layout,
+            i32_base,
+            total_static_reserved_bytes,
+            false,
+            pw,
+        )?;
     }
     function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Result(
         wasm_encoder::ValType::I64,
@@ -3631,6 +4017,7 @@ fn emit_tail_call_group_dispatcher(
         indirect_call_type_idx_3,
         record_ctor_tags,
         static_strings,
+        static_heap,
         layout,
         options,
         total_named_i64_count,
@@ -3667,6 +4054,7 @@ fn emit_tail_call_group_dispatch_chain(
     indirect_call_type_idx_3: Option<u32>,
     record_ctor_tags: &HashMap<String, u32>,
     static_strings: &StaticStringPool,
+    static_heap: &StaticHeapPool,
     layout: &MemoryLayout,
     options: EmitOptions,
     total_named_i64_count: u32,
@@ -3729,6 +4117,7 @@ fn emit_tail_call_group_dispatch_chain(
         helper_i64_scratch_count,
         i32_base,
         static_strings,
+        static_heap,
         options,
         true,
         member_idx as u32 + 1,
@@ -3751,6 +4140,7 @@ fn emit_tail_call_group_dispatch_chain(
             indirect_call_type_idx_3,
             record_ctor_tags,
             static_strings,
+            static_heap,
             layout,
             options,
             total_named_i64_count,
@@ -7499,6 +7889,7 @@ fn emit_list_reverse_fold_prepend(
     helper_i64_scratch_count: u32,
     i32_base: u32,
     static_strings: &StaticStringPool,
+    static_heap: &StaticHeapPool,
     options: &EmitOptions,
     function_returns_i64: bool,
 ) -> Result<(), CodegenError> {
@@ -7733,6 +8124,7 @@ fn emit_list_reverse_fold_prepend(
             helper_i64_scratch_count,
             i32_base,
             static_strings,
+            static_heap,
             *options,
             function_returns_i64,
             0,
@@ -7827,6 +8219,7 @@ fn emit_case_match(
     helper_i64_scratch_count: u32,
     i32_base: u32,
     static_strings: &StaticStringPool,
+    static_heap: &StaticHeapPool,
     scratch_state: &Option<EmitScratchState>,
     heap_state: &Option<HeapEmitState>,
     options: EmitOptions,
@@ -7867,6 +8260,7 @@ fn emit_case_match(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    static_heap,
                     options,
                     function_returns_i64,
                     self_tail_loop_depth + 1,
@@ -7897,6 +8291,7 @@ fn emit_case_match(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    static_heap,
                     options,
                     function_returns_i64,
                     self_tail_loop_depth + 2,
@@ -7920,6 +8315,7 @@ fn emit_case_match(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    static_heap,
                     options,
                     function_returns_i64,
                     self_tail_loop_depth + 2,
@@ -8001,6 +8397,7 @@ fn emit_case_match(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    static_heap,
                     options,
                     function_returns_i64,
                     self_tail_loop_depth + 2,
@@ -8041,6 +8438,7 @@ fn emit_case_match(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    static_heap,
                     options,
                     function_returns_i64,
                     self_tail_loop_depth + 3,
@@ -8159,6 +8557,7 @@ fn emit_case_match(
                     helper_i64_scratch_count,
                     i32_base,
                     static_strings,
+                    static_heap,
                     options,
                     function_returns_i64,
                     self_tail_loop_depth + 3,

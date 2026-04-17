@@ -853,6 +853,21 @@ fn emits_valid_wasm_for_print_literal() {
 }
 
 #[test]
+fn refcount_reuse_loop_example_parses() {
+    let source = include_str!("../../../examples/refcount_reuse_loop.gb");
+    parse_module(source).expect("refcount_reuse_loop.gb should parse");
+}
+
+#[test]
+#[ignore = "Perceus goal harness is added in M1; compile/run acceptance is enabled later in the plan"]
+fn refcount_reuse_loop_example_compiles() {
+    let source = include_str!("../../../examples/refcount_reuse_loop.gb");
+    let module = parse_module(source).expect("refcount_reuse_loop.gb should parse");
+    let wasm = compile_module(&module).expect("refcount_reuse_loop.gb should compile");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
 fn emits_valid_wasm_for_function_example() {
     let source = read_example("function.gb");
     let module = parse_module(&source).expect("parse");

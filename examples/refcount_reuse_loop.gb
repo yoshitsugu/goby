@@ -1,0 +1,34 @@
+import goby/list (length)
+import goby/stdio
+
+step : List Int -> Int -> Int -> List Int
+step xs iter iters_remaining =
+  if iters_remaining == 0
+    xs
+  else
+    n = length xs
+    i = iter % n
+    v = (iter * 2654435761) % 65536
+    mut ys = xs
+    ys[i] := v
+    step ys (iter + 1) (iters_remaining - 1)
+
+build : Int -> Int -> List Int -> List Int
+build k len acc =
+  if k == len
+    acc
+  else
+    build (k + 1) len [k, ..acc]
+
+xor_fold : List Int -> Int -> Int
+xor_fold xs acc =
+  case xs
+    [] -> acc
+    [x, ..rest] -> xor_fold rest (acc ^ x)
+
+main : Unit -> Unit can Print
+main =
+  initial = build 0 4096 []
+  final = step initial 0 5000
+  checksum = xor_fold final 0
+  println "${checksum}"

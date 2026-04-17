@@ -230,6 +230,20 @@ pub(crate) enum BackendEffectOp {
     Print(BackendPrintOp),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum StaticHeapValue {
+    Int(i64),
+    Bool(bool),
+    Str(String),
+    Unit,
+    List(Vec<StaticHeapValue>),
+    Tuple(Vec<StaticHeapValue>),
+    Record {
+        constructor: String,
+        fields: Vec<(String, StaticHeapValue)>,
+    },
+}
+
 /// A backend instruction in the general Wasm lowering pipeline.
 ///
 /// # Goby IR → Backend IR mapping
@@ -261,6 +275,8 @@ pub(crate) enum WasmBackendInstr {
     StoreLocal { name: String },
     /// Push a compile-time-known tagged i64 literal (already encoded via `value.rs`).
     I64Const(i64),
+    /// Push a tagged pointer to a statically hoisted heap literal.
+    PushStaticHeap { value: StaticHeapValue },
     /// Push a tagged string pointer to a compile-time-known static string blob.
     ///
     /// The emitter places the blob in linear memory as `(len: i32, bytes...)`
