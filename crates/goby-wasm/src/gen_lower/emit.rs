@@ -179,11 +179,6 @@ pub(crate) fn chunk_item_offset_pw(pw: PtrWidth, item_idx: u32) -> u32 {
     meta_slot_bytes(pw) + item_idx * 8
 }
 
-// W32-only alias for callers that don't need ptr-width awareness yet.
-#[inline(always)]
-pub(crate) fn chunk_alloc_size() -> u32 {
-    chunk_alloc_size_pw(PtrWidth::W32)
-}
 
 #[derive(Debug, Clone)]
 struct StaticStringPool {
@@ -3392,28 +3387,6 @@ fn emit_store_raw_ptr_into_named_i64_local(
     }
     function.instruction(&Instruction::LocalSet(idx));
     Ok(())
-}
-
-// Legacy aliases — kept for callers that haven't been migrated yet.
-// TODO: remove after M4 migration is complete.
-#[allow(dead_code)]
-fn emit_load_raw_i32_from_named_i64_local(
-    function: &mut Function,
-    ctx: &EmitContext,
-    local_name: &str,
-    scratch_local: u32,
-) -> Result<(), CodegenError> {
-    emit_load_raw_ptr_from_named_i64_local(function, ctx, local_name, scratch_local, PtrWidth::W32)
-}
-
-#[allow(dead_code)]
-fn emit_store_raw_i32_into_named_i64_local(
-    function: &mut Function,
-    ctx: &EmitContext,
-    local_name: &str,
-    scratch_local: u32,
-) -> Result<(), CodegenError> {
-    emit_store_raw_ptr_into_named_i64_local(function, ctx, local_name, scratch_local, PtrWidth::W32)
 }
 
 fn emit_compare_decoded_strings(

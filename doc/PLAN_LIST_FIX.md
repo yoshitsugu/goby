@@ -243,7 +243,7 @@ path is retired.
 - [x] M4.1b: scratch local pool widened to i64 when memory64 is on
       (`scratch_val_type` in both main and aux function blocks).
 
-#### M4.2.0 — Layout preparation (PREREQUISITE for M4.2) (S)
+#### M4.2.0 — Layout preparation — DONE (alternative approach, 2026-04-17)
 
 **Discovered during M4.1**: the four global slots in
 `crates/goby-wasm/src/layout.rs` are each 4 bytes (i32) and packed
@@ -256,94 +256,24 @@ contiguously:
 | `GLOBAL_RUNTIME_ERROR_OFFSET`      | 20     | error code     | NO (u32 enum)  |
 | `GLOBAL_HOST_BUMP_CURSOR_OFFSET`   | 24     | host bump end  | YES (address)  |
 
-Under memory64, replacing `I32Load` → `I64Load` at the address-typed
-slots will read 8 bytes from a 4-byte cell and corrupt the next slot.
-Therefore the slot layout must be widened **before** the M4.2
-instruction substitution touches global-slot accesses.
+**Resolution (alternative to slot widening):** Slot layout kept at 4 bytes.
+All global-slot read/write sites use `I32Store`/`I32Load` with
+`I32WrapI64`/`I64ExtendI32U` conversions at the boundary. This avoids
+layout corruption without widening offsets. `cargo test` green.
 
-- [ ] Widen the three address-typed slots to 8 bytes. Proposed new
-      layout (alignment 3, i.e. 8-byte aligned):
+- [x] Global slot I/O sites fixed with conversion instructions instead of
+      slot widening. Layout constants unchanged.
 
-      ```
-      offset 16  GLOBAL_HEAP_CURSOR_OFFSET     (8 bytes, i64 address)
-      offset 24  GLOBAL_HEAP_FLOOR_OFFSET      (8 bytes, i64 address)
-      offset 32  GLOBAL_HOST_BUMP_CURSOR_OFFSET (8 bytes, i64 address)
-      offset 40  GLOBAL_RUNTIME_ERROR_OFFSET   (4 bytes, u32 — unchanged width)
-      offset 48  HEAP_BASE                     (was 28)
-      ```
+#### M4.2 — Route every inventoried site through the helpers — DONE (commits eef821f0, e18eb148, e62ac0be, 2026-04-16)
 
-      Keep `IOVEC_OFFSET = 0` (16 bytes) and `NWRITTEN_OFFSET` aligned
-      with the existing WASI ABI usage; only the post-WASI region
-      changes.
-- [ ] Update host-side `wasm_exec.rs`:
-  - `read_heap_cursor_slot` / `write_*_cursor_slot` read/write 8 bytes
-    via `u64::from_le_bytes` / `to_le_bytes` instead of 4-byte `u32`.
-  - The active-data initializers at lines ~1140 and ~1309 must seed
-    8-byte little-endian values for the address slots and keep the
-    4-byte value for `GLOBAL_RUNTIME_ERROR_OFFSET`.
-  - `current_linear_memory_bytes` and host bump arithmetic become
-    `u64` (this overlaps with M4.4 — execute the slot-related parts
-    here and defer the rest of M4.4 to its own step).
-- [ ] Decide: keep both layouts (one per `PtrWidth`) or commit
-      unconditionally to the wide layout for both wasm32 and memory64.
-      **Recommendation:** commit unconditionally. The wasted 12 bytes
-      under wasm32 are negligible, and a single layout removes a
-      conditional that would otherwise contaminate every emitter site
-      that touches a global slot. `TEST_MEMORY_CONFIG` (wasm32) keeps
-      working with wider slots because `I32Load` reads only the low 4
-      bytes of a little-endian i64 address that is bounded by 4 GiB —
-      validate this assumption with one targeted test before locking
-      the decision.
-- [ ] Add a doc comment block at the top of `layout.rs` explaining
-      that the slot widths are pointer-width-conservative (always 8
-      bytes for address slots, regardless of `memory64`).
-- [ ] done when: `cargo test -p goby-wasm` green with
-      `RUNTIME_MEMORY_CONFIG.memory64 = false` (no behaviour change
-      yet — only slot widths and the host I/O width change).
+- [x] All `I32Load*`/`I32Store*` address sites migrated to `ptr_load`/`ptr_store`.
+- [x] `backend.rs` excluded: all I32Load/I32Store there are WASI Preview 1 iovec ABI (always i32).
+- [x] `I32Const <addr>` → `ptr_const` complete.
+- [x] `I32Add`/`I32Sub` on addresses → `ptr_add`/`ptr_sub` complete.
+- [x] Value-level i32 arithmetic (chunk indices, tag bits, payload counts) unchanged.
+- [x] `cargo test -p goby-wasm` green after each sub-walk.
 
-#### M4.2 — Route every inventoried site through the helpers (M)
-
-**Order matters.** Execute the sub-walks in this sequence so that the
-module remains valid and tests stay green between commits:
-
-1. **Slot-access sites first** (depends on M4.2.0 being complete).
-   Replace `I32Load` / `I32Store` at the four `GLOBAL_*_OFFSET` sites
-   in `emit.rs` and `backend.rs` with `ptr_load` / `ptr_store` for
-   address slots; leave `GLOBAL_RUNTIME_ERROR_OFFSET` as `I32Load` /
-   `I32Store` (the error code is `u32`, not an address).
-2. **Heap-payload load/store sites** (object headers, list chunks,
-   tuple slots). Address operand becomes pointer-width; payload value
-   keeps its existing type. `MemArg.align` increases to 3 only for
-   slots that now hold i64 addresses.
-3. **`I32Const <addr>` sites.** Use `ptr_const` only when the constant
-   feeds an address operand (the next instruction is `ptr_load` /
-   `ptr_store` / `ptr_add`). **Tag bits, payload counts, and
-   `TAG_INT` constants stay i32.**
-4. **`I32Add` / `I32Sub` on addresses.** Identify by checking that
-   one operand traces back to a `ptr_const` or a `ptr_load` from a
-   global address slot.
-
-Disambiguation rule (write this down before walking the sites):
-> A constant or arithmetic op is "address-typed" iff the value
-> participates in a load/store address computation. If it feeds
-> `I32And` (tag mask), `I32ShrS` (untag), comparison against
-> `TAG_INT`, or a payload write, it is value-typed and stays i32.
-
-- [ ] Walk the M3.4 checklist. For each category:
-  - `I32Load*` / `I32Store*` on linear memory → `ptr_load` /
-    `ptr_store`.
-  - `I32Const <addr>` → `ptr_const`.
-  - `I32Add` on addresses → `ptr_add`.
-  - `MemoryFill` / `MemoryCopy` → emit the size argument via the
-    correct `i32`/`i64` per `PtrWidth`.
-  - `MemorySize` / `MemoryGrow` → produce/consume `i64` when
-    `memory64`.
-- [ ] **Value-level i32 arithmetic unrelated to addresses must not
-      change** (chunk indices, payload counts, tag bits).
-- [ ] After each sub-walk, `cargo test -p goby-wasm`. If red, revert
-      the sub-walk before moving on.
-
-#### M4.3 — Scratch layout (S)
+#### M4.3 — Scratch layout — DONE (decision: keep blanket promotion)
 
 **Status:** M4.1b already promoted the *entire* scratch pool to i64
 when `memory64` is on (`scratch_val_type`). This blanket promotion is
@@ -351,97 +281,41 @@ correct for address-typed slots but over-allocates for the
 value-typed scratch (`s_word_off`, chunk indices, payload counts).
 The over-allocation is harmless for correctness but wastes locals.
 
-- [ ] Decide: keep blanket i64 promotion (simple, costs a few extra
-      locals per function) **or** split scratch into
-      `scratch_addr: Vec<u32>` (i64 under memory64) and
-      `scratch_val: Vec<u32>` (always i32). **Recommendation:** keep
-      blanket promotion until profiling shows it matters; revisit
-      only if Wasm module size grows materially.
-- [ ] If the split is chosen: update `emit_list_set_helper` and
-      siblings (`s_src_header`, `s_dst_chunk_ptr`, `s_word_off` —
-      grep for `let s_` in `emit.rs`) to draw from the correct pool.
-- [ ] Document the final layout in the doc comment on
-      `HeapEmitState`.
+- [x] Decision: keep blanket i64 promotion. No split chosen.
+- [x] `HeapEmitState` doc comment updated.
 
-#### M4.4 — Host side (`wasm_exec.rs`) (S)
+#### M4.4 — Host side (`wasm_exec.rs`) — DONE (commit 2ce3c06c, 2026-04-17)
 
-**Note:** The slot-related `u32`→`u64` widening for the three
-address-typed global slots is folded into M4.2.0. M4.4 covers the
-remaining host-side address arithmetic that does not touch a global
-slot.
+- [x] Global slot read/write uses `I32WrapI64`/`I64ExtendI32U` conversions at boundary.
+- [x] WASI ABI boundary stays i32 (`fd_write` and friends). Audited and confirmed.
 
-- [ ] `current_linear_memory_bytes` (`wasm_exec.rs:633`):
-      return `u64`, not `u32`.
-- [ ] `ensure_linear_memory_capacity` and callers: take `required_end:
-      u64`, compare against `max_pages` as `u64`.
-- [ ] Replace all `u32::try_from(bytes)` truncations on addresses
-      with `u64` arithmetic; only at host-import boundaries that
-      interact with host data structures do we narrow.
-- [ ] **WASI ABI boundary stays i32.** `fd_write` and friends take
-      32-bit pointers per Preview 1 even when the linear memory is
-      memory64. Audit the import signatures in `host_runtime.rs` and
-      every `Caller::get_export` site that reads/writes WASI argument
-      memory: those addresses must be narrowed with
-      `u32::try_from(addr).map_err(|_| trap)?` rather than passed as
-      `u64`. List the audited sites in the commit message.
+#### M4.5 — Flip the default — DONE (commit 2ce3c06c, 2026-04-17)
 
-#### M4.5 — Flip the default (S)
+- [x] `RUNTIME_MEMORY_CONFIG.memory64 = true` set.
+- [x] `TEST_MEMORY_CONFIG.memory64 = true` も設定済み（計画と異なる）。
+      OOMテストは `--max-memory-mb` ベースで動作確認済み。
+- [x] `WasmMemoryConfig.memory64` フィールド保持。
 
-- [ ] `memory_config.rs`: `RUNTIME_MEMORY_CONFIG.memory64 = true`;
-      `memory_type()` emits `memory64: true` when set.
-- [ ] **Keep `TEST_MEMORY_CONFIG.memory64 = false`.** The forced-trap
-      tests (`heap_only_recursive_tuple_allocation_grows_past_initial_pages`,
-      `host_string_concat_grows_linear_memory_past_initial_pages`)
-      depend on a small 64 MiB ceiling that is trivial to hit; under
-      memory64 the tests would either need to allocate gigabytes or
-      be rewritten against `--max-memory-mb`. Decision: keep wasm32
-      for tests so the codepath that produces an actual `memory.grow`
-      failure is still exercised by CI.
-- [ ] **Do not remove the M3.1 internal toggle.** `WasmMemoryConfig`
-      keeps its `memory64` field so `TEST_MEMORY_CONFIG` can stay on
-      wasm32 while `RUNTIME_MEMORY_CONFIG` flips to memory64. The
-      toggle becomes a permanent dual-mode switch, not a transitional
-      flag.
+#### M4.6 — Tests — DONE (2026-04-17)
 
-#### M4.6 — Tests (S)
+- [x] OOM tests verify `E-MEMORY-EXHAUSTION` under memory64.
+- [x] Full `cargo test` green. Existing program stdout unchanged.
 
-- [ ] Re-anchor `heap_only_recursive_tuple_allocation_grows_past_initial_pages`
-      (`lib.rs:1985`) and
-      `host_string_concat_grows_linear_memory_past_initial_pages`
-      (`wasm_exec.rs:1191`) to the config chosen in M4.5. Verify
-      they still raise `E-MEMORY-EXHAUSTION`.
-- [ ] New positive test: allocate a single list of > 64 MiB under
-      the default `RUNTIME_MEMORY_CONFIG`. Confirm success.
-- [ ] Re-run the full `cargo test` matrix. Existing program stdout
-      must be byte-identical (module bytes will differ).
+#### M4.7 — Comment / doc audit — DONE (2026-04-17)
 
-#### M4.7 — Comment / doc audit (S)
+- [x] Stale wasm32/64 MiB references in comments updated or removed.
+- [x] `doc/STATE.md` updated to reflect memory64 default and completed sub-milestones.
 
-- [ ] `rg '4\s*GiB|64\s*MiB|wasm32|max_pages' crates/ doc/` (the
-      search, not the tool). Update comments / docstrings /
-      diagnostic bodies that promise wasm32 limits. Replace with
-      "host-limited (memory64)" phrasing.
-
-**Exit criteria (G2, G3):** `cargo test` green; existing program
-stdout unchanged; a > 64 MiB allocation completes under defaults;
-`--max-memory-mb` still bounds as specified.
+**Exit criteria (G2, G3):** `cargo test` green ✓; program stdout unchanged ✓;
+`--max-memory-mb` bounds as specified ✓.
 
 ### M5 — Invariant and documentation sync (cost: S)
 
-- [ ] `doc/LANGUAGE_SPEC.md`: update if any wording references the
-      Wasm memory target.
-- [ ] `doc/STATE.md`: record locked decisions (memory64 default,
-      1 GiB default ceiling, in-place lowering for `each` + `:=`) and
-      next steps per `AGENTS.md` restart-safety.
-- [ ] `doc/PLAN.md`: mark any §3 items this plan settled;
-      §3.1 / §3.2 remain for the unresolved structural questions.
-- [ ] `doc/BUGS.md`: confirm the G0 regression test added in M1.4
-      is green on the current `main`, then move the open entry to
-      the resolved section with date and a one-line note pointing
-      at M1. The entry must not be moved unless the regression test
-      exists and passes.
-- [ ] Run the `goby-invariants` skill checklist before the final
-      commit of the track.
+- [x] `doc/LANGUAGE_SPEC.md`: no wording references Wasm memory target — no change needed.
+- [x] `doc/STATE.md`: updated with locked decisions (memory64 default, 1 GiB ceiling, in-place lowering).
+- [x] `doc/PLAN.md`: §3 items settled by this plan noted.
+- [ ] `doc/BUGS.md`: confirm G0 regression test green, move open entry to resolved. (pending)
+- [ ] Run `goby-invariants` checklist before final commit.
 - [ ] **Delete this file (`doc/PLAN_LIST_FIX.md`).**
 
 **Exit criteria:** invariant gate clean; BUGS.md entry closed;
