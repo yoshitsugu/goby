@@ -549,10 +549,50 @@ Output format: human-readable (default) and JSON lines (`--json`).
   - memory64 migration is complete,
   - `doc/BUGS.md` has no open allocator/tag-layout blockers,
   - `doc/STATE.md` records the plan as unblocked.
-- Immediate next slice is M1:
-  - closed-literal detection in shared IR,
-  - static literal hoisting in the Wasm emitter,
-  - `examples/refcount_reuse_loop.gb` plus its integration harness.
+- M1 groundwork landed in `bdf7d327` (closed-literal detection in shared IR,
+  static literal hoisting in the Wasm emitter, normative example and parse
+  test). M1 acceptance is currently **blocked** on the missing `^`
+  operator — see §4.2.1.
+
+#### 4.2.1 Perceus M1 prerequisite: bitwise XOR (`^`) operator
+
+The M1 goal program (`examples/refcount_reuse_loop.gb`, normative per
+`doc/PLAN_PERCEUS.md` §1.1) uses `acc ^ x` inside `xor_fold`. `^` is
+currently unimplemented end-to-end (no token in the parser, no variant in
+`BinOpKind` / `IrBinOp`, no Wasm emission path). Because the normative
+source must not be rewritten, this slice must land before the M1 checksum
+harness can be enabled.
+
+Scope (Int-only; Bool XOR, AND/OR/shift, and constant folding in
+`closed_literals.rs` are deliberately deferred):
+
+1. **AST + IR variants.** Add `BinOpKind::BitXor` (`crates/goby-core/src/ast.rs`)
+   and `IrBinOp::BitXor` (`crates/goby-core/src/ir.rs`); extend Debug /
+   formatter renderers to emit `"^"`.
+2. **Parser.** Insert a `split_top_level_binop(_, '^')` arm in
+   `parser_expr.rs::parse_expr` between the `&&` and `==` branches
+   (so `a ^ b == c` parses as `(a ^ b) == c`). Mirror the change in the
+   span-aware parser.
+3. **Typecheck.** Treat `BitXor` exactly like `Mod`: both operands `Int`,
+   result `Int`, no effects, no evidence changes.
+4. **IR lowering + dependent exhaustive matches.** Map
+   `BinOpKind::BitXor → IrBinOp::BitXor` in `ir_lower.rs`; update every
+   exhaustive match on `BinOpKind` / `IrBinOp` (e.g. `closure_capture.rs`)
+   — surface via `cargo check -p goby-core` and add arms as reported.
+5. **Wasm backend.** Emit `i64.xor` for `IrBinOp::BitXor` in
+   `crates/goby-wasm/src/gen_lower/lower.rs` (and `emit.rs` if it carries
+   the binop opcode table).
+6. **Smoke test.** Add a compile + run smoke test in
+   `crates/goby-wasm/tests/wasm_exports_and_smoke.rs` that exercises `^`
+   on a small module.
+7. **Docs.** Document `^` in `doc/LANGUAGE_SPEC.md` under operators with
+   its precedence. `doc/PLAN_PERCEUS.md` needs no change (already uses
+   the operator).
+
+Out of scope: Bool XOR, bitwise AND/OR/shift operators, constant folding
+of `^` in `closed_literals.rs`, and the Perceus M1 acceptance harness
+itself (checksum capture, un-ignoring the compile test). Resume M1 proper
+after this slice lands.
 
 ### 4.3 Review Follow-ups (Backlog)
 
