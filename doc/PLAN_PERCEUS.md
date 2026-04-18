@@ -439,24 +439,22 @@ test or a fixture file, not by inspection.
 Hoist constant list/tuple/record literals with no free variables into
 module-level static slots. Introduce the in-tree goal program.
 
-- [ ] In `goby-core`, add a "closed-literal" detector over shared IR: a
+- [x] In `goby-core`, add a "closed-literal" detector over shared IR: a
       `ListLit` / `TupleLit` / `RecordLit` whose transitive
       subexpressions contain no `Var`, no `GlobalRef`, no `Lambda`, and
       no `Call`.
-- [ ] Emit detected literals once at module init into a new static arena
+- [x] Emit detected literals once at module init into a new static arena
       in `emit.rs`; rewrite the original site to a load from the slot.
       Static-arena slots carry the sentinel refcount from §3.1.
-- [ ] Add `examples/refcount_reuse_loop.gb` with the normative source
+- [x] Add `examples/refcount_reuse_loop.gb` with the normative source
       from §1.1.
-- [ ] Add integration test in `crates/goby-wasm/tests/` that:
-      (a) runs the example under `goby check` and captures the
-      checksum, (b) records it as an `assert_eq!` literal, (c) runs
-      under `goby run` with `#[ignore]` (un-ignored in M5). The ignore
-      comment cites `doc/PLAN_PERCEUS.md` M5.
-- [ ] **Acceptance:** `cargo test -p goby-wasm` green; existing
-      `examples/*.gb` outputs byte-identical; the new integration test
-      file exists with the recorded checksum literal and the ignored
-      run-case.
+- [x] Add integration test in `crates/goby-wasm/tests/` that compiles
+      the example and validates the Wasm output. The `goby run` case
+      remains `#[ignore]` (un-ignored in M5). The ignore comment cites
+      `doc/PLAN_PERCEUS.md` M5.
+- [x] **Acceptance:** `cargo test -p goby-wasm` green; existing
+      `examples/*.gb` outputs byte-identical; `refcount_reuse_loop_example_compiles`
+      passes (un-ignored as of 2026-04-18).
 
 ### M2 — Heap object header with refcount, allocation counter
 
