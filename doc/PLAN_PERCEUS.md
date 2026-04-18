@@ -461,7 +461,7 @@ module-level static slots. Introduce the in-tree goal program.
 Add the refcount word, static sentinel, and allocation counter. Refcount
 is maintained but not yet consulted for freeing.
 
-- [ ] Adjust layout in `emit.rs` (lines 102–160) so every heap object
+- [x] Adjust layout in `emit.rs` (lines 102–160) so every heap object
       allocation prepends a refcount word. The prefix is absorbed in
       the single shared allocator (`emit_alloc_from_top`): the
       **payload** pointer returned to callers is unchanged in meaning,
@@ -470,21 +470,21 @@ is maintained but not yet consulted for freeing.
       `REFCOUNT_WORD_BYTES` internally before size alignment and
       advances the returned pointer past the header. Load/store offsets
       inside payloads remain unchanged. See S2 for the exact edit.
-- [ ] All `alloc` sites initialize refcount to 1 by virtue of calling
+- [x] All `alloc` sites initialize refcount to 1 by virtue of calling
       `emit_alloc_from_top`, which now writes the header as part of
       allocation. The named helper that performs that write is
       `emit_init_refcount_one` in `emit.rs`.
-- [ ] Hoisted-literal and string-constant emissions initialize to
+- [x] Hoisted-literal and string-constant emissions initialize to
       sentinel via `emit_init_refcount_sentinel(pw)`.
-- [ ] Add global `__goby_alloc_bytes_total` (i64, reserved linear-
+- [x] Add global `__goby_alloc_bytes_total` (i64, reserved linear-
       memory slot adjacent to `host_bump_cursor`). Every `alloc`
       increments it by the allocation size.
-- [ ] Add CLI flag `--debug-alloc-stats` to the `run` subcommand. On
+- [x] Add CLI flag `--debug-alloc-stats` to the `run` subcommand. On
       program exit it prints exactly one line to stderr, format frozen:
       `alloc-stats: total_bytes=<N> peak_bytes=<M> free_list_hits=<H>`.
       In M2, `peak_bytes == total_bytes` and `free_list_hits == 0`;
       they are placeholders filled in by later milestones.
-- [ ] **Acceptance:** all existing `examples/*.gb` produce
+- [x] **Acceptance:** all existing `examples/*.gb` produce
       byte-identical output;
       `goby run --debug-alloc-stats examples/hello.gb` prints the
       frozen line with a positive `total_bytes`. Snapshot test stores

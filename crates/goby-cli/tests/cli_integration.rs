@@ -2136,10 +2136,11 @@ main =
     let stderr = String::from_utf8_lossy(&output.stderr);
     // Must contain the frozen stats line.
     let has_stats_line = stderr.lines().any(|line| {
-        // Regex-free check: starts with "alloc-stats:" and contains the wired M2 fields.
+        // Regex-free check: starts with "alloc-stats:" and contains the frozen M2 fields.
         line.starts_with("alloc-stats:")
             && line.contains("total_bytes=")
             && line.contains("peak_bytes=")
+            && line.contains("free_list_hits=")
     });
     assert!(
         has_stats_line,
@@ -2158,8 +2159,8 @@ main =
             "total_bytes must be positive, got 0; line: {line}"
         );
         assert!(
-            !line.contains("free_list_hits="),
-            "free_list_hits should stay hidden until the counter is wired; line: {line}"
+            line.contains("free_list_hits=0"),
+            "M2 placeholder should expose free_list_hits=0; line: {line}"
         );
     }
 }

@@ -3957,6 +3957,14 @@ fn emit_function_body(
             align: 3,
             memory_index: 0,
         }));
+        // Keep the frozen M2 stats contract stable until M3 wires a real counter.
+        function.instruction(&ptr_const(pw, GLOBAL_FREE_LIST_HITS_OFFSET as u64));
+        function.instruction(&Instruction::I64Const(0));
+        function.instruction(&Instruction::I64Store(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
         if options.debug_alloc_stats {
             emit_alloc_stats_line(function, layout, pw, stats_scratch_base);
         }
@@ -3968,7 +3976,7 @@ fn emit_function_body(
 
 /// Emit instructions that write the frozen alloc-stats line to fd=2 (stderr).
 ///
-/// Format: `alloc-stats: total_bytes=N peak_bytes=M\n`
+/// Format: `alloc-stats: total_bytes=N peak_bytes=M free_list_hits=H\n`
 ///
 /// Uses a scratch window above `HEAP_BASE` as a stats buffer.
 /// The extra gap keeps the text buffer disjoint from the nearby global
@@ -4037,6 +4045,31 @@ fn emit_alloc_stats_line(
 
     // Load peak_bytes into s_val and convert
     function.instruction(&ptr_const(pw, GLOBAL_PEAK_BYTES_OFFSET as u64));
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_val));
+    emit_i64_to_decimal(function, s_val, s_ptr, s_tmp);
+
+    // " free_list_hits="
+    for &b in b" free_list_hits=" {
+        function.instruction(&Instruction::LocalGet(s_ptr));
+        function.instruction(&Instruction::I64Const(b as i64));
+        function.instruction(&Instruction::I64Store8(MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::LocalGet(s_ptr));
+        function.instruction(&Instruction::I64Const(1));
+        function.instruction(&Instruction::I64Add);
+        function.instruction(&Instruction::LocalSet(s_ptr));
+    }
+
+    // Load free_list_hits into s_val and convert
+    function.instruction(&ptr_const(pw, GLOBAL_FREE_LIST_HITS_OFFSET as u64));
     function.instruction(&Instruction::I64Load(MemArg {
         offset: 0,
         align: 3,
