@@ -439,6 +439,9 @@ fn eval_value(
                 (IrBinOp::Mod, NativeValue::Int(a), NativeValue::Int(b)) if b != 0 => {
                     Some(NativeValue::Int(a % b))
                 }
+                (IrBinOp::BitXor, NativeValue::Int(a), NativeValue::Int(b)) => {
+                    Some(NativeValue::Int(a ^ b))
+                }
                 (IrBinOp::Eq, NativeValue::Int(a), NativeValue::Int(b)) => {
                     Some(NativeValue::Bool(a == b))
                 }

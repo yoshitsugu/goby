@@ -35,6 +35,7 @@ pub enum IrType {
 pub enum IrBinOp {
     Or,
     And,
+    BitXor,
     Add,
     Sub,
     Mul,
@@ -420,6 +421,7 @@ fn fmt_value(out: &mut String, v: &ValueExpr) {
             out.push_str(match op {
                 IrBinOp::Or => "||",
                 IrBinOp::And => "&&",
+                IrBinOp::BitXor => "^",
                 IrBinOp::Add => "+",
                 IrBinOp::Sub => "-",
                 IrBinOp::Mul => "*",

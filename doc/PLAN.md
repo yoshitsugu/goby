@@ -551,10 +551,19 @@ Output format: human-readable (default) and JSON lines (`--json`).
   - `doc/STATE.md` records the plan as unblocked.
 - M1 groundwork landed in `bdf7d327` (closed-literal detection in shared IR,
   static literal hoisting in the Wasm emitter, normative example and parse
-  test). M1 acceptance is currently **blocked** on the missing `^`
-  operator — see §4.2.1.
+  test). The `^` operator prerequisite (§4.2.1) is now **complete**; M1
+  acceptance harness (checksum capture, un-ignoring the compile test) is the
+  next work item.
 
-#### 4.2.1 Perceus M1 prerequisite: bitwise XOR (`^`) operator
+#### 4.2.1 Perceus M1 prerequisite: bitwise XOR (`^`) operator — complete
+
+TODO (tooling follow-up): extend the syntax-highlight definitions under
+`tooling/` (`vim/syntax/goby.vim`, `nvim/syntax/goby.vim`,
+`emacs/goby-mode.el`, `vscode-goby/syntaxes/goby.tmLanguage.json`,
+`syntax/textmate/goby.tmLanguage.json`, and
+`syntax/testdata/highlight_sample.gb`) to recognize `^` as an operator.
+Deferred from this slice, which landed only the compiler pipeline; handle
+either alongside Perceus M1 proper or as a standalone tooling slice.
 
 The M1 goal program (`examples/refcount_reuse_loop.gb`, normative per
 `doc/PLAN_PERCEUS.md` §1.1) uses `acc ^ x` inside `xor_fold`. `^` is

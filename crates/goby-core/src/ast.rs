@@ -163,6 +163,7 @@ pub struct Declaration {
 pub enum BinOpKind {
     Or,
     And,
+    BitXor,
     Add,
     Sub,
     Mul,
@@ -476,6 +477,7 @@ impl Expr {
                 let op_str = match op {
                     BinOpKind::Or => "||",
                     BinOpKind::And => "&&",
+                    BinOpKind::BitXor => "^",
                     BinOpKind::Add => "+",
                     BinOpKind::Sub => "-",
                     BinOpKind::Mul => "*",

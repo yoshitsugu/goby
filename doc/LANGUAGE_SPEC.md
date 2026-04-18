@@ -102,8 +102,9 @@ syntax/semantics.
   - when a function-typed argument is expected, a named function may be passed directly
     (for example: `map xs add_ten`)
 - Operators:
-  - precedence: `|>` < `||` < `&&` < `==` / `<` / `>` / `<=` / `>=` < `+` / `-` < `*` / `/` / `%` < unary `!` < call/application
-  - `|>`, `||`, `&&`, `==`, `<`, `>`, `<=`, `>=`, `+`, `-`, `*`, `/`, `%` are left-associative
+  - precedence: `|>` < `||` < `&&` < `^` < `==` / `<` / `>` / `<=` / `>=` < `+` / `-` < `*` / `/` / `%` < unary `!` < call/application
+  - `|>`, `||`, `&&`, `^`, `==`, `<`, `>`, `<=`, `>=`, `+`, `-`, `*`, `/`, `%` are left-associative
+  - `^` is bitwise XOR on `Int` (`Int -> Int -> Int`)
   - unary `!` negates a `Bool`
   - binary operators require spaces around operators
   - current parser still requires parentheses when passing a binary operator expression as the

@@ -872,6 +872,7 @@ fn lower_binop(op: &BinOpKind) -> IrBinOp {
     match op {
         BinOpKind::Or => IrBinOp::Or,
         BinOpKind::And => IrBinOp::And,
+        BinOpKind::BitXor => IrBinOp::BitXor,
         BinOpKind::Add => IrBinOp::Add,
         BinOpKind::Sub => IrBinOp::Sub,
         BinOpKind::Mul => IrBinOp::Mul,

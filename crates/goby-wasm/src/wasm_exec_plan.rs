@@ -296,6 +296,7 @@ fn ir_binop_to_ast(op: &IrBinOp) -> BinOpKind {
     match op {
         IrBinOp::Or => BinOpKind::Or,
         IrBinOp::And => BinOpKind::And,
+        IrBinOp::BitXor => BinOpKind::BitXor,
         IrBinOp::Add => BinOpKind::Add,
         IrBinOp::Sub => BinOpKind::Sub,
         IrBinOp::Mul => BinOpKind::Mul,

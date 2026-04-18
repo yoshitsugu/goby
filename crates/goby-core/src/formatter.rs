@@ -143,6 +143,7 @@ pub(crate) fn format_expr(expr: &Expr, indent: usize) -> String {
             let op_str = match op {
                 BinOpKind::Or => "||",
                 BinOpKind::And => "&&",
+                BinOpKind::BitXor => "^",
                 BinOpKind::Add => "+",
                 BinOpKind::Sub => "-",
                 BinOpKind::Mul => "*",

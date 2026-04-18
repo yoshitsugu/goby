@@ -44,6 +44,14 @@ pub(crate) fn parse_expr(src: &str) -> Option<Expr> {
         });
     }
 
+    if let Some((left, right)) = split_top_level_binop(src, '^') {
+        return Some(Expr::BinOp {
+            op: BinOpKind::BitXor,
+            left: Box::new(parse_expr(left)?),
+            right: Box::new(parse_expr(right)?),
+        });
+    }
+
     if let Some((left, right)) = split_top_level_eq(src) {
         return Some(Expr::BinOp {
             op: BinOpKind::Eq,

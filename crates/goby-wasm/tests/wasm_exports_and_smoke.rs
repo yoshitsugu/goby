@@ -1557,6 +1557,42 @@ main =
     );
 }
 
+// ---------------------------------------------------------------------------
+// Bitwise XOR (`^`): Int -> Int -> Int
+// ---------------------------------------------------------------------------
+
+/// `10 ^ 6 = 12` — basic XOR and stdout round-trip through the runtime path.
+#[test]
+fn bitxor_smoke_basic() {
+    assert_runtime_stdout_with_empty_stdin(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  r = 10 ^ 6
+  println "${r}"
+"#,
+        "12\n",
+    );
+}
+
+/// Associativity on constants: `1 ^ 2 ^ 3 = 0` (XOR is associative, 1^2=3, 3^3=0).
+/// Also verifies the precedence choice: `^` binds tighter than `==`.
+#[test]
+fn bitxor_smoke_associativity_and_precedence() {
+    assert_runtime_stdout_with_empty_stdin(
+        r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  r = 1 ^ 2 ^ 3
+  eq = r == 0
+  println "${eq}"
+"#,
+        "True\n",
+    );
+}
+
 /// Two-level nested list assignment updates the correct inner element.
 #[test]
 fn lm_nested_two_level_list_assign() {

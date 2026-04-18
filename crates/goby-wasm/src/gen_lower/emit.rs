@@ -7170,6 +7170,13 @@ fn emit_bin_op(
             bool_from_i32!(function);
             Ok(())
         }
+        IrBinOp::BitXor => {
+            // Int: TAG_INT<<60 | payload. XOR of the upper 4 tag bits cancels to 0,
+            // so retag_int! (PAYLOAD_MASK + TAG_INT_SHIFT) reinstalls the tag.
+            function.instruction(&Instruction::I64Xor);
+            retag_int!(function);
+            Ok(())
+        }
         IrBinOp::Or => {
             // Bool: TAG_BOOL<<60 | 0 (false) or TAG_BOOL<<60 | 1 (true).
             // (TAG<<60 | a) | (TAG<<60 | b) = TAG<<60 | (a | b).

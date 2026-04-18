@@ -106,6 +106,7 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
                 (BinOpKind::Mul, Ty::Int, Ty::Int) => Ty::Int,
                 (BinOpKind::Div, Ty::Int, Ty::Int) => Ty::Int,
                 (BinOpKind::Mod, Ty::Int, Ty::Int) => Ty::Int,
+                (BinOpKind::BitXor, Ty::Int, Ty::Int) => Ty::Int,
                 (BinOpKind::Eq, _, _) if is_equality_comparable(env, &lt, &rt) => Ty::Bool,
                 (BinOpKind::Lt, Ty::Int, Ty::Int) => Ty::Bool,
                 (BinOpKind::Gt, Ty::Int, Ty::Int) => Ty::Bool,
