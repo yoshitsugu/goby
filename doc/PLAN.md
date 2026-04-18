@@ -551,9 +551,13 @@ Output format: human-readable (default) and JSON lines (`--json`).
   - `doc/STATE.md` records the plan as unblocked.
 - M1 groundwork landed in `bdf7d327` (closed-literal detection in shared IR,
   static literal hoisting in the Wasm emitter, normative example and parse
-  test). The `^` operator prerequisite (§4.2.1) is now **complete**; M1
-  acceptance harness (checksum capture, un-ignoring the compile test) is the
-  next work item.
+  test). The `^` operator prerequisite (§4.2.1) is **complete**.
+- M1 acceptance harness is now **complete**: `refcount_reuse_loop_example_compiles`
+  is un-ignored and passes. Root cause of the previous stack-overflow/hang was
+  a missing gate condition in `gen_lower/mod.rs` — modules with non-main
+  user-defined declarations were incorrectly routed to the interpreter fallback
+  instead of the general-lower path.
+- Next: M2 (refcount emission and reuse loop).
 
 #### 4.2.1 Perceus M1 prerequisite: bitwise XOR (`^`) operator — complete
 

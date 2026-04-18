@@ -859,7 +859,6 @@ fn refcount_reuse_loop_example_parses() {
 }
 
 #[test]
-#[ignore = "Perceus goal harness is added in M1; compile/run acceptance is enabled later in the plan"]
 fn refcount_reuse_loop_example_compiles() {
     let source = include_str!("../../../examples/refcount_reuse_loop.gb");
     let module = parse_module(source).expect("refcount_reuse_loop.gb should parse");

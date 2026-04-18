@@ -1488,12 +1488,15 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
     //   - a Lambda expression, OR
     //   - a tuple member projection (TupleProject; native evaluator does not support it), OR
     //   - a rooted list update (`AssignIndex`), which the fallback evaluator does not support.
+    //   - non-main user-defined declarations (helpers may use constructs the fallback cannot run).
     // Pure-Print programs without any of the above can stay on the simpler paths.
+    let has_non_main_user_decls = ir_module.decls.iter().any(|d| d.name != "main");
     if !has_runtime_read_effect(&ir_decl.body)
         && !has_handler_rewrite_entrypoints(&ir_decl.body)
         && !has_lambda_in_comp(&ir_decl.body)
         && !has_rooted_list_update(&ir_decl.body)
         && !has_tuple_project_in_comp(&ir_decl.body)
+        && !has_non_main_user_decls
     {
         return Ok(Err(
             GeneralLowerUnsupportedReason::NotRequiringRuntimeCapability,

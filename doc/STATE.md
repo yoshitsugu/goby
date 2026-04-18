@@ -1,14 +1,12 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-18 (bitwise XOR `^` landed)
+Last updated: 2026-04-18 (Perceus M1 acceptance harness landed)
 
 ## Current Focus
 
-**The `^` (bitwise XOR) prerequisite is landed; Perceus M1 acceptance harness
-(checksum capture, un-ignoring the compile test) is the next work item.**
-The pipeline now parses/type-checks/lowers/emits `^` end-to-end; the M1 goal
-program still fails to compile (stack overflow), which is the next investigation
-target (separate from the `^` work).
+**Perceus M1 acceptance harness is complete.**
+`refcount_reuse_loop_example_compiles` is now un-ignored and passes.
+The next milestone is **M2: refcount emission and reuse loop**.
 
 ---
 
@@ -31,11 +29,8 @@ landed the structural pieces for M1:
   `doc/PLAN_PERCEUS.md` §1.1 (length 4096, 5000 iterations).
 - `crates/goby-wasm/tests/wasm_exports_and_smoke.rs` — two integration tests:
   `refcount_reuse_loop_example_parses` (active) and
-  `refcount_reuse_loop_example_compiles` (currently `#[ignore]` citing
-  "Perceus goal harness is added in M1").
-
-Baseline `cargo check -p goby-core -p goby-wasm` is green with this
-groundwork.
+  `refcount_reuse_loop_example_compiles` (now active — M1 acceptance harness
+  landed on 2026-04-18).
 
 ## Perceus M1 prerequisite landed on 2026-04-18: bitwise XOR (`^`)
 
@@ -54,52 +49,32 @@ must not "equivalent"-rewrite it, because the acceptance checksum is pinned
 to the exact allocation and evaluation pattern. `^` was therefore added
 end-to-end before resuming M1 proper.
 
-Changes landed (Int-only; no Bool XOR, no AND/OR/shift, no constant folding
-in `closed_literals.rs`):
+## Perceus M1 acceptance harness landed on 2026-04-18
 
-- AST / IR: `BinOpKind::BitXor` in `ast.rs` and `IrBinOp::BitXor` in `ir.rs`,
-  plus `"^"` in the Debug / formatter / `to_str_repr` renderers.
-- Parser: `split_top_level_binop(_, '^')` arm in `parser_expr.rs::parse_expr`
-  between `&&` and `==`, so `^` binds tighter than `==` but looser than `&&`
-  and `a ^ b == c` parses as `(a ^ b) == c`.
-- Typecheck: `(BitXor, Int, Int) => Int` arm in `typecheck_check.rs`, modeled
-  on `Mod`.
-- IR lowering: `ir_lower.rs::lower_binop` and
-  `goby-wasm/src/wasm_exec_plan.rs::ir_binop_to_ast` updated.
-- Wasm emit: `gen_lower/emit.rs` emits `i64.xor` + `retag_int!` (tag bits
-  cancel under XOR, so the tag is reinstalled with `PAYLOAD_MASK | TAG_INT`).
-  `lower.rs` native interpreter has the matching `Int ^ Int => Int` arm.
-- Smoke: `wasm_exports_and_smoke.rs::bitxor_smoke_basic` and
-  `bitxor_smoke_associativity_and_precedence`.
-- Spec: `doc/LANGUAGE_SPEC.md` operator precedence line updated and `^` added
-  to the left-associative list, with a one-line note that it is bitwise XOR
-  on `Int`.
+Root cause of the previous stack-overflow/hang: modules with non-main
+user-defined declarations (e.g. `step`, `build`, `xor_fold`) were
+incorrectly classified as `NotRequiringRuntimeCapability` by the general-lower
+gate in `gen_lower/mod.rs`, because the gate only checked `main`'s direct body
+for `AssignIndex` / Lambda / etc. The fix adds `has_non_main_user_decls` as an
+additional gate condition so programs with helper functions are always routed
+through the general-lower path (rather than the interpreter fallback, which
+would attempt to evaluate `step initial 0 5000` at compile time).
 
 ## Immediate Next Actions
 
-1. Investigate the `refcount_reuse_loop_example_compiles` stack overflow
-   surfaced under `-- --ignored`. With `^` in place the failure is no longer
-   a missing-operator artefact; it indicates either a lowering infinite
-   recursion or a genuinely deep recursive pass. Reproduce with a reduced
-   input (e.g. length 16 + few iterations) and bisect the lowering pipeline.
-2. Once the compile path is healthy, capture the `goby check
-   examples/refcount_reuse_loop.gb` checksum, record it as an `assert_eq!`
-   literal in the integration test, and un-ignore the compile-only case.
-   Keep the `goby run` case ignored citing `doc/PLAN_PERCEUS.md` M5.
-3. Extend `tooling/` syntax highlight definitions to cover `^` (tracked as a
+1. Perceus M2: refcount emission — when a list cell's refcount reaches 1 at
+   an `AssignIndex`, reuse the cell in-place instead of copying. Add the
+   refcount decrement / reuse-or-copy logic in the Wasm runtime.
+2. Extend `tooling/` syntax highlight definitions to cover `^` (tracked as a
    TODO under `doc/PLAN.md` §4.2.1).
 
-## Verification snapshot (2026-04-18)
+## Verification snapshot (2026-04-18, M1 harness)
 
 - `cargo fmt --all` and `cargo check --all-targets` — workspace green.
-- `cargo test -p goby-core` — 697 pass, 0 failed, 2 ignored (pre-existing).
-- `cargo test -p goby-wasm` — 66 + 2 new pass, 0 failed, 3 ignored.
-- `cargo test -p goby-wasm bitxor_smoke` — 2 pass (basic + associativity /
-  precedence).
+- `cargo test -p goby-core` — 697 pass, 0 failed, 2 ignored.
+- `cargo test -p goby-wasm` (lib + integration, no --ignored) — all pass, 3 ignored.
+- `cargo test -p goby-wasm refcount_reuse_loop_example_compiles` — pass (un-ignored).
 - `cargo test -p goby-wasm refcount_reuse_loop_example_parses` — pass.
-- `cargo test -p goby-wasm refcount_reuse_loop_example_compiles --
-  --ignored` — still aborts with stack overflow. Root cause is no longer the
-  missing `^` operator; see Immediate Next Actions.
 
 ## Architecture State
 
@@ -110,6 +85,6 @@ in `closed_literals.rs`):
 | Typechecker | Stable (`^`: Int × Int → Int) |
 | IR (`ir.rs`) | Stable (`IrBinOp::BitXor` present) |
 | IR lowering (`ir_lower.rs`) | Stable |
-| Wasm backend | memory64 complete; Perceus M1 groundwork + `^` emission landed |
+| Wasm backend | memory64 complete; Perceus M1 groundwork + `^` emission + M1 harness landed |
 | Effect handlers | Non-tail / multi-resume still produces `BackendLimitation` |
-| GC / reclamation | Bump allocator only; Perceus M1 acceptance harness is the next focus |
+| GC / reclamation | Bump allocator only; Perceus M2 is the next focus |
