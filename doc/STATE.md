@@ -1,12 +1,26 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-18 (Perceus M1 acceptance harness landed)
+Last updated: 2026-04-18 (Perceus M2 Steps 1–7 complete; reuse logic still pending)
 
 ## Current Focus
 
-**Perceus M1 acceptance harness is complete.**
-`refcount_reuse_loop_example_compiles` is now un-ignored and passes.
-The next milestone is **M2: refcount emission and reuse loop**.
+**Perceus M2 scaffolding is in place; the remaining work is reuse semantics.**
+
+Steps 1–4 (layout slots, refcount prefix in allocator, alloc counter, stats
+epilogue, `EmitOptions.debug_alloc_stats`) and Steps 5–6 (`CompileOptions`,
+public API, CLI `--debug-alloc-stats` flag + parse tests) have been implemented.
+The stats line (`alloc-stats: total_bytes=N peak_bytes=M free_list_hits=H`) is
+emitted by the Wasm binary at `_start` exit when `debug_alloc_stats=true` and
+the module is on the memory64 / GeneralLowered path.
+
+The previously failing CLI integration now passes. The fix had three parts:
+- `crates/goby-wasm/src/wasm_exec.rs` now captures WASI stderr separately on the
+  Goby-owned runtime path and forwards it to process stderr when
+  `debug_alloc_stats=true`.
+- `crates/goby-cli/tests/cli_integration.rs` now exercises a real
+  `GeneralLowered` program instead of a file-based example.
+- `free_list_hits` is emitted as the published M2 placeholder value `0`
+  until actual reuse wiring lands in the next milestone.
 
 ---
 
@@ -62,11 +76,20 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 
 ## Immediate Next Actions
 
-1. Perceus M2: refcount emission — when a list cell's refcount reaches 1 at
-   an `AssignIndex`, reuse the cell in-place instead of copying. Add the
-   refcount decrement / reuse-or-copy logic in the Wasm runtime.
-2. Extend `tooling/` syntax highlight definitions to cover `^` (tracked as a
+1. **Perceus M2 next slice:** implement reuse-or-copy behavior when rooted list
+   updates can consume a refcount-1 cell in place.
+2. Update `doc/PLAN_PERCEUS.md` checkboxes now that the debug alloc-stats slice
+   and quality gate are green.
+3. Extend `tooling/` syntax highlight definitions to cover `^` (tracked as a
    TODO under `doc/PLAN.md` §4.2.1).
+
+## Verification snapshot (2026-04-18, M2 debug-alloc-stats slice)
+
+- `cargo fmt --all` — pass.
+- `cargo check --all-targets` — pass.
+- `cargo test` — pass (workspace green).
+- `cargo test -p goby-cli --test cli_integration run_command_debug_alloc_stats_emits_stats_line_for_general_lowered_program`
+  — pass.
 
 ## Verification snapshot (2026-04-18, M1 harness)
 
@@ -85,6 +108,6 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 | Typechecker | Stable (`^`: Int × Int → Int) |
 | IR (`ir.rs`) | Stable (`IrBinOp::BitXor` present) |
 | IR lowering (`ir_lower.rs`) | Stable |
-| Wasm backend | memory64 complete; Perceus M1 groundwork + `^` emission + M1 harness landed |
+| Wasm backend | memory64 complete; Perceus M1 groundwork + `^` emission + M1 harness landed; M2 debug-alloc-stats slice landed |
 | Effect handlers | Non-tail / multi-resume still produces `BackendLimitation` |
-| GC / reclamation | Bump allocator only; Perceus M2 is the next focus |
+| GC / reclamation | Bump allocator + refcount header + alloc stats landed; reuse logic pending M2 completion |

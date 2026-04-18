@@ -43,6 +43,7 @@ mod support;
 mod wasm_exec;
 mod wasm_exec_plan;
 
+pub use crate::execution_plan::CompileOptions;
 use crate::runtime_env::{
     EmbeddedEffectRuntime, RuntimeImportContext, effective_runtime_imports,
     load_runtime_import_context, runtime_import_selects_name,
@@ -104,6 +105,14 @@ pub struct CodegenError {
 /// - Internal Wasm encoding fails (e.g. string literal too large).
 pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
     execution_plan::compile_module_entrypoint(module)
+}
+
+/// Compile with explicit options (e.g. `debug_alloc_stats`).
+pub fn compile_module_with_options(
+    module: &Module,
+    options: CompileOptions,
+) -> Result<Vec<u8>, CodegenError> {
+    execution_plan::compile_module_with_options_entrypoint(module, options)
 }
 
 /// Execute an [`InterpreterBridge`][`crate::RuntimeIoExecutionKind::InterpreterBridge`]
@@ -173,6 +182,21 @@ pub fn execute_runtime_module_with_stdin_and_config(
         module,
         stdin_seed,
         memory_config,
+    )
+}
+
+/// Like `execute_runtime_module_with_stdin_and_config` but also passes compile options.
+pub fn execute_runtime_module_with_stdin_config_and_options(
+    module: &Module,
+    stdin_seed: Option<String>,
+    memory_config: Option<memory_config::WasmMemoryConfig>,
+    compile_options: CompileOptions,
+) -> Result<Option<String>, CodegenError> {
+    execution_plan::execute_runtime_module_with_stdin_config_and_options_entrypoint(
+        module,
+        stdin_seed,
+        memory_config,
+        compile_options,
     )
 }
 

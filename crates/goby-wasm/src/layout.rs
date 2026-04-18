@@ -19,9 +19,19 @@ pub(crate) const GLOBAL_RUNTIME_ERROR_OFFSET: u32 = 20;
 /// Wasm-side top-down allocation reads this to avoid overlapping host-owned
 /// allocations after memory growth.
 pub(crate) const GLOBAL_HOST_BUMP_CURSOR_OFFSET: u32 = 24;
+// bytes [28..32): 4-byte pad to align the following i64 slots to 8-byte boundary.
+/// Running total of bytes allocated by emit_alloc_from_top (i64, zero-init).
+/// Layout: bytes [32..40).
+pub(crate) const GLOBAL_ALLOC_BYTES_TOTAL_OFFSET: u32 = 32;
+/// Peak live bytes (i64, zero-init; placeholder in M2, wired in M3).
+/// Layout: bytes [40..48).
+pub(crate) const GLOBAL_PEAK_BYTES_OFFSET: u32 = 40;
+/// Free-list hit counter (i64, zero-init; placeholder in M2, wired in M3).
+/// Layout: bytes [48..56).
+pub(crate) const GLOBAL_FREE_LIST_HITS_OFFSET: u32 = 48;
 pub(crate) const RUNTIME_ERROR_NONE: u32 = 0;
 pub(crate) const RUNTIME_ERROR_MEMORY_EXHAUSTION: u32 = 1;
-pub(crate) const HEAP_BASE: u32 = 28;
+pub(crate) const HEAP_BASE: u32 = 56;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MemoryLayout {

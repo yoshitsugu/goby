@@ -116,6 +116,7 @@ fn write_list_word(
 ///
 /// Returns the captured stdout output as a `String`, or an error message.
 /// Execute Wasm bytes with the default runtime memory ceiling (1 GiB).
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn run_wasm_bytes_with_stdin(
     wasm: &[u8],
     stdin: Option<&str>,
@@ -125,12 +126,27 @@ pub(crate) fn run_wasm_bytes_with_stdin(
 
 /// Execute Wasm bytes with an explicit memory config.  Used by the CLI to honour
 /// `--max-memory-mb` / `GOBY_MAX_MEMORY_MB`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn run_wasm_bytes_with_config(
     wasm: &[u8],
     stdin: Option<&str>,
     memory_config: crate::memory_config::WasmMemoryConfig,
 ) -> Result<String, String> {
     run_wasm_bytes_with_stdin_and_config(wasm, stdin, memory_config)
+}
+
+/// Execute Wasm bytes and optionally print alloc stats to stderr after `_start`.
+pub(crate) fn run_wasm_bytes_with_config_and_options(
+    wasm: &[u8],
+    stdin: Option<&str>,
+    memory_config: crate::memory_config::WasmMemoryConfig,
+    debug_alloc_stats: bool,
+) -> Result<String, String> {
+    let captured = run_wasm_bytes_with_stdin_and_config_captured(wasm, stdin, memory_config)?;
+    if debug_alloc_stats && !captured.stderr.is_empty() {
+        eprint!("{}", captured.stderr);
+    }
+    Ok(captured.stdout)
 }
 
 #[cfg(test)]
@@ -142,11 +158,25 @@ pub(crate) fn run_wasm_bytes_with_stdin_for_tests(
     run_wasm_bytes_with_stdin_and_config(wasm, stdin, memory_config)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn run_wasm_bytes_with_stdin_and_config(
     wasm: &[u8],
     stdin: Option<&str>,
     memory_config: crate::memory_config::WasmMemoryConfig,
 ) -> Result<String, String> {
+    Ok(run_wasm_bytes_with_stdin_and_config_captured(wasm, stdin, memory_config)?.stdout)
+}
+
+struct CapturedWasiOutput {
+    stdout: String,
+    stderr: String,
+}
+
+fn run_wasm_bytes_with_stdin_and_config_captured(
+    wasm: &[u8],
+    stdin: Option<&str>,
+    memory_config: crate::memory_config::WasmMemoryConfig,
+) -> Result<CapturedWasiOutput, String> {
     let mut config = Config::new();
     config.max_wasm_stack(memory_config.max_wasm_stack_bytes);
     config.async_stack_size(memory_config.max_wasm_stack_bytes);
@@ -157,9 +187,12 @@ fn run_wasm_bytes_with_stdin_and_config(
 
     let stdout_pipe = MemoryOutputPipe::new(1024 * 1024);
     let stdout_capture = stdout_pipe.clone();
+    let stderr_pipe = MemoryOutputPipe::new(1024 * 1024);
+    let stderr_capture = stderr_pipe.clone();
 
     let mut wasi_builder = WasiCtxBuilder::new();
     wasi_builder.stdout(stdout_pipe);
+    wasi_builder.stderr(stderr_pipe);
     if let Some(text) = stdin {
         wasi_builder.stdin(MemoryInputPipe::new(text.to_owned()));
     }
@@ -296,12 +329,15 @@ fn run_wasm_bytes_with_stdin_and_config(
         }
     }
 
-    // Drop the store to release the Arc borrow on `stdout_pipe` so that
-    // `stdout_capture.contents()` can acquire the lock below.
+    // Drop the store to release the Arc borrows on the output pipes so that
+    // `contents()` can acquire the locks below.
     drop(store);
 
-    let bytes = stdout_capture.contents();
-    String::from_utf8(bytes.to_vec()).map_err(|e| format!("stdout utf8: {e}"))
+    let stdout = String::from_utf8(stdout_capture.contents().to_vec())
+        .map_err(|e| format!("stdout utf8: {e}"))?;
+    let stderr = String::from_utf8(stderr_capture.contents().to_vec())
+        .map_err(|e| format!("stderr utf8: {e}"))?;
+    Ok(CapturedWasiOutput { stdout, stderr })
 }
 
 fn value_to_string_host(

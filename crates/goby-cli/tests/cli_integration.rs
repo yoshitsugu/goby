@@ -2100,3 +2100,94 @@ fn run_command_hof_fold_print_acceptance_gate() {
         stderr
     );
 }
+
+#[test]
+fn run_command_debug_alloc_stats_emits_stats_line_for_general_lowered_program() {
+    let root = repo_root();
+    let sandbox = TempDirGuard::new("debug_alloc_stats_general_lowered");
+    let input = sandbox.join("general_lowered_debug_alloc_stats.gb");
+    fs::write(
+        &input,
+        r#"import goby/list ( map, each )
+
+main : Unit -> Unit can Print
+main =
+  nums = [1, 2, 3]
+  rendered = map nums (fn n -> "${n + 1}")
+  each rendered println
+"#,
+    )
+    .expect("temporary input should be writable");
+
+    let output = command_for_goby_cli()
+        .arg("run")
+        .arg("--debug-alloc-stats")
+        .arg(&input)
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        output.status.success(),
+        "expected success, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Must contain the frozen stats line.
+    let has_stats_line = stderr.lines().any(|line| {
+        // Regex-free check: starts with "alloc-stats:" and contains the wired M2 fields.
+        line.starts_with("alloc-stats:")
+            && line.contains("total_bytes=")
+            && line.contains("peak_bytes=")
+    });
+    assert!(
+        has_stats_line,
+        "expected alloc-stats line in stderr; stderr: {stderr}"
+    );
+
+    // total_bytes must be positive.
+    if let Some(line) = stderr.lines().find(|l| l.starts_with("alloc-stats:")) {
+        let total_bytes_val = line
+            .split_whitespace()
+            .find(|p| p.starts_with("total_bytes="))
+            .and_then(|p| p.trim_start_matches("total_bytes=").parse::<u64>().ok())
+            .unwrap_or(0);
+        assert!(
+            total_bytes_val > 0,
+            "total_bytes must be positive, got 0; line: {line}"
+        );
+        assert!(
+            !line.contains("free_list_hits="),
+            "free_list_hits should stay hidden until the counter is wired; line: {line}"
+        );
+    }
+}
+
+#[test]
+fn run_command_debug_alloc_stats_rejects_non_general_lowered_program() {
+    let root = repo_root();
+
+    let output = command_for_goby_cli()
+        .arg("run")
+        .arg("--debug-alloc-stats")
+        .arg(root.join("examples/function.gb"))
+        .current_dir(&root)
+        .output()
+        .expect("cli should execute");
+
+    assert!(
+        !output.status.success(),
+        "expected failure, stdout: {}, stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "--debug-alloc-stats is currently supported only for GeneralLowered runtime-owned Wasm programs"
+        ),
+        "unexpected stderr: {stderr}"
+    );
+}

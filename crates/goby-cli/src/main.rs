@@ -19,7 +19,9 @@ commands:
 
 options for run:
   --max-memory-mb <N>        set the Wasm linear memory ceiling to N MiB
-                             (default: 1024; env var GOBY_MAX_MEMORY_MB used as fallback)";
+                             (default: 1024; env var GOBY_MAX_MEMORY_MB used as fallback)
+  --debug-alloc-stats        print heap allocation statistics to stderr after execution
+                             (currently supported only for GeneralLowered runtime-owned Wasm)";
 
 /// Render the error header line.
 ///
@@ -143,6 +145,7 @@ struct CliArgs {
     file: String,
     /// User-supplied value of `--max-memory-mb` (if any).
     max_memory_mb: Option<u32>,
+    debug_alloc_stats: bool,
 }
 
 #[derive(Debug)]
@@ -209,20 +212,25 @@ fn run() -> Result<(), CliError> {
 
     let memory_config = resolve_memory_config(cli.max_memory_mb);
 
-    // Warn if --max-memory-mb was passed to a command that doesn't execute Wasm.
-    if memory_config.is_some() && !matches!(cli.command, Command::Run) {
-        eprintln!(
-            "warning: --max-memory-mb has no effect for the '{}' command",
-            match cli.command {
-                Command::Check => "check",
-                Command::Lint => "lint",
-                _ => unreachable!(),
-            }
-        );
+    // Warn if run-only flags were passed to commands that don't execute Wasm.
+    if !matches!(cli.command, Command::Run) {
+        let command_name = non_run_command_name(cli.command);
+        if memory_config.is_some() {
+            eprintln!(
+                "warning: --max-memory-mb has no effect for the '{}' command",
+                command_name
+            );
+        }
+        if cli.debug_alloc_stats {
+            eprintln!(
+                "warning: --debug-alloc-stats has no effect for the '{}' command",
+                command_name
+            );
+        }
     }
 
     match cli.command {
-        Command::Run => run_command(&module, &cli.file, memory_config)?,
+        Command::Run => run_command(&module, &cli.file, memory_config, cli.debug_alloc_stats)?,
         Command::Check => {
             print_parse_summary(module.declarations.len(), &cli.file);
         }
@@ -256,18 +264,35 @@ fn run_fmt(file: &str, source: &str, check: bool) -> Result<(), CliError> {
     }
 }
 
+fn non_run_command_name(command: Command) -> &'static str {
+    match command {
+        Command::Check => "check",
+        Command::Lint => "lint",
+        Command::Fmt { .. } => "fmt",
+        Command::Run => unreachable!("run-only warning requested for run command"),
+    }
+}
+
 fn run_command(
     module: &goby_core::Module,
     file: &str,
     memory_config: Option<goby_wasm::memory_config::WasmMemoryConfig>,
+    debug_alloc_stats: bool,
 ) -> Result<(), CliError> {
     // Runtime execution ownership lives in `goby-wasm`.
     // Some modules must execute through the Goby-owned runtime even when they do not
     // consume stdin (for example lambda-driven GeneralLowered programs).  Ask the
     // runtime boundary separately whether stdin must be pre-seeded.
+    let execution_kind = goby_wasm::runtime_io_execution_kind(module)
+        .map_err(|err| CliError::Runtime(format!("classification error: {}", err.message)))?;
+    if debug_alloc_stats && execution_kind != goby_wasm::RuntimeIoExecutionKind::GeneralLowered {
+        return Err(CliError::Runtime(
+            "--debug-alloc-stats is currently supported only for GeneralLowered runtime-owned Wasm programs"
+                .to_string(),
+        ));
+    }
     let needs_stdin_execution = matches!(
-        goby_wasm::runtime_io_execution_kind(module)
-            .map_err(|err| CliError::Runtime(format!("classification error: {}", err.message)))?,
+        execution_kind,
         goby_wasm::RuntimeIoExecutionKind::GeneralLowered
             | goby_wasm::RuntimeIoExecutionKind::InterpreterBridge
     );
@@ -280,10 +305,12 @@ fn run_command(
         } else {
             None
         };
-        match goby_wasm::execute_runtime_module_with_stdin_and_config(
+        let compile_options = goby_wasm::CompileOptions { debug_alloc_stats };
+        match goby_wasm::execute_runtime_module_with_stdin_config_and_options(
             module,
             stdin_text,
             memory_config,
+            compile_options,
         )
         .map_err(|err| CliError::Runtime(format_runtime_error_message(&err.message)))?
         {
@@ -299,7 +326,8 @@ fn run_command(
         }
     } else {
         // Not a runtime-stdin program: compile and execute via file-based Wasm.
-        match goby_wasm::compile_module(module) {
+        let compile_options = goby_wasm::CompileOptions { debug_alloc_stats };
+        match goby_wasm::compile_module_with_options(module, compile_options) {
             Ok(bytes) => {
                 let output = output_wasm_path(file);
                 std::fs::write(&output, &bytes).map_err(|err| {
@@ -367,9 +395,10 @@ where
             } else {
                 Command::Check
             };
-            // Accept optional `--max-memory-mb <N>` before or after the file argument.
+            // Accept optional flags before or after the file argument.
             let mut file: Option<String> = None;
             let mut max_memory_mb: Option<u32> = None;
+            let mut debug_alloc_stats = false;
             while let Some(arg) = args.next() {
                 if arg == "--max-memory-mb" {
                     let val = args.next().ok_or_else(|| {
@@ -391,6 +420,8 @@ where
                         ))
                     })?;
                     max_memory_mb = Some(n);
+                } else if arg == "--debug-alloc-stats" {
+                    debug_alloc_stats = true;
                 } else if !arg.starts_with("--") && file.is_none() {
                     file = Some(arg);
                 } else {
@@ -402,6 +433,7 @@ where
                 command,
                 file,
                 max_memory_mb,
+                debug_alloc_stats,
             })
         }
         "fmt" => {
@@ -424,6 +456,7 @@ where
                 command: Command::Fmt { check },
                 file,
                 max_memory_mb: None,
+                debug_alloc_stats: false,
             })
         }
         _ => Err(CliError::Usage(format!("unknown command: {}", command_raw))),
@@ -826,6 +859,37 @@ mod tests {
             }
             CliError::Runtime(_) => panic!("expected usage error"),
         }
+    }
+
+    #[test]
+    fn parses_debug_alloc_stats_flag() {
+        let cli = parse_args_from(to_args(&["goby", "run", "--debug-alloc-stats", "foo.gb"]))
+            .expect("--debug-alloc-stats should parse");
+        assert!(cli.debug_alloc_stats);
+        assert_eq!(cli.file, "foo.gb");
+    }
+
+    #[test]
+    fn debug_alloc_stats_defaults_to_false() {
+        let cli = parse_args_from(to_args(&["goby", "run", "foo.gb"]))
+            .expect("run without --debug-alloc-stats should parse");
+        assert!(!cli.debug_alloc_stats);
+    }
+
+    #[test]
+    fn parses_debug_alloc_stats_before_file() {
+        let cli = parse_args_from(to_args(&["goby", "run", "--debug-alloc-stats", "bar.gb"]))
+            .expect("--debug-alloc-stats before file should parse");
+        assert!(cli.debug_alloc_stats);
+        assert_eq!(cli.file, "bar.gb");
+    }
+
+    #[test]
+    fn parses_debug_alloc_stats_after_file() {
+        let cli = parse_args_from(to_args(&["goby", "run", "bar.gb", "--debug-alloc-stats"]))
+            .expect("--debug-alloc-stats after file should parse");
+        assert!(cli.debug_alloc_stats);
+        assert_eq!(cli.file, "bar.gb");
     }
 
     #[test]

@@ -1712,7 +1712,7 @@ pub(crate) fn try_general_lower_module(module: &Module) -> Result<Option<Vec<u8>
     try_general_lower_module_with_options(module, emit::EmitOptions::default())
 }
 
-fn try_general_lower_module_with_options(
+pub(crate) fn try_general_lower_module_with_options(
     module: &Module,
     options: emit::EmitOptions,
 ) -> Result<Option<Vec<u8>>, CodegenError> {
@@ -1745,6 +1745,7 @@ mod tests {
             EmitOptions {
                 effect_emit_strategy: EffectEmitStrategy::Wb3DirectCall,
                 memory_config: TEST_MEMORY_CONFIG,
+                debug_alloc_stats: false,
             },
         )
         .expect("direct-call lowering should not error")
@@ -1754,6 +1755,7 @@ mod tests {
             EmitOptions {
                 effect_emit_strategy: EffectEmitStrategy::Wb3BWasmFxExperimental,
                 memory_config: TEST_MEMORY_CONFIG,
+                debug_alloc_stats: false,
             },
         )
         .expect("future handler-path lowering should not error")
@@ -1778,6 +1780,7 @@ mod tests {
             EmitOptions {
                 effect_emit_strategy: expected_strategy,
                 memory_config: RUNTIME_MEMORY_CONFIG,
+                debug_alloc_stats: false,
             },
         )
         .expect("explicit lowering should not error")

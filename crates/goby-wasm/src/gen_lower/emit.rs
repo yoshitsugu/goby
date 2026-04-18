@@ -33,7 +33,8 @@ use crate::host_runtime::{
     host_import_for_intrinsic,
 };
 use crate::layout::{
-    GLOBAL_HEAP_CURSOR_OFFSET, GLOBAL_HEAP_FLOOR_OFFSET, GLOBAL_HOST_BUMP_CURSOR_OFFSET,
+    GLOBAL_ALLOC_BYTES_TOTAL_OFFSET, GLOBAL_FREE_LIST_HITS_OFFSET, GLOBAL_HEAP_CURSOR_OFFSET,
+    GLOBAL_HEAP_FLOOR_OFFSET, GLOBAL_HOST_BUMP_CURSOR_OFFSET, GLOBAL_PEAK_BYTES_OFFSET,
     GLOBAL_RUNTIME_ERROR_OFFSET, MemoryLayout, RUNTIME_ERROR_MEMORY_EXHAUSTION,
 };
 #[cfg(test)]
@@ -1288,6 +1289,7 @@ pub(crate) enum EffectEmitStrategy {
 pub(crate) struct EmitOptions {
     pub(crate) effect_emit_strategy: EffectEmitStrategy,
     pub(crate) memory_config: crate::memory_config::WasmMemoryConfig,
+    pub(crate) debug_alloc_stats: bool,
 }
 
 impl Default for EmitOptions {
@@ -1295,6 +1297,7 @@ impl Default for EmitOptions {
         Self {
             effect_emit_strategy: default_effect_emit_strategy(),
             memory_config: RUNTIME_MEMORY_CONFIG,
+            debug_alloc_stats: false,
         }
     }
 }
@@ -1346,6 +1349,20 @@ fn initialize_helper_state_locals(
         function.instruction(&ptr_const(pw, GLOBAL_HEAP_FLOOR_OFFSET as u64));
         function.instruction(&Instruction::I32Const(initial_floor));
         function.instruction(&Instruction::I32Store(global_mem_arg));
+        // Zero-initialize the three i64 allocation-stats slots.
+        for offset in [
+            GLOBAL_ALLOC_BYTES_TOTAL_OFFSET,
+            GLOBAL_PEAK_BYTES_OFFSET,
+            GLOBAL_FREE_LIST_HITS_OFFSET,
+        ] {
+            function.instruction(&ptr_const(pw, offset as u64));
+            function.instruction(&Instruction::I64Const(0));
+            function.instruction(&Instruction::I64Store(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+        }
         function.instruction(&ptr_const(pw, GLOBAL_HEAP_CURSOR_OFFSET as u64));
         function.instruction(&Instruction::I32Load(global_mem_arg));
         if pw == PtrWidth::W64 {
@@ -1749,6 +1766,12 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         if main_i32_scratch_count > 0 {
             locals_vec.push((main_i32_scratch_count, scratch_val_type));
         }
+        // Allocate 3 extra i64 scratch locals for the debug_alloc_stats epilogue:
+        // [0] current stat value being converted, [1] buf write cursor, [2] digit loop temp.
+        let stats_scratch_base = main_i64_count + main_i32_scratch_count;
+        if options.debug_alloc_stats {
+            locals_vec.push((3, ValType::I64));
+        }
         let mut function = Function::new(locals_vec);
         let mut ctx = EmitContext::with_module_tables(
             decl_func_indices.clone(),
@@ -1775,6 +1798,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             options,
             false, // emit_epilogue_cursor_sync
             None,
+            stats_scratch_base,
         )?;
         code.function(&function);
     }
@@ -1863,6 +1887,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             options,
             true,
             None,
+            0, // stats_scratch_base unused for aux decls
         )?;
         code.function(&function);
     }
@@ -3856,6 +3881,9 @@ fn emit_function_body(
     options: EmitOptions,
     emit_epilogue_cursor_sync: bool,
     tail_call_mode: Option<TailCallMode>,
+    // Base index of the 3 extra i64 scratch locals reserved for the debug_alloc_stats epilogue.
+    // Only meaningful when `!emit_epilogue_cursor_sync && options.debug_alloc_stats`.
+    stats_scratch_base: u32,
 ) -> Result<(), CodegenError> {
     ctx.tail_call_mode = tail_call_mode;
     let has_heap = needs_helper_state(instrs);
@@ -3912,9 +3940,257 @@ fn emit_function_body(
         emit_sync_cursor_to_global(function, alloc_cursor_local, pw);
         emit_sync_floor_to_global(function, heap_floor_local, pw);
     }
+    // is_main == !emit_epilogue_cursor_sync. Stats epilogue is memory64-only
+    // (Perceus plan §3.1: refcount is i64, Goby is memory64-only).
+    if !emit_epilogue_cursor_sync && options.memory_config.memory64 {
+        let pw = PtrWidth::W64;
+        // Copy total_bytes → peak_bytes (M2 placeholder; M3 will wire real peak tracking).
+        function.instruction(&ptr_const(pw, GLOBAL_PEAK_BYTES_OFFSET as u64));
+        function.instruction(&ptr_const(pw, GLOBAL_ALLOC_BYTES_TOTAL_OFFSET as u64));
+        function.instruction(&Instruction::I64Load(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::I64Store(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        if options.debug_alloc_stats {
+            emit_alloc_stats_line(function, layout, pw, stats_scratch_base);
+        }
+    }
     function.instruction(&Instruction::End);
     ctx.tail_call_mode = None;
     Ok(())
+}
+
+/// Emit instructions that write the frozen alloc-stats line to fd=2 (stderr).
+///
+/// Format: `alloc-stats: total_bytes=N peak_bytes=M\n`
+///
+/// Uses a scratch window above `HEAP_BASE` as a stats buffer.
+/// The extra gap keeps the text buffer disjoint from the nearby global
+/// bookkeeping slots while remaining safe to overwrite at `_start` exit:
+/// stdin has already been consumed and the heap cursor is no longer in use by
+/// the epilogue.
+///
+/// `stats_scratch_base`: index of the first of 3 consecutive i64 scratch locals
+/// allocated in the caller's function local slot table.
+fn emit_alloc_stats_line(
+    function: &mut Function,
+    layout: &MemoryLayout,
+    pw: PtrWidth,
+    stats_scratch_base: u32,
+) {
+    let s_val = stats_scratch_base;
+    let s_ptr = stats_scratch_base + 1;
+    let s_tmp = stats_scratch_base + 2;
+
+    // Keep the stats buffer away from the low-memory global bookkeeping slots.
+    let buf_start = i64::from(layout.heap_base) + 64;
+
+    // Initialize s_ptr = buf_start
+    function.instruction(&Instruction::I64Const(buf_start));
+    function.instruction(&Instruction::LocalSet(s_ptr));
+
+    // Write prefix: "alloc-stats: total_bytes="
+    for &b in b"alloc-stats: total_bytes=" {
+        function.instruction(&Instruction::LocalGet(s_ptr));
+        function.instruction(&Instruction::I64Const(b as i64));
+        function.instruction(&Instruction::I64Store8(MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::LocalGet(s_ptr));
+        function.instruction(&Instruction::I64Const(1));
+        function.instruction(&Instruction::I64Add);
+        function.instruction(&Instruction::LocalSet(s_ptr));
+    }
+
+    // Load total_bytes into s_val and convert
+    function.instruction(&ptr_const(pw, GLOBAL_ALLOC_BYTES_TOTAL_OFFSET as u64));
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_val));
+    emit_i64_to_decimal(function, s_val, s_ptr, s_tmp);
+
+    // " peak_bytes="
+    for &b in b" peak_bytes=" {
+        function.instruction(&Instruction::LocalGet(s_ptr));
+        function.instruction(&Instruction::I64Const(b as i64));
+        function.instruction(&Instruction::I64Store8(MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::LocalGet(s_ptr));
+        function.instruction(&Instruction::I64Const(1));
+        function.instruction(&Instruction::I64Add);
+        function.instruction(&Instruction::LocalSet(s_ptr));
+    }
+
+    // Load peak_bytes into s_val and convert
+    function.instruction(&ptr_const(pw, GLOBAL_PEAK_BYTES_OFFSET as u64));
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_val));
+    emit_i64_to_decimal(function, s_val, s_ptr, s_tmp);
+
+    // '\n'
+    function.instruction(&Instruction::LocalGet(s_ptr));
+    function.instruction(&Instruction::I64Const(b'\n' as i64));
+    function.instruction(&Instruction::I64Store8(MemArg {
+        offset: 0,
+        align: 0,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalGet(s_ptr));
+    function.instruction(&Instruction::I64Const(1));
+    function.instruction(&Instruction::I64Add);
+    function.instruction(&Instruction::LocalSet(s_ptr));
+
+    // len = s_ptr - buf_start
+    // iovec[0] = buf_start (i32), iovec[1] = len (i32)
+    // fd_write(2, iovec_offset, 1, nwritten_offset)
+    let iovec_offset = layout.iovec_offset as i32;
+    let nwritten_offset = layout.nwritten_offset as i32;
+
+    // iovec[0] = buf_start pointer (i32 field), iovec[1] = byte length (i32 field).
+    // Addresses for I32Store must match the module's pointer width.
+    function.instruction(&ptr_const(pw, iovec_offset as u64));
+    function.instruction(&Instruction::I32Const(buf_start as i32));
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    function.instruction(&ptr_const(pw, (iovec_offset + 4) as u64));
+    function.instruction(&Instruction::LocalGet(s_ptr));
+    function.instruction(&Instruction::I64Const(buf_start));
+    function.instruction(&Instruction::I64Sub);
+    function.instruction(&Instruction::I32WrapI64);
+    function.instruction(&Instruction::I32Store(MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    }));
+    // fd_write(fd=2, iovec_ptr, iovs_len=1, nwritten_ptr) — all args are i32 in WASI Preview 1.
+    function.instruction(&Instruction::I32Const(2)); // stderr
+    function.instruction(&Instruction::I32Const(iovec_offset));
+    function.instruction(&Instruction::I32Const(1));
+    function.instruction(&Instruction::I32Const(nwritten_offset));
+    function.instruction(&Instruction::Call(FD_WRITE_IDX));
+    function.instruction(&Instruction::Drop); // discard errno
+}
+
+/// Emit instructions to convert the i64 in `val_local` to decimal ASCII,
+/// appending the digits at the address in `ptr_local` (advancing `ptr_local`).
+/// Uses `tmp_local` as a scratch register.
+fn emit_i64_to_decimal(function: &mut Function, val_local: u32, ptr_local: u32, tmp_local: u32) {
+    // Special case: 0 → write '0'
+    function.instruction(&Instruction::LocalGet(val_local));
+    function.instruction(&Instruction::I64Eqz);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(ptr_local));
+    function.instruction(&Instruction::I64Const(b'0' as i64));
+    function.instruction(&Instruction::I64Store8(MemArg {
+        offset: 0,
+        align: 0,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalGet(ptr_local));
+    function.instruction(&Instruction::I64Const(1));
+    function.instruction(&Instruction::I64Add);
+    function.instruction(&Instruction::LocalSet(ptr_local));
+    function.instruction(&Instruction::Else);
+    // Non-zero: write digits right-to-left into a 20-byte window starting at ptr_local,
+    // then copy the used portion to the front.
+    // tmp_local = ptr_local + 19 (rightmost slot)
+    function.instruction(&Instruction::LocalGet(ptr_local));
+    function.instruction(&Instruction::I64Const(19));
+    function.instruction(&Instruction::I64Add);
+    function.instruction(&Instruction::LocalSet(tmp_local));
+    // digit extraction loop
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(val_local));
+    function.instruction(&Instruction::I64Eqz);
+    function.instruction(&Instruction::BrIf(1));
+    // digit = val % 10 + '0', store at tmp_local, tmp_local--
+    function.instruction(&Instruction::LocalGet(tmp_local));
+    function.instruction(&Instruction::LocalGet(val_local));
+    function.instruction(&Instruction::I64Const(10));
+    function.instruction(&Instruction::I64RemU);
+    function.instruction(&Instruction::I64Const(b'0' as i64));
+    function.instruction(&Instruction::I64Add);
+    function.instruction(&Instruction::I64Store8(MemArg {
+        offset: 0,
+        align: 0,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalGet(tmp_local));
+    function.instruction(&Instruction::I64Const(1));
+    function.instruction(&Instruction::I64Sub);
+    function.instruction(&Instruction::LocalSet(tmp_local));
+    function.instruction(&Instruction::LocalGet(val_local));
+    function.instruction(&Instruction::I64Const(10));
+    function.instruction(&Instruction::I64DivU);
+    function.instruction(&Instruction::LocalSet(val_local));
+    function.instruction(&Instruction::Br(0));
+    function.instruction(&Instruction::End); // loop
+    function.instruction(&Instruction::End); // block
+    // Copy digits from [tmp_local+1 .. ptr_local+20) to [ptr_local .. ptr_local+count).
+    // val_local is now 0 after the digit loop — reuse it to hold the fixed end-of-window.
+    function.instruction(&Instruction::LocalGet(ptr_local));
+    function.instruction(&Instruction::I64Const(20));
+    function.instruction(&Instruction::I64Add);
+    function.instruction(&Instruction::LocalSet(val_local)); // val_local = end_of_window (fixed)
+    // src = tmp_local + 1
+    function.instruction(&Instruction::LocalGet(tmp_local));
+    function.instruction(&Instruction::I64Const(1));
+    function.instruction(&Instruction::I64Add);
+    function.instruction(&Instruction::LocalSet(tmp_local)); // tmp = src
+    // copy loop: exit when src >= end_of_window (fixed)
+    function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(tmp_local));
+    function.instruction(&Instruction::LocalGet(val_local)); // fixed end
+    function.instruction(&Instruction::I64GeU);
+    function.instruction(&Instruction::BrIf(1));
+    // *ptr_local = *tmp_local (src); advance both
+    function.instruction(&Instruction::LocalGet(ptr_local));
+    function.instruction(&Instruction::LocalGet(tmp_local));
+    function.instruction(&Instruction::I64Load8U(MemArg {
+        offset: 0,
+        align: 0,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::I64Store8(MemArg {
+        offset: 0,
+        align: 0,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalGet(ptr_local));
+    function.instruction(&Instruction::I64Const(1));
+    function.instruction(&Instruction::I64Add);
+    function.instruction(&Instruction::LocalSet(ptr_local));
+    function.instruction(&Instruction::LocalGet(tmp_local));
+    function.instruction(&Instruction::I64Const(1));
+    function.instruction(&Instruction::I64Add);
+    function.instruction(&Instruction::LocalSet(tmp_local));
+    function.instruction(&Instruction::Br(0));
+    function.instruction(&Instruction::End); // loop
+    function.instruction(&Instruction::End); // block
+    function.instruction(&Instruction::End); // if
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4403,6 +4679,10 @@ fn emit_push_tagged_ptr(function: &mut Function, ptr_local: u32, tag: u8, pw: Pt
     function.instruction(&Instruction::I64Or);
 }
 
+// Every heap object is preceded by an 8-byte refcount word (§3.1 of PLAN_PERCEUS.md).
+// Goby is memory64-only, so the header is always 8 bytes regardless of PtrWidth.
+const REFCOUNT_WORD_BYTES: u64 = 8;
+
 fn emit_alloc_from_top(
     function: &mut Function,
     helper_state: &HeapEmitState,
@@ -4410,6 +4690,12 @@ fn emit_alloc_from_top(
     result_local: u32,
 ) {
     let pw = helper_state.pw();
+    // Prepend the 8-byte refcount header to the requested payload size before
+    // alignment, so the cursor consumes the header too.
+    function.instruction(&Instruction::LocalGet(size_local));
+    function.instruction(&ptr_const(pw, REFCOUNT_WORD_BYTES));
+    function.instruction(&ptr_add(pw));
+    function.instruction(&Instruction::LocalSet(size_local));
     // Always allocate an 8-byte-aligned size so capacity checks and cursor movement
     // consume the same amount of memory.
     function.instruction(&Instruction::LocalGet(size_local));
@@ -4513,6 +4799,39 @@ fn emit_alloc_from_top(
     function.instruction(&ptr_sub(pw));
     function.instruction(&Instruction::LocalTee(result_local));
     function.instruction(&Instruction::LocalSet(helper_state.alloc_cursor_local));
+    // result_local now points at the refcount header. Write refcount = 1.
+    function.instruction(&Instruction::LocalGet(result_local));
+    function.instruction(&Instruction::I64Const(1));
+    function.instruction(&Instruction::I64Store(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    // Advance result_local past the header so callers receive the payload pointer.
+    function.instruction(&Instruction::LocalGet(result_local));
+    function.instruction(&ptr_const(pw, REFCOUNT_WORD_BYTES));
+    function.instruction(&ptr_add(pw));
+    function.instruction(&Instruction::LocalSet(result_local));
+    // Increment the running allocation byte counter.
+    // size_local holds the aligned total (payload + REFCOUNT_WORD_BYTES) at this point.
+    // i64.store consumes [addr, value] — push store_addr first, then compute the new value.
+    function.instruction(&ptr_const(pw, GLOBAL_ALLOC_BYTES_TOTAL_OFFSET as u64)); // store addr
+    function.instruction(&ptr_const(pw, GLOBAL_ALLOC_BYTES_TOTAL_OFFSET as u64)); // load addr
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalGet(size_local));
+    if pw == PtrWidth::W32 {
+        function.instruction(&Instruction::I64ExtendI32U);
+    }
+    function.instruction(&Instruction::I64Add); // stack: [store_addr, new_total]
+    function.instruction(&Instruction::I64Store(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
 }
 
 fn emit_chunked_list_item_store(
@@ -8938,6 +9257,7 @@ mod tests {
             EmitOptions {
                 effect_emit_strategy: EffectEmitStrategy::Wb3DirectCall,
                 memory_config: TEST_MEMORY_CONFIG,
+                debug_alloc_stats: false,
             },
         )
         .expect("direct emit should succeed");
@@ -8948,6 +9268,7 @@ mod tests {
             EmitOptions {
                 effect_emit_strategy: EffectEmitStrategy::Wb3BWasmFxExperimental,
                 memory_config: TEST_MEMORY_CONFIG,
+                debug_alloc_stats: false,
             },
         )
         .expect("experimental wasmfx emit should succeed");
@@ -9114,6 +9435,7 @@ mod tests {
                     max_wasm_stack_bytes: TEST_MEMORY_CONFIG.max_wasm_stack_bytes,
                     memory64: false,
                 },
+                debug_alloc_stats: false,
             },
         )
         .expect("low-max emit should still produce a module");

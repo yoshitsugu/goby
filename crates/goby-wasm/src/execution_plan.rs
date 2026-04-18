@@ -15,6 +15,11 @@ use crate::runtime_io_plan::{
 };
 use crate::wasm_exec;
 
+#[derive(Debug, Clone, Default)]
+pub struct CompileOptions {
+    pub debug_alloc_stats: bool,
+}
+
 #[derive(Debug, Clone)]
 struct FallbackExecutionContext {
     runtime_mode: lower::EffectExecutionMode,
@@ -60,12 +65,23 @@ enum RuntimeStdinExecutionPlan {
 }
 
 pub(crate) fn compile_module_entrypoint(module: &Module) -> Result<Vec<u8>, CodegenError> {
+    compile_module_with_options_entrypoint(module, CompileOptions::default())
+}
+
+pub(crate) fn compile_module_with_options_entrypoint(
+    module: &Module,
+    options: CompileOptions,
+) -> Result<Vec<u8>, CodegenError> {
     if let lower::NativeLoweringResult::Emitted(wasm) =
         lower::try_emit_native_module_with_handoff(module)?
     {
         return Ok(wasm);
     }
-    if let Some(wasm) = gen_lower::try_general_lower_module(module)? {
+    let emit_options = gen_lower::emit::EmitOptions {
+        debug_alloc_stats: options.debug_alloc_stats,
+        ..gen_lower::emit::EmitOptions::default()
+    };
+    if let Some(wasm) = gen_lower::try_general_lower_module_with_options(module, emit_options)? {
         return Ok(wasm);
     }
 
@@ -122,15 +138,30 @@ pub(crate) fn execute_runtime_module_with_stdin_and_config_entrypoint(
     stdin_seed: Option<String>,
     memory_config: Option<crate::memory_config::WasmMemoryConfig>,
 ) -> Result<Option<String>, CodegenError> {
+    execute_runtime_module_with_stdin_config_and_options_entrypoint(
+        module,
+        stdin_seed,
+        memory_config,
+        CompileOptions::default(),
+    )
+}
+
+pub(crate) fn execute_runtime_module_with_stdin_config_and_options_entrypoint(
+    module: &Module,
+    stdin_seed: Option<String>,
+    memory_config: Option<crate::memory_config::WasmMemoryConfig>,
+    compile_options: CompileOptions,
+) -> Result<Option<String>, CodegenError> {
     match runtime_stdin_execution_plan(module)? {
         RuntimeStdinExecutionPlan::GeneralLowered => {
-            let wasm = compile_module_entrypoint(module)?;
-            let output = match memory_config {
-                Some(cfg) => {
-                    wasm_exec::run_wasm_bytes_with_config(&wasm, stdin_seed.as_deref(), cfg)
-                }
-                None => wasm_exec::run_wasm_bytes_with_stdin(&wasm, stdin_seed.as_deref()),
-            }
+            let wasm = compile_module_with_options_entrypoint(module, compile_options.clone())?;
+            let cfg = memory_config.unwrap_or(crate::memory_config::RUNTIME_MEMORY_CONFIG);
+            let output = wasm_exec::run_wasm_bytes_with_config_and_options(
+                &wasm,
+                stdin_seed.as_deref(),
+                cfg,
+                compile_options.debug_alloc_stats,
+            )
             .map_err(|message| CodegenError { message })?;
             Ok(Some(output))
         }
