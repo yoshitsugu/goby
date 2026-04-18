@@ -462,12 +462,18 @@ Add the refcount word, static sentinel, and allocation counter. Refcount
 is maintained but not yet consulted for freeing.
 
 - [ ] Adjust layout in `emit.rs` (lines 102–160) so every heap object
-      allocation prepends a refcount word. Update
-      `chunk_alloc_size_pw`, `header_alloc_size_pw`, `meta_slot_bytes`,
-      and tuple/record/closure size helpers accordingly. Load/store
-      offsets inside payloads are unchanged.
-- [ ] All `alloc` sites initialize refcount to 1 via a new helper
-      `emit_init_refcount_one(pw)` in `emit.rs`.
+      allocation prepends a refcount word. The prefix is absorbed in
+      the single shared allocator (`emit_alloc_from_top`): the
+      **payload** pointer returned to callers is unchanged in meaning,
+      and `chunk_alloc_size_pw`, `header_alloc_size_pw`, tuple/record/
+      closure size helpers stay as payload sizes. The allocator adds
+      `REFCOUNT_WORD_BYTES` internally before size alignment and
+      advances the returned pointer past the header. Load/store offsets
+      inside payloads remain unchanged. See S2 for the exact edit.
+- [ ] All `alloc` sites initialize refcount to 1 by virtue of calling
+      `emit_alloc_from_top`, which now writes the header as part of
+      allocation. The named helper that performs that write is
+      `emit_init_refcount_one` in `emit.rs`.
 - [ ] Hoisted-literal and string-constant emissions initialize to
       sentinel via `emit_init_refcount_sentinel(pw)`.
 - [ ] Add global `__goby_alloc_bytes_total` (i64, reserved linear-
@@ -483,6 +489,355 @@ is maintained but not yet consulted for freeing.
       `goby run --debug-alloc-stats examples/hello.gb` prints the
       frozen line with a positive `total_bytes`. Snapshot test stores
       that hello output.
+
+#### M2 — Implementation notes (non-normative detail for the implementer)
+
+The checkboxes above are the contract. This subsection records the
+concrete file surface, invariants to preserve, and ordering that the M2
+change must follow. Nothing here weakens the acceptance criterion.
+
+**S1. Layout slot additions (`crates/goby-wasm/src/layout.rs`).**
+
+The current layout ends `HEAP_BASE = 28`. Extend the reserved prefix by
+three i64 slots, aligned to 8 bytes, then advance `HEAP_BASE`:
+
+```
+ offset  size  name                              notes
+ ------  ----  --------------------------------  -----------------------------
+     0     8   iovec / nwritten (existing)       unchanged
+     8     4   (pad)                             already present implicitly
+    12     4   GLOBAL_HEAP_CURSOR_OFFSET         unchanged (i32)
+    16     4   GLOBAL_HEAP_FLOOR_OFFSET          unchanged (i32)
+    20     4   GLOBAL_RUNTIME_ERROR_OFFSET       unchanged (i32)
+    24     4   GLOBAL_HOST_BUMP_CURSOR_OFFSET    unchanged (i32)
+    28     4   (pad to 8-byte align for i64)     new
+    32     8   GLOBAL_ALLOC_BYTES_TOTAL_OFFSET   new (i64, zero-init)
+    40     8   GLOBAL_PEAK_BYTES_OFFSET          new (i64, zero-init; placeholder in M2)
+    48     8   GLOBAL_FREE_LIST_HITS_OFFSET      new (i64, zero-init; placeholder in M2)
+    56     …   iovec scratch / static string pool / heap
+```
+
+Set `HEAP_BASE = 56`. `initial_floor = align_up_i32(buffer_ptr + 4, 8)`
+in `initialize_helper_state_locals` rebases automatically.
+
+Zero-initialization strategy matches the existing emitter model, which
+does **not** use `data.active` for global slots. Verify against
+`crates/goby-wasm/src/gen_lower/emit.rs`:
+
+- `initialize_helper_state_locals` (emit.rs:1310) writes
+  `GLOBAL_HEAP_CURSOR_OFFSET`, `GLOBAL_RUNTIME_ERROR_OFFSET`, and
+  `GLOBAL_HEAP_FLOOR_OFFSET` from the main function body on entry.
+- The data section (emit.rs:1907) is reserved for the newline byte
+  and the static string / static heap pools only.
+
+Follow that pattern: extend `initialize_helper_state_locals` so that,
+when `is_main` is true, it also emits three `I64Store` instructions
+writing `0i64` into `GLOBAL_ALLOC_BYTES_TOTAL_OFFSET`,
+`GLOBAL_PEAK_BYTES_OFFSET`, and `GLOBAL_FREE_LIST_HITS_OFFSET`. The
+aux-decl branch of the same function must **not** re-zero these slots.
+
+The data section in `emit_general_module_with_aux` is untouched for the
+new globals. If the acceptance test from S1 wants to assert
+initialization, it must either disassemble the function body or call
+`_start` and read the slots post-entry via `Memory::read`.
+
+Rationale for placing the new slots *inside* the pre-`HEAP_BASE` header
+rather than inside the STATIC_STRING_LIMIT region: static strings and
+the heap cursor grow **down** from `STATIC_STRING_LIMIT`, so borrowing
+from that region would race with the existing bump downward. The
+pre-`HEAP_BASE` header grows up and is initialized exactly once at
+`main` entry.
+
+**S2. Refcount-prepended allocation (`crates/goby-wasm/src/gen_lower/emit.rs`).**
+
+Every dynamic heap object gets one extra 8-byte refcount word **before**
+the payload pointer, per §3.1. Implementation strategy:
+
+1. Introduce `REFCOUNT_WORD_BYTES: u32 = 8` near the `CHUNK_SIZE`
+   constant. Use 8 unconditionally: Goby is memory64-only (§3.1 and
+   `doc/STATE.md` M4.6), and hoisted-literal layout already uses `u64`.
+2. Modify `emit_alloc_from_top(function, hs, size_local, result_local)`
+   to:
+   - add `REFCOUNT_WORD_BYTES` to `size_local` *before* the 8-byte
+     alignment adjustment (so the cursor consumes the header too);
+   - after the existing cursor decrement, the current `result_local`
+     points at the *header* address; store `i64 1` into
+     `result_local + 0` via `I64Store { offset: 0, align: 3 }`;
+   - then advance `result_local += REFCOUNT_WORD_BYTES` so the caller
+     still receives a **payload pointer** (unchanged ABI for all
+     callers that assume payload-relative offsets).
+3. All call sites of `emit_alloc_from_top` remain unchanged. They still
+   pass the *payload* size in `size_local`; the helper is the single
+   place that knows about the refcount prefix. Do **not** touch
+   `chunk_alloc_size_pw`, `header_alloc_size_pw`, or tuple/record/
+   closure size helpers — the normative plan (§3.1) says "load/store
+   offsets inside the object are unchanged". Prefixing the header
+   inside the allocator preserves that invariant; changing the `*_pw`
+   size helpers would break it.
+4. Introduce two small helpers for explicit refcount writes:
+   - `emit_init_refcount_one(function, pw, payload_ptr_local)` — stores
+     `1i64` at `payload_ptr_local - REFCOUNT_WORD_BYTES`. Called from
+     the allocator path above.
+   - `emit_init_refcount_sentinel_bytes()` — returns `u64::MAX` bytes
+     for embedding in static data segments. `StaticHeapPoolBuilder::
+     alloc_payload` already writes the sentinel (emit.rs:525–529); keep
+     that call site.
+
+**S3. Allocation counter plumbing.**
+
+`emit_alloc_from_top` increments `GLOBAL_ALLOC_BYTES_TOTAL_OFFSET` by
+the *aligned total* (payload + 8-byte refcount, post-alignment) on
+every call. Emit sequence, reusing `hs.scratch` locals:
+
+```
+i64.load  [GLOBAL_ALLOC_BYTES_TOTAL_OFFSET]
+local.get size_local        ;; already aligned, includes refcount word
+i64.add
+i64.store [GLOBAL_ALLOC_BYTES_TOTAL_OFFSET]
+```
+
+No memory_index load/store fuss: the slot is at a fixed address and the
+existing `GLOBAL_*` constant pattern in emit.rs already uses
+`ptr_const(pw, OFFSET as u64)` + `I64Store` without MemArg gymnastics.
+
+`GLOBAL_PEAK_BYTES_OFFSET` is written once as `total_bytes` at program
+exit in M2 (placeholder; M3 wires real peak tracking against the free
+list). `GLOBAL_FREE_LIST_HITS_OFFSET` stays zero until M3 increments it.
+
+**S4. Exit-time stats emission.**
+
+The stats line must land on stderr when `--debug-alloc-stats` is set.
+Two execution paths need coverage:
+
+- **File-based `wasmtime`** (current default for most programs,
+  `execute_wasm` in `crates/goby-cli/src/main.rs:520`). The Wasm
+  module's `_start` must itself `fd_write(2, ...)` before returning.
+  Add an epilogue emitter `emit_alloc_stats_line(function, hs)` that:
+  1. If the module was compiled without the debug flag, emits nothing.
+     (The flag is a compile-time option to avoid runtime-conditional
+     emission.)
+  2. Otherwise formats `alloc-stats: total_bytes=<N> peak_bytes=<M>
+     free_list_hits=<H>\n` into a scratch buffer in linear memory.
+     Reuse the existing `i64_to_decimal_ascii` helper if present;
+     otherwise add a minimal i64-to-decimal emitter in
+     `gen_lower/emit.rs` (used only by this path).
+  3. Writes the buffer to fd=2 via `fd_write`. `fd_write` is already
+     imported; its iovec layout is documented at
+     `crates/goby-wasm/src/layout.rs:1`.
+  4. Is inserted at the exit of the `_start` function, after any
+     user `println`s have flushed to fd=1. Place the emitter call
+     immediately before the final `end` of `main`'s function body in
+     `emit_general_module_with_aux`, gated on
+     `EmitOptions::debug_alloc_stats`.
+
+- **Host-owned execution** (`execute_runtime_module_with_stdin_and_config`
+  in `crates/goby-wasm/src/wasm_exec.rs`). The host already owns the
+  `Store` and can read `GLOBAL_ALLOC_BYTES_TOTAL_OFFSET` directly after
+  `_start` returns. Add a parallel path: when `debug_alloc_stats` is
+  requested, read the three slots out of linear memory via the existing
+  `Memory::read` helper (see wasm_exec.rs:861 for precedent) and print
+  the same frozen line to stderr from Rust.
+
+Both paths share the frozen format. Add one `format_alloc_stats_line(
+total: u64, peak: u64, hits: u64) -> String` helper in
+`goby-cli` (or a shared crate-internal module) to keep them in sync.
+
+**S5. Option plumbing: where to add the boundary.**
+
+The current public surface has no `compile_module_with_options` or
+equivalent. The two entrypoints that must receive the debug flag are:
+
+- File-based path: `goby_wasm::compile_module` (`crates/goby-wasm/
+  src/lib.rs:105`), which delegates to
+  `execution_plan::compile_module_entrypoint` (`crates/goby-wasm/
+  src/execution_plan.rs`).
+- Host-owned path: `goby_wasm::execute_runtime_module_with_stdin_and_config`
+  (`crates/goby-wasm/src/lib.rs:167`), which delegates to
+  `execution_plan::execute_runtime_module_with_stdin_and_config_entrypoint`
+  (execution_plan.rs:120). That function internally calls
+  `compile_module_entrypoint` for the `GeneralLowered` arm.
+
+Concrete edits:
+
+1. Extend `EmitOptions` (currently defined in emit.rs) with
+   `debug_alloc_stats: bool`, default `false`.
+2. Introduce a small `CompileOptions` struct at the `goby-wasm` crate
+   root (or extend an existing equivalent if one appears during
+   implementation) carrying `debug_alloc_stats`. Plumb it through
+   `compile_module_entrypoint` down to `emit_general_module_with_aux_
+   and_options`, which already accepts `EmitOptions`. The rest of the
+   call chain is internal and need not grow a new type.
+3. Add a new public entrypoint
+   `goby_wasm::compile_module_with_options(module, CompileOptions) ->
+   Result<Vec<u8>, CodegenError>`. The existing `compile_module`
+   becomes a thin wrapper passing `CompileOptions::default()`.
+4. Add a new public entrypoint
+   `goby_wasm::execute_runtime_module_with_stdin_config_and_options(
+   module, stdin_seed, memory_config, CompileOptions) -> Result<
+   Option<String>, CodegenError>`. The existing
+   `execute_runtime_module_with_stdin_and_config` wraps it with
+   default options. This function is also responsible for the
+   post-`_start` host-side print described in S4.
+5. `CliArgs.debug_alloc_stats` (new bool) flows into both new
+   entrypoints from `run_command` (`crates/goby-cli/src/main.rs:259`).
+   `execute_wasm` (main.rs:520) gets an extra parameter and, when the
+   flag is set, inherits the wasmtime-child stderr as-is (default
+   behavior — no extra plumbing needed beyond not suppressing it).
+
+The host-owned path needs the signal because it does not re-emit
+Wasm; it reads the counters out of linear memory after `_start`.
+The file-based path needs it only to flip `EmitOptions.debug_alloc_stats`
+before `compile_module_entrypoint` emits the `_start` epilogue.
+
+**S6. CLI surface (`crates/goby-cli/src/main.rs`).**
+
+1. Add `--debug-alloc-stats` (boolean, no value) to the argument parser
+   alongside `--max-memory-mb`. Mirror the existing pre/post-file
+   acceptance. Reject on non-`run` commands with the same warning
+   pattern already used for `--max-memory-mb` on non-run commands.
+2. Thread the bool through `CliArgs`, `run_command`, both execution
+   branches, and into the two new `goby-wasm` entrypoints introduced
+   in S5: `goby_wasm::compile_module_with_options` (file-based arm in
+   `run_command` at main.rs:302) and
+   `goby_wasm::execute_runtime_module_with_stdin_config_and_options`
+   (host-owned arm at main.rs:283).
+3. Add unit tests mirroring the existing
+   `parses_max_memory_mb_*` cases: space-separated, missing-value,
+   before/after file. At least one integration test in
+   `crates/goby-cli/tests/` that runs `goby run --debug-alloc-stats
+   examples/hello.gb` and greps the stderr line against the frozen
+   regex `^alloc-stats: total_bytes=[1-9][0-9]* peak_bytes=[0-9]+
+   free_list_hits=0$`.
+
+**S7. Regression protection for existing examples.**
+
+Every `examples/*.gb` must still produce byte-identical stdout. The
+refcount prefix is invisible to user code because:
+
+- Payload-relative offsets inside objects are unchanged (S2.3).
+- Static heap already writes sentinel refcounts (existing code at
+  emit.rs:525–529).
+- The payload pointer ABI is unchanged.
+
+The one latent risk is alignment: `emit_alloc_from_top` currently
+aligns the *payload* start to 8. With an 8-byte refcount prefix, the
+header also starts at an 8-byte boundary and the payload therefore
+stays aligned. Preserve the alignment assertion explicitly: after
+`result_local += REFCOUNT_WORD_BYTES`, assert in a debug-only check
+(`debug_assert!` via a test-only harness) that `result_local % 8 == 0`.
+
+Acceptance verification: `cargo test -p goby-wasm` must remain green,
+including the snapshot suite (tests under
+`crates/goby-wasm/tests/wasm_exports_and_smoke.rs` cover most
+examples). `cargo test -p goby-core` must also stay green; M2 does not
+touch the interpreter.
+
+**S8. Ordered implementation steps (minimal, reviewable).**
+
+Split the M2 change into the following commit-sized steps. Run
+`cargo check` + the focused test after each step; only proceed to the
+next when green.
+
+1. **Layout slots.** Add the three new `GLOBAL_*_OFFSET` constants and
+   advance `HEAP_BASE` in `layout.rs`. Extend
+   `initialize_helper_state_locals` (emit.rs:1310) so that, when
+   `is_main` is true, it stores `0i64` into each new slot after the
+   existing `GLOBAL_HEAP_CURSOR_OFFSET` / `GLOBAL_RUNTIME_ERROR_OFFSET` /
+   `GLOBAL_HEAP_FLOOR_OFFSET` writes. Focused test: add a test in
+   `crates/goby-wasm/tests/` that compiles a trivial module and, via a
+   wasmtime `Memory::read` harness (pattern at `wasm_exec.rs`:861),
+   asserts all three slots read back as `0` immediately after `_start`
+   on a program that never allocates. An assembly-level inspection of
+   the data section is **not** the right assertion — the slots are
+   initialized in function-body code, not data.
+
+2. **Refcount prefix in allocator.** Modify `emit_alloc_from_top` per
+   S2; add `emit_init_refcount_one` helper. Do not touch counters yet.
+   Focused test: `cargo test -p goby-wasm list_lit_`,
+   `tuple_lit_`, `record_lit_`, `closure_`. Snapshot byte-identity of
+   `hello.gb` stdout.
+
+3. **Allocation counter.** Wire the `GLOBAL_ALLOC_BYTES_TOTAL_OFFSET`
+   increment into `emit_alloc_from_top`. Write initial
+   `GLOBAL_PEAK_BYTES_OFFSET = GLOBAL_ALLOC_BYTES_TOTAL_OFFSET` at
+   `_start` exit (placeholder; M3 replaces with real peak). Focused
+   test: a new unit test that compiles a program with one `ListLit`
+   and reads the counter slot via a WASI memory read in
+   `wasm_exec.rs`-style test harness.
+
+4. **EmitOptions + Wasm-side stats line.** Add
+   `EmitOptions.debug_alloc_stats`, `emit_alloc_stats_line`, and the
+   `fd_write` epilogue. Focused test: compile `hello.gb` with the flag
+   and parse stderr from a wasmtime-driven integration test
+   (conditional on wasmtime availability, matching existing pattern).
+
+5. **Host-owned path.** Add the post-`_start` memory-read branch in
+   `execute_runtime_module_with_stdin_and_config`. Focused test:
+   one of the existing GeneralLowered runtime tests run with the flag.
+
+6. **CLI wiring.** Add the flag to `parse_args_from`, plumb through
+   `run_command` / `execute_wasm`. Add the CLI unit + integration
+   tests listed in S6.
+
+7. **Acceptance sweep.** `cargo fmt --all`, `cargo check
+   --all-targets`, `cargo test -p goby-core`, `cargo test -p
+   goby-wasm`, `cargo test -p goby-cli`. Verify no `examples/*.gb`
+   stdout regressed (snapshot suite).
+
+**S9. What this step does *not* do (guardrails).**
+
+- Does **not** free memory. `drop` is M3. The counter can and will
+  rise monotonically across the whole run.
+- Does **not** introduce free lists. `GLOBAL_FREE_LIST_HITS_OFFSET`
+  stays zero.
+- Does **not** alter `mut` lowering. `AllocMutableCell` gets the same
+  refcount prefix as every other heap object but its refcount is not
+  yet consulted for anything.
+- Does **not** change interpreter behavior. Perceus is a Wasm-backend
+  concern until M4 introduces IR-level `Dup`/`Drop`.
+- Does **not** touch `doc/LANGUAGE_SPEC.md`. No user-visible semantic
+  change.
+
+**S10. Files touched (exhaustive).**
+
+```
+crates/goby-wasm/src/layout.rs                 (S1: slot offsets + HEAP_BASE)
+crates/goby-wasm/src/gen_lower/emit.rs         (S1 init writes in
+                                                 initialize_helper_state_locals;
+                                                 S2 refcount prefix;
+                                                 S3 counter increment;
+                                                 S4 Wasm _start epilogue;
+                                                 EmitOptions.debug_alloc_stats)
+crates/goby-wasm/src/execution_plan.rs         (S5: thread CompileOptions
+                                                 through compile_module_entrypoint
+                                                 and execute_runtime_module_with_
+                                                 stdin_and_config_entrypoint;
+                                                 S4 host-side post-read in the
+                                                 GeneralLowered arm)
+crates/goby-wasm/src/lib.rs                    (S5: new public entrypoints
+                                                 compile_module_with_options and
+                                                 execute_runtime_module_with_
+                                                 stdin_config_and_options;
+                                                 existing entrypoints become
+                                                 default-option wrappers)
+crates/goby-wasm/src/wasm_exec.rs              (expose a helper to read the
+                                                 three i64 stat slots from
+                                                 linear memory for the host-side
+                                                 print; or inline via Memory::read)
+crates/goby-cli/src/main.rs                    (S6: --debug-alloc-stats flag
+                                                 parsing, USAGE update, plumbing
+                                                 into both run_command arms)
+crates/goby-cli/tests/                         (new CLI integration test)
+crates/goby-wasm/tests/                        (new allocator layout test;
+                                                 stderr-line integration test)
+doc/STATE.md                                   (flip focus to "M2 in progress" /
+                                                 "M2 complete" at end)
+doc/PLAN_PERCEUS.md                            (check the M2 boxes at end)
+```
+
+No changes to `stdlib/goby/*.gb`, no changes to `examples/*.gb`, no
+changes to the interpreter (`crates/goby-core/src/interp*`), no changes
+to `doc/LANGUAGE_SPEC.md`.
 
 ### M3 — Free lists and `drop` runtime
 
