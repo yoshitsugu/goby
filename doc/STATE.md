@@ -4,80 +4,148 @@ Last updated: 2026-04-18
 
 ## Current Focus
 
-**Perceus plan M0 completed; next implementation slice is M1**
+**Perceus M1 work is started but currently blocked on a missing source-language
+operator (`^`, bitwise XOR) required by the normative goal program.**
 
 ---
 
-## Current Status
+## Perceus M1 — what is already in place
 
-### Perceus precondition gate
+The groundwork commit `bdf7d327 "Add closed literal hoisting groundwork"`
+landed the structural pieces for M1:
 
-- `doc/PLAN_LIST_FIX_M4_SITES.md` is now fully checked off; memory64 is the only
-  supported pointer width in the Wasm backend.
-- `doc/BUGS.md` has no open issues touching `emit.rs` allocation paths or
-  runtime tagged-value layout.
-- `doc/PLAN_PERCEUS.md` M0 is unblocked and can proceed to M1 without further
-  prerequisite work.
+- `crates/goby-core/src/closed_literals.rs` — `is_closed_literal` /
+  `collect_closed_literals`, conservatively accepting `ListLit` / `TupleLit`
+  / `RecordLit` whose leaves are scalar literals or nested closed aggregates
+  (no `Var`, no spread tail, no `BinOp`).
+- `crates/goby-wasm/src/gen_lower/emit.rs` — `STATIC_REFCOUNT_SENTINEL =
+  u64::MAX`, `StaticHeapValue` intern pool, `alloc_static_list / tuple /
+  record`, sentinel refcount write at the header slot.
+- `crates/goby-wasm/src/gen_lower/lower.rs` — detects closed literals in a
+  `Value` position and emits `WasmBackendInstr::PushStaticHeap` instead of
+  per-call allocation.
+- `examples/refcount_reuse_loop.gb` — normative goal program per
+  `doc/PLAN_PERCEUS.md` §1.1 (length 4096, 5000 iterations).
+- `crates/goby-wasm/tests/wasm_exports_and_smoke.rs` — two integration tests:
+  `refcount_reuse_loop_example_parses` (active) and
+  `refcount_reuse_loop_example_compiles` (currently `#[ignore]` citing
+  "Perceus goal harness is added in M1").
 
-## M4 Completion Status
+Baseline `cargo check -p goby-core -p goby-wasm` is green with this
+groundwork.
 
-### Completed sub-milestones
+## Perceus M1 — the blocker discovered on 2026-04-18
 
-- **M4.1** (`ptr.rs` helpers): `PtrWidth` enum + `ptr_load/store/const/add/...` helpers added to `gen_lower/ptr.rs`. All pointer operations now dispatched through these helpers.
-- **M4.1b** (i64 scratch locals): All `i32_scratch` pool locals declared as `ValType::I64` when `memory64 = true`. `HeapEmitState.pw()` shorthand wired in.
-- **M4.2.0** (`HeapEmitState.pw()` shorthand): Added `pw()` accessor on `HeapEmitState`; propagated through all callers.
-- **M4.2.1** (`backend.rs`): Excluded — all `I32Load`/`I32Store` in `backend.rs` are for WASI Preview 1 iovec ABI (always i32, never pointer-width).
-- **M4.2.2** (emit_chunked_* in emit_instrs): All chunked-list emitters converted to `ptr_load`/`ptr_store`.
-- **M4.2.3** (remaining `I32Load*`/`I32Store*` in `emit.rs`): 0 bare `I32Load`/`I32Store` remain for address operations.
-- **M4.3** (address-typed `I32Const` → `ptr_const`): Complete. All fixed address constants use `ptr_const(pw, ...)`.
-- **M4.4** (`I32Add`/`Sub` on addresses → `ptr_add`/`ptr_sub`): Complete.
-- **M4.5** (`MemoryGrow`/`MemorySize`): Already pointer-width-correct.
-- **M4.6** (flip `memory64` default to `true`): `RUNTIME_MEMORY_CONFIG.memory64 = true` and `TEST_MEMORY_CONFIG.memory64 = true` are both permanently set.
-- **Data section fix**: Active data segment offsets use `ConstExpr::i64_const` when `memory64 = true`.
-- **Global slot I/O fix** (critical): `heap_cursor`, `heap_floor`, `runtime_error`, `host_bump_cursor` are always 4-byte i32 fields at fixed offsets in linear memory. Fixed all read/write sites to use `I32Store`/`I32Load` (not `ptr_store`/`ptr_load`), with `I32WrapI64`/`I64ExtendI32U` conversions as needed. This eliminated the runtime trap from 8-byte writes corrupting adjacent global slots.
-- **`bool_from_i64!` macro**: Added for `IrBinOp::Eq` in W64 — `s_result` scratch local is `i64` in W64, so we need `I64Or` (not `I64ExtendI32U + I64Or`).
-- **`emit_push_tagged_ptr` fix**: Added `pw` parameter; `I64ExtendI32U` emitted only in W32 (in W64 the ptr local is already i64).
-- **`BlockType::Result(ptr_val_type(pw))`**: Fixed two `If` blocks in `emit_list_concat_helper` and `emit_filter_map_helper` that yielded ptr-width values but declared `ValType::I32`.
-- **Tail-call dispatcher scratch locals**: Fixed to use `ValType::I64` when `memory64 = true`.
-- **`_pw` layout functions**: Added `chunk_alloc_size_pw`, `header_alloc_size_pw`, `header_n_chunks_offset_pw`, `header_chunk_ptr_offset_pw`, `chunk_item_offset_pw`, `meta_slot_bytes`, `ptr_slot_bytes` — all sensitive to `PtrWidth`.
+The normative goal program uses bitwise XOR:
 
-### Resolved in this slice
+```goby
+xor_fold : List Int -> Int -> Int
+xor_fold xs acc =
+  case xs
+    [] -> acc
+    [x, ..rest] -> xor_fold rest (acc ^ x)
+```
 
-#### `recursive_multi_part_interpolated_print_after_graphemes_executes` fixed
+`doc/PLAN_PERCEUS.md` §1.1 explicitly marks this source as **normative**:
+implementers must not "equivalent"-rewrite it, because the acceptance
+checksum is pinned to the exact allocation and evaluation pattern.
 
-Root cause:
-- `emit_string_split_helper` still used a hard-coded `* 4` when allocating list header chunk-pointer slots.
-- Under `memory64`, chunk pointers are 8-byte slots, so this under-allocated the header and `ptr_store` overflowed into adjacent static-string memory.
-- The overflow corrupted static string blobs (notably interpolation literals), which then surfaced as `stdout utf8` failures during `StringConcat`.
+However, `^` is not implemented anywhere in the pipeline:
 
-Fix:
-- In `emit_string_split_helper`, replaced `ptr_const(pw, 4)` with `ptr_const(pw, ptr_slot_bytes(pw) as u64)` for header allocation size.
+- Lexer / parser — no token and no `split_top_level_binop(_, '^')` arm. A
+  grep for `Caret`, `"^"` and `'^'` in `goby-core/src` returns nothing.
+- AST (`BinOpKind`) — enumerates only `Or And Add Sub Mul Div Mod Eq Lt Gt
+  Le Ge`. No bitwise variant at all.
+- IR (`IrBinOp`) — same shape.
+- Wasm lowering — no `i64.xor` emission path.
 
-**Current test status**:
-- `cargo fmt` — pass
-- `cargo check` — pass
-- `cargo test` — pass (workspace)
+Observed behaviour:
 
----
+- `goby check examples/refcount_reuse_loop.gb` → passes (parser silently
+  accepts a surface form, typecheck succeeds).
+- `goby run examples/refcount_reuse_loop.gb` → fails at codegen with
+  `fallback runtime output could not be resolved`.
+- Reducing the inputs to `build 0 16 []` + 20 iterations also hangs under
+  `goby run`, confirming the failure is in the compile / lowering path and
+  not a long Wasm runtime loop.
+- Reverting `crates/goby-wasm/src/gen_lower/{emit,lower,backend_ir}.rs` to
+  the pre-groundwork commit `9b2a6613` still reproduces the failure — the
+  M1 groundwork is not the regression source; `^` was never implemented.
+
+Because the M1 acceptance criteria (`cargo test -p goby-wasm` green,
+recorded checksum from `goby check`, ignored-`goby run` case citing M5) all
+depend on `examples/refcount_reuse_loop.gb` compiling at least up to the
+parts that do not need refcounting, M1 cannot close without `^`.
+
+## Decided next slice (started, not committed)
+
+Add `^` (bitwise XOR) as an `Int → Int → Int` operator before resuming
+Perceus M1 proper. User approved this direction ("option A"). The
+implementation plan lives in the workspace, not in the repo:
+
+- `~/.claude/workspaces/home_yoshitsugu_src_github_com_yoshitsugu_goby/
+  implementation-plan-perceus-m1-bitxor.md`
+- `~/.claude/workspaces/home_yoshitsugu_src_github_com_yoshitsugu_goby/
+  progress-log-perceus-m1-bitxor.md`
+
+Planned step list (summary):
+
+1. Add `BinOpKind::BitXor` + `IrBinOp::BitXor`, extend Debug / formatter
+   renderers to `"^"`.
+2. Parser: `split_top_level_binop(_, '^')` between the `&&` arm and the
+   `==` arm of `parser_expr.rs::parse_expr` (so `a ^ b == c` parses as
+   `(a ^ b) == c`). Mirror the change in the span-aware parser.
+3. Typecheck: treat `BitXor` exactly like `Mod` (both operands `Int`,
+   result `Int`, no effects).
+4. IR lowering + closure_capture + any other exhaustive match sites —
+   driven by `cargo check -p goby-core` failures.
+5. Wasm backend: emit `i64.xor` for `IrBinOp::BitXor`.
+6. Minimal smoke test in `wasm_exports_and_smoke.rs` that compiles and
+   runs a tiny module using `^`.
+7. Document `^` under operators in `doc/LANGUAGE_SPEC.md`; leave
+   `doc/PLAN_PERCEUS.md` unchanged (already uses the operator).
+
+Out of scope for this slice: Bool XOR, bitwise AND/OR/shift, constant
+folding of `^` inside `closed_literals.rs`, and the Perceus M1 acceptance
+harness itself (will be resumed once `^` lands).
 
 ## Immediate Next Actions
 
-1. Implement `doc/PLAN_PERCEUS.md` M1: closed-literal detection in shared IR.
-2. Add `examples/refcount_reuse_loop.gb` and its integration harness.
-3. Record the checksum literal from `goby check` and keep `cargo fmt`, `cargo check`,
-   and `cargo test` green while landing M1.
+1. Run the Codex plan review for `implementation-plan-perceus-m1-bitxor.md`
+   (was started and interrupted; restart cleanly in the next session).
+2. Execute Step 1 of the plan (AST + IR variants + Debug renderers),
+   verify with `cargo check -p goby-core`.
+3. Progress through steps 2–7; keep `cargo fmt && cargo check && cargo
+   test` workspace-green before each commit, and re-run
+   `goby-invariants` before the spec doc update commit.
+4. After `^` lands, return to Perceus M1 proper: capture the checksum
+   via `goby check examples/refcount_reuse_loop.gb`, record it as an
+   `assert_eq!` literal in the integration test, and un-ignore the
+   compile-only case (keep the `goby run` case ignored citing
+   `doc/PLAN_PERCEUS.md` M5).
 
----
+## Verification snapshot (2026-04-18)
+
+- `cargo check -p goby-core -p goby-wasm` — pass.
+- `cargo test -p goby-wasm refcount_reuse_loop_example_parses` — pass.
+- `cargo test -p goby-wasm refcount_reuse_loop_example_compiles --
+  --ignored` — aborts ("stack overflow" message from the test harness;
+  root cause is the missing `^` operator surfacing as a compile / lower
+  failure, not a real recursion-depth issue).
+- `goby check examples/refcount_reuse_loop.gb` — pass (parser is too
+  permissive around `^`).
+- `goby run examples/refcount_reuse_loop.gb` — fails with
+  `fallback runtime output could not be resolved`.
 
 ## Architecture State
 
 | Layer | Status |
 |---|---|
-| Parser | Stable |
+| Parser | Stable (but missing `^`; blocks Perceus M1) |
 | Resolver | Stable |
 | Typechecker | Stable |
-| IR (`ir.rs`) | Stable |
+| IR (`ir.rs`) | Stable (missing `BitXor` variant) |
 | IR lowering (`ir_lower.rs`) | Stable |
-| Wasm backend | memory64 migration complete; Perceus M0 unblocked |
-| Effect handlers | Non-tail / multi-resume produces `BackendLimitation` |
-| GC / reclamation | Out of scope. Bump allocator only |
+| Wasm backend | memory64 complete; Perceus M1 groundwork landed |
+| Effect handlers | Non-tail / multi-resume still produces `BackendLimitation` |
+| GC / reclamation | Bump allocator only; Perceus M1 preparing |
