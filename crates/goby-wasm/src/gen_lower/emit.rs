@@ -5845,10 +5845,24 @@ fn emit_goby_drop_function(
     function.instruction(&Instruction::End);
 
     // -----------------------------------------------------------------------
-    // TAG_RECORD (0x7), TAG_CLOSURE (0x8): child-drop deferred (arity not in payload).
-    // Only account for REFCOUNT_WORD_BYTES in freed_bytes.
+    // TAG_RECORD (0x7): child-drop deferred (ctor_tag at offset 0; arity not in payload).
     // -----------------------------------------------------------------------
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(TAG_RECORD as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
     add_freed_bytes(&mut function, REFCOUNT_WORD_BYTES as i64);
+    function.instruction(&Instruction::End);
+
+    // -----------------------------------------------------------------------
+    // TAG_CLOSURE (0x8): child-drop deferred (func_handle at offset 0; slot count unknown).
+    // -----------------------------------------------------------------------
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(TAG_CLOSURE as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    add_freed_bytes(&mut function, REFCOUNT_WORD_BYTES as i64);
+    function.instruction(&Instruction::End);
 
     function.instruction(&Instruction::End);
     code.function(&function);
