@@ -1746,6 +1746,7 @@ mod tests {
                 effect_emit_strategy: EffectEmitStrategy::Wb3DirectCall,
                 memory_config: TEST_MEMORY_CONFIG,
                 debug_alloc_stats: false,
+                expose_perceus_test_exports: false,
             },
         )
         .expect("direct-call lowering should not error")
@@ -1756,6 +1757,7 @@ mod tests {
                 effect_emit_strategy: EffectEmitStrategy::Wb3BWasmFxExperimental,
                 memory_config: TEST_MEMORY_CONFIG,
                 debug_alloc_stats: false,
+                expose_perceus_test_exports: false,
             },
         )
         .expect("future handler-path lowering should not error")
@@ -1781,6 +1783,7 @@ mod tests {
                 effect_emit_strategy: expected_strategy,
                 memory_config: RUNTIME_MEMORY_CONFIG,
                 debug_alloc_stats: false,
+                expose_perceus_test_exports: false,
             },
         )
         .expect("explicit lowering should not error")

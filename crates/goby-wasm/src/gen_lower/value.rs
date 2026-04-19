@@ -46,6 +46,12 @@ pub(crate) const TAG_CLOSURE: u8 = 0x8;
 /// A mutable cell is an 8-byte heap allocation: `(value: i64)` at offset 0.
 /// The cell holds the current value of a shared mutable binding.
 pub(crate) const TAG_CELL: u8 = 0x9;
+/// Internal-only type tag for list chunk pointers used by `__goby_drop` child-drop dispatch.
+///
+/// Chunk pointers are stored as untagged raw pointers in list headers. When `__goby_drop`
+/// needs to recursively drop a chunk, it synthesises a TAG_CHUNK-tagged pointer on the fly.
+/// This tag never appears in user-visible tagged values.
+pub(crate) const TAG_CHUNK: u8 = 0xA;
 
 /// Bit mask for the lower 60 bits (payload region).
 const PAYLOAD_MASK: i64 = (1i64 << 60) - 1;

@@ -841,23 +841,24 @@ to `doc/LANGUAGE_SPEC.md`.
 
 ### M3 — Free lists and `drop` runtime
 
-- [ ] Free-list head pointers declared as a struct at a fixed reserved
+- [x] Free-list head pointers declared as a struct at a fixed reserved
       offset in linear memory; layout committed as a comment in
       `emit.rs`. One head per size class from §3.2.
-- [ ] `emit_alloc(size_class, pw)` helper: pops from the matching
+- [x] `emit_alloc(size_class, pw)` helper: pops from the matching
       free list, falls back to bump. Replaces all current direct
-      bump-allocation emissions.
-- [ ] `__goby_drop` helper function emitted once per module: refcount
+      bump-allocation emissions. (landed as `emit_alloc_with_flag` per C1)
+- [x] `__goby_drop` helper function emitted once per module: refcount
       decrement, on zero dispatches to the per-type child-drop helper
       by runtime tag, then pushes onto the matching free list via
       intrusive first-word next pointer.
-- [ ] Per-type child-drop helpers (§3.9) emitted. Generic containers
-      (`List`, tuple, record, closure) read tags to decide per-field
-      descent.
-- [ ] `free_list_hits` counter wired into `alloc`; increments when the
+- [x] Per-type child-drop helpers (§3.9) emitted. TAG_CHUNK/TAG_LIST/
+      TAG_TUPLE/TAG_CELL fully implemented. TAG_RECORD/TAG_CLOSURE:
+      freed_bytes accounting only (arity not in payload; full child-drop
+      deferred to M4 with layout change).
+- [x] `free_list_hits` counter wired into `alloc`; increments when the
       free-list path is taken. `peak_bytes` wired: max of running
       `(bumped_bytes − freed_bytes)`.
-- [ ] **Acceptance:** `cargo test -p goby-wasm` green; a new test
+- [x] **Acceptance:** `cargo test -p goby-wasm` green; a new test
       `drop_frees_unique_list` explicitly calls `__goby_drop` on a
       freshly allocated unique list and observes
       `free_list_hits > 0` on the subsequent allocation.

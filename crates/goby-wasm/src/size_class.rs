@@ -4,7 +4,7 @@
 //! head table that starts at `FREE_LIST_TABLE_BASE` in linear memory.
 //! Slot layout is documented in `layout.rs`.
 
-use crate::gen_lower::emit::{CHUNK_SIZE, chunk_alloc_size_pw, header_alloc_size_pw};
+use crate::gen_lower::emit::{chunk_alloc_size_pw, header_alloc_size_pw};
 use crate::gen_lower::ptr::PtrWidth;
 use crate::layout::{
     FREE_LIST_SLOT_CELL, FREE_LIST_SLOT_CHUNK, FREE_LIST_SLOT_CLOSURE_BASE,
@@ -152,11 +152,19 @@ impl SizeClass {
             SizeClass::Chunk => Some(chunk_alloc_size_pw(pw)),
             SizeClass::Header(n) => Some(header_alloc_size_pw(pw, n)),
             SizeClass::Tuple(a) => {
-                // Tuple payload: a × 8-byte tagged values.
-                Some(a * 8)
+                // Tuple payload: meta_slot(arity word) + a × 8-byte tagged values.
+                Some(8 + a * 8)
             }
-            SizeClass::Record(a) => Some(a * 8),
-            SizeClass::Closure(s) => Some(s * 8),
+            SizeClass::Record(a) => {
+                // Record payload: ctor_tag word + a × 8-byte fields.
+                // Arity is not stored at runtime; child-drop deferred.
+                Some(8 + a * 8)
+            }
+            SizeClass::Closure(s) => {
+                // Closure payload: func_handle word + s × 8-byte slots.
+                // Slot count is not stored at runtime; child-drop deferred.
+                Some(8 + s * 8)
+            }
             SizeClass::Cell => Some(8),
             SizeClass::String(b) => Some(b),
             SizeClass::Large => None,

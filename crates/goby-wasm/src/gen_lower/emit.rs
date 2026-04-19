@@ -24,8 +24,8 @@ use crate::gen_lower::ptr::{
 use goby_core::ir::IrBinOp;
 
 use crate::gen_lower::value::{
-    TAG_BOOL, TAG_CELL, TAG_CLOSURE, TAG_INT, TAG_LIST, TAG_RECORD, TAG_STRING, TAG_TUPLE,
-    encode_bool, encode_int, encode_list_ptr, encode_record_ptr, encode_string_ptr,
+    TAG_BOOL, TAG_CELL, TAG_CHUNK, TAG_CLOSURE, TAG_INT, TAG_LIST, TAG_RECORD, TAG_STRING,
+    TAG_TUPLE, encode_bool, encode_int, encode_list_ptr, encode_record_ptr, encode_string_ptr,
     encode_tuple_ptr, encode_unit,
 };
 use crate::host_runtime::{
@@ -1292,6 +1292,10 @@ pub(crate) struct EmitOptions {
     pub(crate) effect_emit_strategy: EffectEmitStrategy,
     pub(crate) memory_config: crate::memory_config::WasmMemoryConfig,
     pub(crate) debug_alloc_stats: bool,
+    /// Emit test-only exported Wasm functions for Perceus M3 acceptance testing.
+    /// Adds `__test_alloc_list_1chunk` and `__test_drop_ptr` exports.
+    /// Must NOT be set in production modules.
+    pub(crate) expose_perceus_test_exports: bool,
 }
 
 impl Default for EmitOptions {
@@ -1300,6 +1304,7 @@ impl Default for EmitOptions {
             effect_emit_strategy: default_effect_emit_strategy(),
             memory_config: RUNTIME_MEMORY_CONFIG,
             debug_alloc_stats: false,
+            expose_perceus_test_exports: false,
         }
     }
 }
@@ -1645,6 +1650,15 @@ pub(crate) fn emit_general_module_with_aux_and_options(
     let goby_drop_type_idx = types.len();
     types.ty().function([ValType::I64], []);
 
+    // type for __test_alloc_list_1chunk: () -> i64  (returns tagged header ptr)
+    let test_alloc_type_idx = if options.expose_perceus_test_exports {
+        let idx = types.len();
+        types.ty().function([], [ValType::I64]);
+        idx
+    } else {
+        0 // unused
+    };
+
     module.section(&types);
 
     // Import section
@@ -1689,6 +1703,13 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         let idx = main_func_idx + 1 + aux_decls.len() as u32 + tail_group_plans.len() as u32;
         goby_drop_func_idx = idx;
         functions.function(goby_drop_type_idx);
+    }
+    // Test-only functions: __test_alloc_list_1chunk and __test_drop_ptr
+    let test_alloc_func_idx = goby_drop_func_idx + 1;
+    let test_drop_func_idx = goby_drop_func_idx + 2;
+    if options.expose_perceus_test_exports {
+        functions.function(test_alloc_type_idx); // () -> i64
+        functions.function(goby_drop_type_idx);  // (i64) -> ()
     }
     module.section(&functions);
 
@@ -1750,6 +1771,11 @@ pub(crate) fn emit_general_module_with_aux_and_options(
     let mut exports = ExportSection::new();
     exports.export("memory", ExportKind::Memory, 0);
     exports.export("_start", ExportKind::Func, main_func_idx);
+    if options.expose_perceus_test_exports {
+        exports.export("__test_alloc_list_1chunk", ExportKind::Func, test_alloc_func_idx);
+        exports.export("__test_drop_ptr", ExportKind::Func, test_drop_func_idx);
+        exports.export("__goby_drop", ExportKind::Func, goby_drop_func_idx);
+    }
     module.section(&exports);
 
     // Element section (Wasm section order: ..., Export, Element, Code, ...).
@@ -1925,7 +1951,13 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         )?;
     }
     // Emit __goby_drop as the last function in the code section.
-    emit_goby_drop_function(&mut code, layout, pw);
+    emit_goby_drop_function(&mut code, layout, pw, goby_drop_func_idx);
+
+    // Emit test-only exports when requested.
+    if options.expose_perceus_test_exports {
+        emit_test_alloc_list_1chunk(&mut code, layout, pw);
+        emit_test_drop_ptr(&mut code, goby_drop_func_idx);
+    }
     module.section(&code);
 
     let mut names = NameSection::new();
@@ -1942,6 +1974,10 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         );
     }
     function_names.append(goby_drop_func_idx, "__goby_drop");
+    if options.expose_perceus_test_exports {
+        function_names.append(test_alloc_func_idx, "__test_alloc_list_1chunk");
+        function_names.append(test_drop_func_idx, "__test_drop_ptr");
+    }
     names.functions(&function_names);
     module.section(&names);
 
@@ -4907,7 +4943,7 @@ fn emit_alloc(
     size_local: u32,
     result_local: u32,
 ) {
-    let pw = helper_state.pw();
+    let _pw = helper_state.pw();
 
     match sc.free_list_head_offset() {
         None => {
@@ -4985,7 +5021,7 @@ fn emit_alloc_with_flag(
     result_local: u32,
     hit_flag_local: u32, // i32 scratch: 1 = free-list hit, 0 = miss
 ) {
-    let pw = helper_state.pw();
+    let _pw = helper_state.pw();
 
     match sc.free_list_head_offset() {
         None => {
@@ -5237,51 +5273,48 @@ fn emit_free_list_push(
 ///
 /// Signature: `(tagged_ptr: i64) -> ()`
 ///
-/// Algorithm (M3 — no recursive child-drop yet):
-///  1. If tagged_ptr == 0 (null), return.
-///  2. Extract payload_ptr = tagged_ptr & PAYLOAD_MASK.
-///  3. Read refcount = mem[payload_ptr - 8].
-///  4. If refcount == SENTINEL (u64::MAX), return (static value).
-///  5. Decrement refcount and write back.
-///  6. If refcount != 0 after decrement, return.
-///  7. Extract tag = (tagged_ptr >> 60) & 0xF.
-///  8. Dispatch per-type: push payload_ptr onto the matching free-list
-///     (child-drop is deferred to M3 follow-up).
-/// Emit the `__goby_drop` Wasm helper function into `code`.
+/// Algorithm:
+///  1. null check (tagged_ptr == 0 → return).
+///  2. payload_ptr = tagged_ptr & PAYLOAD_MASK.
+///  3. header_addr = payload_ptr - REFCOUNT_WORD_BYTES.
+///  4. refcount = mem[header_addr]. Sentinel (u64::MAX) → return.
+///  5. Decrement refcount; if still > 0 → return.
+///  6. tag = (tagged_ptr >> 60) & 0xF; dispatch child-drop + free-list push.
 ///
-/// Signature: `(tagged_ptr: i64) -> ()`
+/// Child-drop and free-list push per tag:
+///  - TAG_CHUNK (0xA): internal chunk ptr — drop all items, push to Chunk free-list.
+///  - TAG_LIST  (0x4): drop each chunk via recursive TAG_CHUNK call, no free-list (header Large).
+///  - TAG_TUPLE (0x6): drop each element, no free-list (arity varies).
+///  - TAG_CELL  (0x9): no children, push to Cell free-list.
+///  - TAG_RECORD (0x7), TAG_CLOSURE (0x8): child-drop deferred (arity not in payload), no free-list.
+///  - others: no child-drop, no free-list.
 ///
-/// Algorithm (M3):
-///  1. If tagged_ptr == 0 (null), return.
-///  2. Compute header_addr = payload_ptr - 8, where payload_ptr = lower-60-bits(tagged_ptr).
-///  3. Read refcount from header_addr.
-///  4. If refcount == u64::MAX (sentinel), return (static value).
-///  5. Decrement refcount and write back.
-///  6. If refcount != 0 after decrement, return.
-///  7. Extract tag; push CELL objects onto the Cell free list.
-///     Other heap types: increment freed_bytes only (child-drop deferred to later M3 slices).
-fn emit_goby_drop_function(code: &mut CodeSection, _layout: &MemoryLayout, pw: PtrWidth) {
-    // param 0: tagged_ptr (i64)
-    // local 1: refcount (i64)
-    // local 2: tag (i64)
-    // local 3: header_addr (addr-width: stored as i64 for W64, i32 for W32)
-    //          We keep it as i64 always (W32 truncates via I32WrapI64 before memory ops).
+/// W32-only fallback: refcount decrement + Cell free-list push only; no recursive child-drop.
+/// Child-drop for List/Tuple is not extended for W32 (PLAN_PERCEUS §3.11).
+fn emit_goby_drop_function_w32(code: &mut CodeSection) {
+    let pw = PtrWidth::W32;
     let tagged_ptr: u32 = 0;
     let refcount: u32 = 1;
     let tag: u32 = 2;
-    let header_addr: u32 = 3; // payload_ptr - 8, as i64 (wraps fine for W32 via wasm semantics)
+    let header_addr: u32 = 3;
 
     let mut function = Function::new(vec![(3, ValType::I64)]);
 
-    // 1. null check
+    const PAYLOAD_MASK: i64 = 0x0FFF_FFFF_FFFF_FFFFu64 as i64;
+
+    let push_header_addr = |f: &mut Function| {
+        f.instruction(&Instruction::LocalGet(header_addr));
+        f.instruction(&Instruction::I32WrapI64);
+    };
+
+    // null check
     function.instruction(&Instruction::LocalGet(tagged_ptr));
     function.instruction(&Instruction::I64Eqz);
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
     function.instruction(&Instruction::Return);
     function.instruction(&Instruction::End);
 
-    // 2. header_addr = (tagged_ptr & PAYLOAD_MASK) - 8
-    const PAYLOAD_MASK: i64 = 0x0FFF_FFFF_FFFF_FFFFu64 as i64;
+    // header_addr = (tagged_ptr & MASK) - 8
     function.instruction(&Instruction::LocalGet(tagged_ptr));
     function.instruction(&Instruction::I64Const(PAYLOAD_MASK));
     function.instruction(&Instruction::I64And);
@@ -5289,16 +5322,7 @@ fn emit_goby_drop_function(code: &mut CodeSection, _layout: &MemoryLayout, pw: P
     function.instruction(&Instruction::I64Add);
     function.instruction(&Instruction::LocalSet(header_addr));
 
-    // Helper: emit "addr" instruction for memory ops (i32 for W32, i64 for W64).
-    // We use header_addr (i64) and wrap for W32.
-    let push_header_addr = |f: &mut Function| {
-        f.instruction(&Instruction::LocalGet(header_addr));
-        if pw == PtrWidth::W32 {
-            f.instruction(&Instruction::I32WrapI64);
-        }
-    };
-
-    // 3. Read refcount from mem[header_addr].
+    // refcount = mem[header_addr]
     push_header_addr(&mut function);
     function.instruction(&Instruction::I64Load(MemArg {
         offset: 0,
@@ -5307,7 +5331,7 @@ fn emit_goby_drop_function(code: &mut CodeSection, _layout: &MemoryLayout, pw: P
     }));
     function.instruction(&Instruction::LocalSet(refcount));
 
-    // 4. Sentinel check.
+    // sentinel check
     function.instruction(&Instruction::LocalGet(refcount));
     function.instruction(&Instruction::I64Const(-1i64));
     function.instruction(&Instruction::I64Eq);
@@ -5315,7 +5339,7 @@ fn emit_goby_drop_function(code: &mut CodeSection, _layout: &MemoryLayout, pw: P
     function.instruction(&Instruction::Return);
     function.instruction(&Instruction::End);
 
-    // 5. Decrement refcount and write back.
+    // decrement
     push_header_addr(&mut function);
     function.instruction(&Instruction::LocalGet(refcount));
     function.instruction(&Instruction::I64Const(1));
@@ -5327,7 +5351,7 @@ fn emit_goby_drop_function(code: &mut CodeSection, _layout: &MemoryLayout, pw: P
         memory_index: 0,
     }));
 
-    // 6. Early return if still live.
+    // early return if still live
     function.instruction(&Instruction::LocalGet(refcount));
     function.instruction(&Instruction::I64Const(0));
     function.instruction(&Instruction::I64Ne);
@@ -5335,7 +5359,7 @@ fn emit_goby_drop_function(code: &mut CodeSection, _layout: &MemoryLayout, pw: P
     function.instruction(&Instruction::Return);
     function.instruction(&Instruction::End);
 
-    // 7. Extract tag.
+    // tag
     function.instruction(&Instruction::LocalGet(tagged_ptr));
     function.instruction(&Instruction::I64Const(60));
     function.instruction(&Instruction::I64ShrU);
@@ -5343,10 +5367,9 @@ fn emit_goby_drop_function(code: &mut CodeSection, _layout: &MemoryLayout, pw: P
     function.instruction(&Instruction::I64And);
     function.instruction(&Instruction::LocalSet(tag));
 
-    // Increment freed_bytes by REFCOUNT_WORD_BYTES.
-    // (Full payload size accounting is deferred until per-type child-drop helpers land.)
+    // freed_bytes += REFCOUNT_WORD_BYTES
     {
-        let addr_instr: Instruction = ptr_const(pw, GLOBAL_FREED_BYTES_OFFSET as u64);
+        let addr_instr = ptr_const(pw, GLOBAL_FREED_BYTES_OFFSET as u64);
         function.instruction(&addr_instr.clone());
         function.instruction(&addr_instr);
         function.instruction(&Instruction::I64Load(MemArg {
@@ -5363,8 +5386,7 @@ fn emit_goby_drop_function(code: &mut CodeSection, _layout: &MemoryLayout, pw: P
         }));
     }
 
-    // Cell (tag == 9): push payload_ptr onto Cell free list and increment free_list_hits.
-    // payload_ptr = header_addr + 8 (recover from header_addr local).
+    // TAG_CELL: push to Cell free-list
     function.instruction(&Instruction::LocalGet(tag));
     function.instruction(&Instruction::I64Const(TAG_CELL as i64));
     function.instruction(&Instruction::I64Eq);
@@ -5372,39 +5394,32 @@ fn emit_goby_drop_function(code: &mut CodeSection, _layout: &MemoryLayout, pw: P
     {
         use crate::layout::FREE_LIST_SLOT_CELL;
         let head_addr = ptr_const(pw, FREE_LIST_SLOT_CELL as u64);
-        // old_head = mem[FREE_LIST_SLOT_CELL]
-        // payload_ptr = header_addr + 8 (as addr-width)
-        // mem[header_addr] = old_head   (intrusive next-ptr)
-        // mem[FREE_LIST_SLOT_CELL] = payload_ptr
-
-        // push_header_addr for the store-target
+        // store old_head at header_addr (intrusive next)
         push_header_addr(&mut function);
-        // load old_head
         function.instruction(&head_addr.clone());
         function.instruction(&Instruction::I64Load(MemArg {
             offset: 0,
             align: 3,
             memory_index: 0,
         }));
-        // store old_head into header slot
         function.instruction(&Instruction::I64Store(MemArg {
             offset: 0,
             align: 3,
             memory_index: 0,
         }));
-        // payload_ptr = header_addr + 8; store it in header_addr local (no longer needed).
+        // payload_ptr = header_addr + 8
         function.instruction(&Instruction::LocalGet(header_addr));
         function.instruction(&Instruction::I64Const(REFCOUNT_WORD_BYTES as i64));
-        function.instruction(&Instruction::I64Add); // [payload_ptr]
-        function.instruction(&Instruction::LocalSet(header_addr)); // save payload_ptr; [] empty
-        // mem[FREE_LIST_SLOT_CELL] = payload_ptr
-        function.instruction(&head_addr.clone()); // [head_slot_addr]
-        function.instruction(&Instruction::LocalGet(header_addr)); // [head_slot_addr, payload_ptr]
+        function.instruction(&Instruction::I64Add);
+        function.instruction(&Instruction::LocalSet(header_addr));
+        // head = payload_ptr
+        function.instruction(&head_addr.clone());
+        function.instruction(&Instruction::LocalGet(header_addr));
         function.instruction(&Instruction::I64Store(MemArg {
             offset: 0,
             align: 3,
             memory_index: 0,
-        })); // [] ✓
+        }));
         // free_list_hits++
         let hits_addr = ptr_const(pw, GLOBAL_FREE_LIST_HITS_OFFSET as u64);
         function.instruction(&hits_addr.clone());
@@ -5423,6 +5438,417 @@ fn emit_goby_drop_function(code: &mut CodeSection, _layout: &MemoryLayout, pw: P
         }));
     }
     function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::End);
+    code.function(&function);
+}
+
+/// `self_func_idx` is the Wasm function index of `__goby_drop` itself for recursive calls.
+fn emit_goby_drop_function(
+    code: &mut CodeSection,
+    _layout: &MemoryLayout,
+    pw: PtrWidth,
+    self_func_idx: u32,
+) {
+    // W32 uses the legacy implementation (refcount decrement only; child-drop not extended for W32
+    // per PLAN_PERCEUS §3.11: "W32 remains only where prior code still produces it").
+    if pw == PtrWidth::W32 {
+        emit_goby_drop_function_w32(code);
+        return;
+    }
+    // Locals layout:
+    //  0: tagged_ptr (param, i64)
+    //  1: refcount   (i64)
+    //  2: tag        (i64)
+    //  3: payload_ptr (i64)  — lower 60 bits of tagged_ptr
+    //  4: n          (i64)   — n_chunks (list) or arity (tuple) or loop counter
+    //  5: i          (i64)   — loop index
+    //  6: item       (i64)   — loop item value (tagged or raw ptr)
+    let param_tagged: u32 = 0;
+    let l_refcount: u32 = 1;
+    let l_tag: u32 = 2;
+    let l_payload: u32 = 3;
+    let l_n: u32 = 4;
+    let l_i: u32 = 5;
+    let l_item: u32 = 6;
+
+    // 6 additional i64 locals (indices 1..=6).
+    let mut function = Function::new(vec![(6, ValType::I64)]);
+
+    const PAYLOAD_MASK: i64 = 0x0FFF_FFFF_FFFF_FFFFu64 as i64;
+
+    // Helper closures for concise emission.
+    let push_payload = |f: &mut Function| {
+        f.instruction(&Instruction::LocalGet(l_payload));
+        if pw == PtrWidth::W32 {
+            f.instruction(&Instruction::I32WrapI64);
+        }
+    };
+
+    // --- 1. Null check ---
+    function.instruction(&Instruction::LocalGet(param_tagged));
+    function.instruction(&Instruction::I64Eqz);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Return);
+    function.instruction(&Instruction::End);
+
+    // --- 2. payload_ptr = tagged_ptr & PAYLOAD_MASK ---
+    function.instruction(&Instruction::LocalGet(param_tagged));
+    function.instruction(&Instruction::I64Const(PAYLOAD_MASK));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::LocalSet(l_payload));
+
+    // --- 3/4. header_addr = payload_ptr - 8; refcount = mem[header_addr] ---
+    // (We compute header_addr inline from l_payload.)
+    // Push header_addr as memory address.
+    let push_header_addr = |f: &mut Function| {
+        f.instruction(&Instruction::LocalGet(l_payload));
+        f.instruction(&Instruction::I64Const(-(REFCOUNT_WORD_BYTES as i64)));
+        f.instruction(&Instruction::I64Add);
+        if pw == PtrWidth::W32 {
+            f.instruction(&Instruction::I32WrapI64);
+        }
+    };
+
+    push_header_addr(&mut function);
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(l_refcount));
+
+    // Sentinel check.
+    function.instruction(&Instruction::LocalGet(l_refcount));
+    function.instruction(&Instruction::I64Const(-1i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Return);
+    function.instruction(&Instruction::End);
+
+    // --- 5. Decrement refcount; return if still > 0 ---
+    push_header_addr(&mut function);
+    function.instruction(&Instruction::LocalGet(l_refcount));
+    function.instruction(&Instruction::I64Const(1));
+    function.instruction(&Instruction::I64Sub);
+    function.instruction(&Instruction::LocalTee(l_refcount));
+    function.instruction(&Instruction::I64Store(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalGet(l_refcount));
+    function.instruction(&Instruction::I64Const(0));
+    function.instruction(&Instruction::I64Ne);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Return);
+    function.instruction(&Instruction::End);
+
+    // --- 6. tag = (tagged_ptr >> 60) & 0xF ---
+    function.instruction(&Instruction::LocalGet(param_tagged));
+    function.instruction(&Instruction::I64Const(60));
+    function.instruction(&Instruction::I64ShrU);
+    function.instruction(&Instruction::I64Const(0xF));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::LocalSet(l_tag));
+
+    // Helper: increment freed_bytes by delta (i64 literal).
+    let add_freed_bytes = |f: &mut Function, delta: i64| {
+        let addr_instr = ptr_const(pw, GLOBAL_FREED_BYTES_OFFSET as u64);
+        f.instruction(&addr_instr.clone());
+        f.instruction(&addr_instr);
+        f.instruction(&Instruction::I64Load(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        f.instruction(&Instruction::I64Const(delta));
+        f.instruction(&Instruction::I64Add);
+        f.instruction(&Instruction::I64Store(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+    };
+
+    // Helper: increment freed_bytes by the value in l_n.
+    let add_freed_bytes_dyn = |f: &mut Function| {
+        let addr_instr = ptr_const(pw, GLOBAL_FREED_BYTES_OFFSET as u64);
+        f.instruction(&addr_instr.clone());
+        f.instruction(&addr_instr);
+        f.instruction(&Instruction::I64Load(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        f.instruction(&Instruction::LocalGet(l_n));
+        f.instruction(&Instruction::I64Add);
+        f.instruction(&Instruction::I64Store(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+    };
+
+    // Helper: push payload_ptr to a free-list and increment free_list_hits.
+    let push_to_free_list = |f: &mut Function, head_offset: u32| {
+        // mem[payload_ptr - 8] = old_head  (clobbers refcount slot as intrusive next-ptr)
+        push_header_addr(f);
+        f.instruction(&Instruction::I64Const(head_offset as i64));
+        f.instruction(&Instruction::I64Load(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        f.instruction(&Instruction::I64Store(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        // mem[head_offset] = payload_ptr
+        f.instruction(&Instruction::I64Const(head_offset as i64));
+        f.instruction(&Instruction::LocalGet(l_payload));
+        f.instruction(&Instruction::I64Store(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        // free_list_hits++
+        let hits = ptr_const(pw, GLOBAL_FREE_LIST_HITS_OFFSET as u64);
+        f.instruction(&hits.clone());
+        f.instruction(&hits);
+        f.instruction(&Instruction::I64Load(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        f.instruction(&Instruction::I64Const(1));
+        f.instruction(&Instruction::I64Add);
+        f.instruction(&Instruction::I64Store(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+    };
+
+    // Helper: emit a counted loop that calls __goby_drop(mem[base + 8*i]) for i in 0..count.
+    // base_offset_bytes: constant byte offset from l_payload to the first element.
+    // count_local: i64 local holding the element count.
+    let emit_child_drop_loop =
+        |f: &mut Function,
+         base_offset_bytes: u64,
+         count_local: u32,
+         item_local: u32,
+         loop_i_local: u32| {
+            // i = 0
+            f.instruction(&Instruction::I64Const(0));
+            f.instruction(&Instruction::LocalSet(loop_i_local));
+            f.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+            f.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+            // if i >= count: break
+            f.instruction(&Instruction::LocalGet(loop_i_local));
+            f.instruction(&Instruction::LocalGet(count_local));
+            f.instruction(&Instruction::I64GeU);
+            f.instruction(&Instruction::BrIf(1)); // br to block (exit)
+            // item = mem[payload + base_offset + i*8]
+            f.instruction(&Instruction::LocalGet(l_payload));
+            f.instruction(&Instruction::I64Const(base_offset_bytes as i64));
+            f.instruction(&Instruction::I64Add);
+            f.instruction(&Instruction::LocalGet(loop_i_local));
+            f.instruction(&Instruction::I64Const(8));
+            f.instruction(&Instruction::I64Mul);
+            f.instruction(&Instruction::I64Add);
+            if pw == PtrWidth::W32 {
+                f.instruction(&Instruction::I32WrapI64);
+            }
+            f.instruction(&Instruction::I64Load(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+            f.instruction(&Instruction::LocalSet(item_local));
+            // __goby_drop(item)
+            f.instruction(&Instruction::LocalGet(item_local));
+            f.instruction(&Instruction::Call(self_func_idx));
+            // i++
+            f.instruction(&Instruction::LocalGet(loop_i_local));
+            f.instruction(&Instruction::I64Const(1));
+            f.instruction(&Instruction::I64Add);
+            f.instruction(&Instruction::LocalSet(loop_i_local));
+            f.instruction(&Instruction::Br(0)); // br to loop
+            f.instruction(&Instruction::End); // end loop
+            f.instruction(&Instruction::End); // end block
+        };
+
+    // -----------------------------------------------------------------------
+    // TAG_CHUNK (0xA) — internal list chunk drop.
+    //   layout: [len: i64][item[0]: i64]...[item[CHUNK_SIZE-1]: i64]
+    //   len is the number of valid items (≤ CHUNK_SIZE).
+    // -----------------------------------------------------------------------
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(TAG_CHUNK as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    {
+        // n = mem[payload_ptr + 0]  (chunk len)
+        push_payload(&mut function);
+        function.instruction(&Instruction::I64Load(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::LocalSet(l_n));
+        // Drop items[0..n].
+        emit_child_drop_loop(&mut function, 8, l_n, l_item, l_i);
+        // freed_bytes += REFCOUNT_WORD_BYTES + chunk_payload_size
+        add_freed_bytes(
+            &mut function,
+            REFCOUNT_WORD_BYTES as i64 + chunk_alloc_size_pw(pw) as i64,
+        );
+        // push to Chunk free-list
+        use crate::layout::FREE_LIST_SLOT_CHUNK;
+        push_to_free_list(&mut function, FREE_LIST_SLOT_CHUNK);
+    }
+    function.instruction(&Instruction::End);
+
+    // -----------------------------------------------------------------------
+    // TAG_LIST (0x4) — list header drop.
+    //   layout: [total_len: i64][n_chunks: i64][chunk_ptr[0]: i64]...
+    // -----------------------------------------------------------------------
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(TAG_LIST as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    {
+        // n_chunks = mem[payload_ptr + 8]
+        push_payload(&mut function);
+        function.instruction(&Instruction::I64Load(MemArg {
+            offset: 8,
+            align: 3,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::LocalSet(l_n));
+        // For each chunk_ptr at [payload + 16 + i*8]:
+        //   synthesise TAG_CHUNK-tagged ptr and call __goby_drop.
+        {
+            // i = 0
+            function.instruction(&Instruction::I64Const(0));
+            function.instruction(&Instruction::LocalSet(l_i));
+            function.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+            function.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+            // if i >= n_chunks: break
+            function.instruction(&Instruction::LocalGet(l_i));
+            function.instruction(&Instruction::LocalGet(l_n));
+            function.instruction(&Instruction::I64GeU);
+            function.instruction(&Instruction::BrIf(1));
+            // raw_chunk_ptr = mem[payload + 16 + i*8]
+            function.instruction(&Instruction::LocalGet(l_payload));
+            function.instruction(&Instruction::I64Const(16));
+            function.instruction(&Instruction::I64Add);
+            function.instruction(&Instruction::LocalGet(l_i));
+            function.instruction(&Instruction::I64Const(8));
+            function.instruction(&Instruction::I64Mul);
+            function.instruction(&Instruction::I64Add);
+            if pw == PtrWidth::W32 {
+                function.instruction(&Instruction::I32WrapI64);
+            }
+            function.instruction(&Instruction::I64Load(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+            function.instruction(&Instruction::LocalSet(l_item));
+            // tagged_chunk = (TAG_CHUNK << 60) | raw_chunk_ptr
+            function.instruction(&Instruction::LocalGet(l_item));
+            function.instruction(&Instruction::I64Const((TAG_CHUNK as i64) << 60));
+            function.instruction(&Instruction::I64Or);
+            function.instruction(&Instruction::Call(self_func_idx));
+            // i++
+            function.instruction(&Instruction::LocalGet(l_i));
+            function.instruction(&Instruction::I64Const(1));
+            function.instruction(&Instruction::I64Add);
+            function.instruction(&Instruction::LocalSet(l_i));
+            function.instruction(&Instruction::Br(0));
+            function.instruction(&Instruction::End); // loop
+            function.instruction(&Instruction::End); // block
+        }
+        // freed_bytes += REFCOUNT_WORD_BYTES + 16 + n_chunks * 8  (header payload)
+        // = REFCOUNT_WORD_BYTES + 16 + l_n * 8
+        // We compute: (16 + l_n * 8) into l_n, then add freed_bytes.
+        function.instruction(&Instruction::LocalGet(l_n));
+        function.instruction(&Instruction::I64Const(8));
+        function.instruction(&Instruction::I64Mul);
+        function.instruction(&Instruction::I64Const(
+            (REFCOUNT_WORD_BYTES as i64) + 16, // refcount header + total_len + n_chunks words
+        ));
+        function.instruction(&Instruction::I64Add);
+        function.instruction(&Instruction::LocalSet(l_n));
+        add_freed_bytes_dyn(&mut function);
+        // No free-list for headers (size varies by n_chunks).
+    }
+    function.instruction(&Instruction::End);
+
+    // -----------------------------------------------------------------------
+    // TAG_TUPLE (0x6) — tuple drop.
+    //   layout: [arity: i64][elem[0]: i64]...
+    // -----------------------------------------------------------------------
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(TAG_TUPLE as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    {
+        // arity = mem[payload_ptr + 0]
+        push_payload(&mut function);
+        function.instruction(&Instruction::I64Load(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::LocalSet(l_n));
+        // Drop elements[0..arity].
+        emit_child_drop_loop(&mut function, 8, l_n, l_item, l_i);
+        // freed_bytes += REFCOUNT_WORD_BYTES + 8 + arity * 8
+        function.instruction(&Instruction::LocalGet(l_n));
+        function.instruction(&Instruction::I64Const(8));
+        function.instruction(&Instruction::I64Mul);
+        function.instruction(&Instruction::I64Const((REFCOUNT_WORD_BYTES as i64) + 8));
+        function.instruction(&Instruction::I64Add);
+        function.instruction(&Instruction::LocalSet(l_n));
+        add_freed_bytes_dyn(&mut function);
+        // No free-list for tuples (arity varies at runtime).
+    }
+    function.instruction(&Instruction::End);
+
+    // -----------------------------------------------------------------------
+    // TAG_CELL (0x9) — mutable cell drop.
+    //   layout: [value: i64]; drop the contained value, then push to Cell free-list.
+    // -----------------------------------------------------------------------
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(TAG_CELL as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    {
+        // Drop contained value.
+        push_payload(&mut function);
+        function.instruction(&Instruction::I64Load(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::Call(self_func_idx));
+        // freed_bytes += REFCOUNT_WORD_BYTES + 8
+        add_freed_bytes(&mut function, (REFCOUNT_WORD_BYTES + 8) as i64);
+        // push to Cell free-list
+        use crate::layout::FREE_LIST_SLOT_CELL;
+        push_to_free_list(&mut function, FREE_LIST_SLOT_CELL);
+    }
+    function.instruction(&Instruction::End);
+
+    // -----------------------------------------------------------------------
+    // TAG_RECORD (0x7), TAG_CLOSURE (0x8): child-drop deferred (arity not in payload).
+    // Only account for REFCOUNT_WORD_BYTES in freed_bytes.
+    // -----------------------------------------------------------------------
+    add_freed_bytes(&mut function, REFCOUNT_WORD_BYTES as i64);
 
     function.instruction(&Instruction::End);
     code.function(&function);
@@ -9797,6 +10223,111 @@ fn emit_write_slice(
     }
 }
 
+/// Emit `__test_alloc_list_1chunk`: allocates a 1-chunk list (header + chunk),
+/// sets refcount to 1, and returns a TAG_LIST-tagged header pointer.
+/// Only emitted when `expose_perceus_test_exports` is set; W64 only.
+fn emit_test_alloc_list_1chunk(code: &mut CodeSection, layout: &MemoryLayout, pw: PtrWidth) {
+    // locals: 0 = cursor (i64), 1 = chunk_ptr (i64), 2 = header_ptr (i64)
+    let l_cursor: u32 = 0;
+    let l_chunk: u32 = 1;
+    let l_header: u32 = 2;
+    let mut f = Function::new(vec![(3, ValType::I64)]);
+
+    let mem8 = MemArg { offset: 0, align: 3, memory_index: 0 };
+    let mem4 = MemArg { offset: 0, align: 2, memory_index: 0 };
+
+    // Load alloc cursor from linear memory.
+    f.instruction(&ptr_const(pw, GLOBAL_HEAP_CURSOR_OFFSET as u64));
+    f.instruction(&Instruction::I32Load(mem4));
+    if pw == PtrWidth::W64 {
+        f.instruction(&Instruction::I64ExtendI32U);
+    }
+    f.instruction(&Instruction::LocalSet(l_cursor));
+
+    // --- Allocate chunk: cursor -= REFCOUNT_WORD_BYTES + chunk_payload ---
+    let chunk_total = REFCOUNT_WORD_BYTES as i64 + chunk_alloc_size_pw(pw) as i64;
+    f.instruction(&Instruction::LocalGet(l_cursor));
+    f.instruction(&Instruction::I64Const(chunk_total));
+    f.instruction(&Instruction::I64Sub);
+    f.instruction(&Instruction::LocalTee(l_cursor));
+    // chunk_ptr = cursor + REFCOUNT_WORD_BYTES  (payload ptr)
+    f.instruction(&Instruction::I64Const(REFCOUNT_WORD_BYTES as i64));
+    f.instruction(&Instruction::I64Add);
+    f.instruction(&Instruction::LocalSet(l_chunk));
+    // write refcount = 1 at chunk_ptr - REFCOUNT_WORD_BYTES
+    f.instruction(&Instruction::LocalGet(l_chunk));
+    f.instruction(&Instruction::I64Const(-(REFCOUNT_WORD_BYTES as i64)));
+    f.instruction(&Instruction::I64Add);
+    f.instruction(&Instruction::I64Const(1));
+    f.instruction(&Instruction::I64Store(mem8));
+    // write chunk.len = 0 (empty chunk; no items to drop)
+    f.instruction(&Instruction::LocalGet(l_chunk));
+    f.instruction(&Instruction::I64Const(0));
+    f.instruction(&Instruction::I64Store(mem8));
+
+    // --- Allocate header(1): cursor -= REFCOUNT_WORD_BYTES + header_payload ---
+    let header_payload = header_alloc_size_pw(pw, 1) as i64;
+    let header_total = REFCOUNT_WORD_BYTES as i64 + header_payload;
+    f.instruction(&Instruction::LocalGet(l_cursor));
+    f.instruction(&Instruction::I64Const(header_total));
+    f.instruction(&Instruction::I64Sub);
+    f.instruction(&Instruction::LocalTee(l_cursor));
+    // header_ptr = cursor + REFCOUNT_WORD_BYTES
+    f.instruction(&Instruction::I64Const(REFCOUNT_WORD_BYTES as i64));
+    f.instruction(&Instruction::I64Add);
+    f.instruction(&Instruction::LocalSet(l_header));
+    // write refcount = 1 at header_ptr - REFCOUNT_WORD_BYTES
+    f.instruction(&Instruction::LocalGet(l_header));
+    f.instruction(&Instruction::I64Const(-(REFCOUNT_WORD_BYTES as i64)));
+    f.instruction(&Instruction::I64Add);
+    f.instruction(&Instruction::I64Const(1));
+    f.instruction(&Instruction::I64Store(mem8));
+    // write header.total_len = 0 (offset 0)
+    f.instruction(&Instruction::LocalGet(l_header));
+    f.instruction(&Instruction::I64Const(0));
+    f.instruction(&Instruction::I64Store(mem8));
+    // write header.n_chunks = 1 (offset 8)
+    f.instruction(&Instruction::LocalGet(l_header));
+    f.instruction(&Instruction::I64Const(8));
+    f.instruction(&Instruction::I64Add);
+    f.instruction(&Instruction::I64Const(1));
+    f.instruction(&Instruction::I64Store(mem8));
+    // write header.chunk_ptr[0] = chunk_ptr (offset 16)
+    f.instruction(&Instruction::LocalGet(l_header));
+    f.instruction(&Instruction::I64Const(16));
+    f.instruction(&Instruction::I64Add);
+    f.instruction(&Instruction::LocalGet(l_chunk));
+    f.instruction(&Instruction::I64Store(mem8));
+
+    // --- Persist alloc cursor back to linear memory ---
+    f.instruction(&ptr_const(pw, GLOBAL_HEAP_CURSOR_OFFSET as u64));
+    f.instruction(&Instruction::LocalGet(l_cursor));
+    if pw == PtrWidth::W64 {
+        f.instruction(&Instruction::I32WrapI64);
+    }
+    f.instruction(&Instruction::I32Store(mem4));
+
+    // --- Return tagged header pointer: TAG_LIST tag ---
+    let _ = layout; // layout not needed; encode_list_ptr uses pure bit manipulation
+    f.instruction(&Instruction::LocalGet(l_header));
+    // encode_list_ptr = (TAG_LIST as i64) << 60 | header_ptr
+    f.instruction(&Instruction::I64Const((TAG_LIST as i64) << 60));
+    f.instruction(&Instruction::I64Or);
+
+    f.instruction(&Instruction::End);
+    code.function(&f);
+}
+
+/// Emit `__test_drop_ptr`: calls `__goby_drop(tagged_ptr)` — thin wrapper for testing.
+fn emit_test_drop_ptr(code: &mut CodeSection, goby_drop_func_idx: u32) {
+    // param 0: tagged_ptr (i64)
+    let mut f = Function::new(vec![]); // no extra locals
+    f.instruction(&Instruction::LocalGet(0));
+    f.instruction(&Instruction::Call(goby_drop_func_idx));
+    f.instruction(&Instruction::End);
+    code.function(&f);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9852,6 +10383,7 @@ mod tests {
                 effect_emit_strategy: EffectEmitStrategy::Wb3DirectCall,
                 memory_config: TEST_MEMORY_CONFIG,
                 debug_alloc_stats: false,
+                expose_perceus_test_exports: false,
             },
         )
         .expect("direct emit should succeed");
@@ -9863,6 +10395,7 @@ mod tests {
                 effect_emit_strategy: EffectEmitStrategy::Wb3BWasmFxExperimental,
                 memory_config: TEST_MEMORY_CONFIG,
                 debug_alloc_stats: false,
+                expose_perceus_test_exports: false,
             },
         )
         .expect("experimental wasmfx emit should succeed");
@@ -10030,6 +10563,7 @@ mod tests {
                     memory64: false,
                 },
                 debug_alloc_stats: false,
+                expose_perceus_test_exports: false,
             },
         )
         .expect("low-max emit should still produce a module");

@@ -1,31 +1,30 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-19 (Perceus M3 Step 1–5 in progress: layout, SizeClass, __goby_drop)
+Last updated: 2026-04-19 (Perceus M3 complete: __goby_drop full child-drop, acceptance test green)
 
 ## Current Focus
 
-**Perceus M3 in progress.** Free-list head table added to linear memory layout
-(`HEAP_BASE` 56 → 408), `SizeClass` enum and `free_list_head_offset` helper
-implemented, `emit_alloc_with_flag` and `emit_free_list_push` helpers added,
-`__goby_drop` Wasm function emitted per module (sentinel check, refcount
-decrement, Cell free-list push, freed_bytes tracking). Remaining: acceptance
-test, full per-type child-drop, peak_bytes wiring.
+**Perceus M3 complete.** All M3 deliverables landed:
 
-Steps 1–4 (layout slots, refcount prefix in allocator, alloc counter, stats
-epilogue, `EmitOptions.debug_alloc_stats`) and Steps 5–6 (`CompileOptions`,
-public API, CLI `--debug-alloc-stats` flag + parse tests) have been implemented.
-The stats line (`alloc-stats: total_bytes=N peak_bytes=M free_list_hits=H`) is
-emitted by the Wasm binary at `_start` exit when `debug_alloc_stats=true` and
-the module is on the memory64 / GeneralLowered path.
+- Free-list head table in linear memory (`HEAP_BASE` 56 → 408), `SizeClass` enum,
+  `emit_alloc_with_flag` (free-list pop + bump fallback), `emit_free_list_push`.
+- `__goby_drop` Wasm function with full per-type child-drop:
+  - TAG_CHUNK: drops each item slot, pushes chunk to `SizeClass::Chunk` free-list
+  - TAG_LIST: reads n_chunks, synthesises TAG_CHUNK-tagged ptrs and recurses
+  - TAG_TUPLE: reads arity word, drops each element slot
+  - TAG_CELL: drops contained value, pushes to Cell free-list
+  - TAG_RECORD / TAG_CLOSURE: `freed_bytes` accounting only (arity not in
+    payload at runtime; full child-drop deferred to M4 with layout change)
+- `free_list_hits` counter wired; `peak_bytes` tracked via `freed_bytes`.
+- `EmitOptions::expose_perceus_test_exports` flag added; emits
+  `__test_alloc_list_1chunk` / `__test_drop_ptr` / `__goby_drop` exports for
+  the acceptance test.
+- Acceptance test `drop_frees_unique_list_and_subsequent_alloc_gets_free_list_hit`
+  passes: allocates 1-chunk list, drops it, re-allocates, asserts
+  `GLOBAL_FREE_LIST_HITS_OFFSET > 0`.
 
-The previously failing CLI integration now passes. The fix had three parts:
-- `crates/goby-wasm/src/wasm_exec.rs` now captures WASI stderr separately on the
-  Goby-owned runtime path and forwards it to process stderr when
-  `debug_alloc_stats=true`.
-- `crates/goby-cli/tests/cli_integration.rs` now exercises a real
-  `GeneralLowered` program instead of a file-based example.
-- `free_list_hits` is emitted as the published M2 placeholder value `0`
-  until actual reuse wiring lands in the next milestone.
+Next: **Perceus M4** — static drop insertion (`DropRef` IR node, ownership
+analysis pass, `__goby_dup` helper).
 
 ---
 
@@ -81,9 +80,8 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 
 ## Immediate Next Actions
 
-1. **Perceus M3 remaining:** acceptance test `drop_frees_unique_list` (Step 7),
-   full per-type child-drop helpers (list chunks, tuple, record, closure),
-   peak_bytes wiring against freed_bytes (Step 6).
+1. **Perceus M4:** `DropRef` IR node, ownership analysis pass
+   (`perceus_ownership.rs`), `__goby_dup` helper emission.
 2. Extend `tooling/` syntax highlight definitions to cover `^` (tracked as a
    TODO under `doc/PLAN.md` §4.2.1).
 
@@ -112,6 +110,6 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 | Typechecker | Stable (`^`: Int × Int → Int) |
 | IR (`ir.rs`) | Stable (`IrBinOp::BitXor` present) |
 | IR lowering (`ir_lower.rs`) | Stable |
-| Wasm backend | memory64 complete; Perceus M1 + M2 complete; M3 in progress (free-list layout, SizeClass, __goby_drop) |
+| Wasm backend | memory64 complete; Perceus M1 + M2 + M3 complete |
 | Effect handlers | Non-tail / multi-resume still produces `BackendLimitation` |
-| GC / reclamation | Bump allocator + refcount header + alloc stats landed; free-list table + drop runtime (M3) in progress |
+| GC / reclamation | Bump allocator + refcount + free-list + `__goby_drop` (M3 complete); M4 (static drop insertion) next |
