@@ -39,6 +39,7 @@ mod runtime_rr_tests;
 mod runtime_support;
 mod runtime_unit;
 mod runtime_value;
+mod size_class;
 mod support;
 mod wasm_exec;
 mod wasm_exec_plan;

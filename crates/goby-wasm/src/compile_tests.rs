@@ -131,7 +131,13 @@ main =
     let import_count = import_function_count(&wasm);
     let count_down_wrapper_idx = import_count + 1;
     let bodies = all_code_body_ops(&wasm);
-    let dispatcher_ops = bodies.last().expect("dispatcher body should exist");
+    // Search from the end for the first body that contains a loop (i.e. the dispatcher).
+    // __goby_drop is emitted after the dispatchers and does not contain a loop.
+    let dispatcher_ops = bodies
+        .iter()
+        .rev()
+        .find(|body| body.iter().any(|op| matches!(op, Operator::Loop { .. })))
+        .expect("dispatcher body should exist");
     assert_valid_wasm_module(&wasm);
     assert!(
         dispatcher_ops
@@ -215,7 +221,13 @@ main =
     let ping_wrapper_idx = import_count + 1;
     let pong_wrapper_idx = import_count + 2;
     let bodies = all_code_body_ops(&wasm);
-    let dispatcher_ops = bodies.last().expect("dispatcher body should exist");
+    // Search from the end for the first body that contains a loop (i.e. the dispatcher).
+    // __goby_drop is emitted after the dispatchers and does not contain a loop.
+    let dispatcher_ops = bodies
+        .iter()
+        .rev()
+        .find(|body| body.iter().any(|op| matches!(op, Operator::Loop { .. })))
+        .expect("dispatcher body should exist");
     assert_valid_wasm_module(&wasm);
     assert!(
         dispatcher_ops
@@ -283,7 +295,13 @@ main =
     let start_wrapper_idx = import_count + 1;
     let count_down_wrapper_idx = import_count + 2;
     let bodies = all_code_body_ops(&wasm);
-    let dispatcher_ops = bodies.last().expect("dispatcher body should exist");
+    // Search from the end for the first body that contains a loop (i.e. the dispatcher).
+    // __goby_drop is emitted after the dispatchers and does not contain a loop.
+    let dispatcher_ops = bodies
+        .iter()
+        .rev()
+        .find(|body| body.iter().any(|op| matches!(op, Operator::Loop { .. })))
+        .expect("dispatcher body should exist");
     assert_valid_wasm_module(&wasm);
     assert!(
         dispatcher_ops

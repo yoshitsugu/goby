@@ -1,10 +1,15 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-18 (Perceus M2 Steps 1–7 complete; reuse logic still pending)
+Last updated: 2026-04-19 (Perceus M3 Step 1–5 in progress: layout, SizeClass, __goby_drop)
 
 ## Current Focus
 
-**Perceus M2 scaffolding is in place; the remaining work is reuse semantics.**
+**Perceus M3 in progress.** Free-list head table added to linear memory layout
+(`HEAP_BASE` 56 → 408), `SizeClass` enum and `free_list_head_offset` helper
+implemented, `emit_alloc_with_flag` and `emit_free_list_push` helpers added,
+`__goby_drop` Wasm function emitted per module (sentinel check, refcount
+decrement, Cell free-list push, freed_bytes tracking). Remaining: acceptance
+test, full per-type child-drop, peak_bytes wiring.
 
 Steps 1–4 (layout slots, refcount prefix in allocator, alloc counter, stats
 epilogue, `EmitOptions.debug_alloc_stats`) and Steps 5–6 (`CompileOptions`,
@@ -76,11 +81,10 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 
 ## Immediate Next Actions
 
-1. **Perceus M2 next slice:** implement reuse-or-copy behavior when rooted list
-   updates can consume a refcount-1 cell in place.
-2. Update `doc/PLAN_PERCEUS.md` checkboxes now that the debug alloc-stats slice
-   and quality gate are green.
-3. Extend `tooling/` syntax highlight definitions to cover `^` (tracked as a
+1. **Perceus M3 remaining:** acceptance test `drop_frees_unique_list` (Step 7),
+   full per-type child-drop helpers (list chunks, tuple, record, closure),
+   peak_bytes wiring against freed_bytes (Step 6).
+2. Extend `tooling/` syntax highlight definitions to cover `^` (tracked as a
    TODO under `doc/PLAN.md` §4.2.1).
 
 ## Verification snapshot (2026-04-18, M2 debug-alloc-stats slice)
@@ -108,6 +112,6 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 | Typechecker | Stable (`^`: Int × Int → Int) |
 | IR (`ir.rs`) | Stable (`IrBinOp::BitXor` present) |
 | IR lowering (`ir_lower.rs`) | Stable |
-| Wasm backend | memory64 complete; Perceus M1 groundwork + `^` emission + M1 harness landed; M2 debug-alloc-stats slice landed |
+| Wasm backend | memory64 complete; Perceus M1 + M2 complete; M3 in progress (free-list layout, SizeClass, __goby_drop) |
 | Effect handlers | Non-tail / multi-resume still produces `BackendLimitation` |
-| GC / reclamation | Bump allocator + refcount header + alloc stats landed; reuse logic pending M2 completion |
+| GC / reclamation | Bump allocator + refcount header + alloc stats landed; free-list table + drop runtime (M3) in progress |

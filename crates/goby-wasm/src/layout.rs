@@ -23,15 +23,104 @@ pub(crate) const GLOBAL_HOST_BUMP_CURSOR_OFFSET: u32 = 24;
 /// Running total of bytes allocated by emit_alloc_from_top (i64, zero-init).
 /// Layout: bytes [32..40).
 pub(crate) const GLOBAL_ALLOC_BYTES_TOTAL_OFFSET: u32 = 32;
-/// Peak live bytes (i64, zero-init; placeholder in M2, wired in M3).
+/// Peak live bytes (i64, zero-init; wired in M3).
 /// Layout: bytes [40..48).
 pub(crate) const GLOBAL_PEAK_BYTES_OFFSET: u32 = 40;
-/// Free-list hit counter (i64, zero-init; placeholder in M2, wired in M3).
+/// Free-list hit counter (i64, zero-init; wired in M3).
 /// Layout: bytes [48..56).
 pub(crate) const GLOBAL_FREE_LIST_HITS_OFFSET: u32 = 48;
+/// Running total of bytes returned to free lists (i64, zero-init; wired in M3).
+/// Used to compute peak live bytes: peak = max(total_bytes - freed_bytes, peak).
+/// Layout: bytes [56..64).
+pub(crate) const GLOBAL_FREED_BYTES_OFFSET: u32 = 56;
+
+// ---------------------------------------------------------------------------
+// Free-list head pointer table (M3).
+//
+// Each slot is an i64 payload pointer (0 = empty list). The intrusive link
+// word lives at payload_ptr - 8 (the refcount slot, reused as next-pointer
+// when the object is on the free list).
+//
+// Size-class layout (§3.2 of PLAN_PERCEUS.md):
+//
+//   Slot  Offset  Class
+//   0     64      chunk            (one fixed size per CHUNK_SIZE)
+//   1     72      header[1]
+//   2     80      header[2]
+//   3     88      header[4]
+//   4     96      header[8]
+//   5     104     header[16]
+//   6     112     header[32]
+//   7     120     header[64]
+//   8     128     header[128]
+//   9     136     tuple[1]
+//   10    144     tuple[2]
+//   11    152     tuple[3]
+//   12    160     tuple[4]
+//   13    168     tuple[5]
+//   14    176     tuple[6]
+//   15    184     tuple[7]
+//   16    192     tuple[8]
+//   17    200     record[1]
+//   18    208     record[2]
+//   19    216     record[3]
+//   20    224     record[4]
+//   21    232     record[5]
+//   22    240     record[6]
+//   23    248     record[7]
+//   24    256     record[8]
+//   25    264     closure[0]
+//   26    272     closure[1]
+//   27    280     closure[2]
+//   28    288     closure[3]
+//   29    296     closure[4]
+//   30    304     closure[5]
+//   31    312     closure[6]
+//   32    320     closure[7]
+//   33    328     closure[8]
+//   34    336     cell
+//   35    344     string[8]
+//   36    352     string[16]
+//   37    360     string[32]
+//   38    368     string[64]
+//   39    376     string[128]
+//   40    384     string[256]
+//   41    392     string[512]
+//   42    400     string[large]    (exact-size overflow; not recycled cross-class)
+//   (no slot 43; large allocs not freed to a list in M3)
+//
+// Total: 43 slots × 8 bytes = 344 bytes, occupying bytes [64..408).
+// ---------------------------------------------------------------------------
+
+pub(crate) const FREE_LIST_TABLE_BASE: u32 = 64;
+pub(crate) const FREE_LIST_SLOT_CHUNK: u32 = FREE_LIST_TABLE_BASE; // slot 0
+
+// header[k] slots: k ∈ {1,2,4,8,16,32,64,128} → slots 1..=8
+pub(crate) const FREE_LIST_SLOT_HEADER_BASE: u32 = FREE_LIST_TABLE_BASE + 8; // slot 1 = header[1]
+
+// tuple[a] slots: a ∈ {1..8} → slots 9..=16
+pub(crate) const FREE_LIST_SLOT_TUPLE_BASE: u32 = FREE_LIST_TABLE_BASE + 72; // slot 9 = tuple[1]
+
+// record[a] slots: a ∈ {1..8} → slots 17..=24
+pub(crate) const FREE_LIST_SLOT_RECORD_BASE: u32 = FREE_LIST_TABLE_BASE + 136; // slot 17 = record[1]
+
+// closure[s] slots: s ∈ {0..8} → slots 25..=33
+pub(crate) const FREE_LIST_SLOT_CLOSURE_BASE: u32 = FREE_LIST_TABLE_BASE + 200; // slot 25 = closure[0]
+
+// cell: slot 34
+pub(crate) const FREE_LIST_SLOT_CELL: u32 = FREE_LIST_TABLE_BASE + 272; // slot 34
+
+// string[b] slots: b ∈ {8,16,32,64,128,256,512,large} → slots 35..=42
+pub(crate) const FREE_LIST_SLOT_STRING_BASE: u32 = FREE_LIST_TABLE_BASE + 280; // slot 35 = string[8]
+
+/// Number of free-list head slots.
+pub(crate) const FREE_LIST_SLOT_COUNT: u32 = 43;
+
+/// First byte after the free-list table; this is where runtime heap data begins.
+pub(crate) const HEAP_BASE: u32 = FREE_LIST_TABLE_BASE + FREE_LIST_SLOT_COUNT * 8; // = 408
+
 pub(crate) const RUNTIME_ERROR_NONE: u32 = 0;
 pub(crate) const RUNTIME_ERROR_MEMORY_EXHAUSTION: u32 = 1;
-pub(crate) const HEAP_BASE: u32 = 56;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MemoryLayout {
