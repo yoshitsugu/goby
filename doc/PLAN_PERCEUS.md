@@ -862,6 +862,86 @@ to `doc/LANGUAGE_SPEC.md`.
       freshly allocated unique list and observes
       `free_list_hits > 0` on the subsequent allocation.
 
+#### M3 — Clarifications (added 2026-04-19)
+
+The checkboxes above stand; these notes only disambiguate points the
+implementer flagged. None of them weaken the acceptance criterion.
+
+**C1. `emit_alloc` name vs. existing `emit_alloc_with_flag`.** Step 1–5
+landed `emit_alloc_with_flag` (free-list pop + hits counter + bump
+fallback). The bullet "`emit_alloc(size_class, pw)` helper" refers to
+the *same* helper; the M3 task is to make it the **sole** bump-site
+entrypoint — i.e. port every remaining direct bump emission
+(`emit_alloc_from_top` call site) to go through
+`emit_alloc_with_flag(size_class, ...)`. No second helper is introduced.
+Renaming `emit_alloc_with_flag` to `emit_alloc` is optional and
+non-normative.
+
+**C2. `peak_bytes` formula.** The normative reading is:
+
+```
+peak_bytes = max over the run of (total_bytes − freed_bytes)
+```
+
+where `total_bytes` is the existing cumulative allocation counter
+(§S3) and `freed_bytes` is the new cumulative counter added by the
+free-list push path in this milestone (`GLOBAL_FREED_BYTES_OFFSET`,
+already reserved by Step 1). "bumped_bytes" in the original bullet is
+a synonym for `total_bytes`; rename accordingly. `peak_bytes` is
+updated on every `alloc` and every free-list push: after each
+counter write, compute `(total_bytes − freed_bytes)` and
+`i64.store` into `GLOBAL_PEAK_BYTES_OFFSET` only when the new value
+exceeds the stored one.
+
+**C3. Per-type child-drop dispatch.** §3.9 says "dispatch on the
+tagged value representation". For Perceus M3, implement this as
+follows:
+
+- **Per-size-class helpers.** One child-drop function per size class
+  with a static shape: `header[k]`, `tuple[a]`, `record[a]`,
+  `closure[s]`, `cell`, `string[b]`. These helpers have no runtime
+  tag test at the *shape* level — shape is fixed by size class.
+- **Per-slot tag test.** Inside each helper, every owning slot is
+  read and inspected with the existing `runtime_value.rs` tag scheme
+  to decide whether to recurse via `__goby_drop`. Unboxed ints /
+  booleans / unit skip the call. This is the only runtime tag check.
+- **`chunk` has no owning slots** at the per-element level for
+  primitive lists; for lists of heap values the element slot holds
+  tagged values and the same per-slot tag test applies.
+- **`large` bucket.** Uses an exact-size free-range list keyed by
+  size (§3.2). For M3 the child-drop is the same per-shape helper as
+  the would-be size class; size-class matching is what's relaxed,
+  not the shape.
+
+The M3 deliverable includes **all** owning-shape helpers, not just
+`Cell`. The current Step 1–5 commit only pushes `Cell`; Steps 6–7
+must extend child-drop to `header[k]`, `chunk` (when containing
+heap elements), `tuple[a]`, `record[a]`, and `closure[s]`.
+
+**C4. How the acceptance test gets a "unique list" without M4.** M3
+ships without automatic drop insertion. The acceptance test
+`drop_frees_unique_list` must therefore hand-construct the situation.
+Preferred shape:
+
+1. Compile a module that exposes (for testing only) an exported Wasm
+   function which allocates a list of known size class, returns the
+   payload pointer, and a second exported function which, given that
+   pointer, invokes `__goby_drop`.
+2. The integration test calls the first function, then the second,
+   then allocates again and reads `GLOBAL_FREE_LIST_HITS_OFFSET` via
+   `Memory::read` (pattern at `wasm_exec.rs`:861) and asserts > 0.
+
+Exporting these test-only entrypoints is acceptable; gate them on a
+`cfg(test)` or `EmitOptions::expose_perceus_test_exports` flag so they
+do not leak into release modules.
+
+**C5. Free-list intrusive next-pointer overwrites payload word 0.**
+This is intentional and correct: the object is dead (refcount 0) when
+pushed, so clobbering its payload is safe. The only constraint is
+that the size class has at least one word of payload — all §3.2
+classes satisfy this. No action needed; record this as the invariant
+that forbids zero-sized size classes.
+
 ### M4 — Static drop insertion, effect-aware
 
 The Perceus algorithm proper, with the closure and handler rules from
@@ -893,6 +973,92 @@ The Perceus algorithm proper, with the closure and handler rules from
 - [ ] **Acceptance:** residency test passes; all correctness tests
       pass; `cargo test` green.
 
+#### M4 — Clarifications (added 2026-04-19)
+
+**C1. `OwnershipMap` shape.** Keyed by `BindingId` (parameters and
+`let`-bound names, including tuple / record destructurings). Values are
+`Owned | Borrowed` (M4 only emits `Owned`). Per-use markers (last-use,
+non-last-use) are **not** stored in the map — they are computed on
+demand during `drop_insert` by a reverse-order scan inside each basic
+block (§3.7). Rationale: keeping the map shallow avoids having to
+invalidate it when `drop_insert` rewrites the tree.
+
+**C2. Pass granularity.** `insert_drops` runs **per `IrDecl`**. The
+module-level pipeline calls it in a loop over all decls.
+`closure_capture::materialize_envs` has already run, so env-slot
+reads appear as ordinary `Var`s over a synthetic binding whose type is
+the env record. The per-decl contract is: the returned `IrDecl` is
+semantically equivalent modulo inserted `Dup` / `Drop` nodes.
+
+**C3. Pipeline-ordering assertion.** "Startup" means the first call to
+`compile_module_entrypoint` (`crates/goby-wasm/src/execution_plan.rs`)
+and to the interpreter's driver
+(`crates/goby-core/src/interp*`). Concretely: a single
+`assert_perceus_pipeline_order()` helper in `goby-core` is called by
+both drivers before they iterate decls. The assertion compares a
+`Vec<&'static str>` of pass names against a fixed expected list from
+§3.8. It panics (not a typed error) because mis-ordering is a compile-
+time wiring bug, not a user-visible condition.
+
+**C4. IR-node lowering (new — not covered by §3.9).** M4 introduces
+`CompExpr::Dup` and `CompExpr::Drop` but §3.9 only spells out the
+child-drop helpers. Backend lowering responsibility split:
+
+- `CompExpr::Drop { value }` lowers to a call to the module-level
+  `__goby_drop` (already emitted by M3). The argument is the payload
+  pointer; non-heap values short-circuit inside `__goby_drop` via a
+  tag check at entry.
+- `CompExpr::Dup { value }` lowers to a new module-level
+  `__goby_dup` helper (emitted by M4): sentinel check, else i64-
+  increment the refcount at `ptr - PTR_BYTES`. Emit once per module
+  alongside `__goby_drop`.
+- Interpreter lowering: in `goby-core`'s interpreter, `Dup` /
+  `Drop` become no-ops at the value level but must still drive the
+  runtime refcount if the interpreter later gains a heap model. For
+  M4, the interpreter treats them as `Unit`-producing no-ops and
+  the perceus tests run against the Wasm backend.
+
+**C5. Multi-resume continuation-drop cascade (§3.5).** The IR-level
+implementation is: at `WithHandler` lowering, each owned binding live
+across the handler call gets a `Dup` inserted before the handler
+invocation. The captured-continuation object conceptually owns one
+refcount per such binding. When the continuation is dropped
+(completion or explicit abandon), the continuation object's child-
+drop runs `Drop` on each captured binding. M4 does **not** need to
+change the Wasm effect-handler ABI; it only needs `drop_insert` to
+emit the extra `Dup`s and to treat `Resume` as a borrow of the
+captured frame (reads without consuming). If multi-resume is
+invoked N times, each `Resume` issues its own `Dup` over the
+preserved bindings; if invoked zero times, the captured refcounts
+are released by the continuation-object drop path.
+
+**C6. Test-name disambiguation.**
+
+- `mut_rec_drop` → test that a mutually recursive pair of
+  functions, each of which heap-allocates and returns the
+  allocation to the other, does not leak: inserted drops cover
+  both call boundaries.
+- `partial_application_drop` → when a curried partial application
+  is constructed and then dropped without being fully applied,
+  the captured arguments are released.
+- `closure_captures_heap_values` → a closure that captures a
+  list by value sees its env dropped when the closure itself is
+  dropped; nothing runs the captured list's drop twice.
+- `case_heap_bound_pattern` → `case xs { [x, ..rest] -> … }`
+  leaves both `x` and `rest` owned; the non-matching arm drops
+  `xs`; the matching arm drops `xs` after binding `x` and
+  `rest`, and drops whichever of `x` / `rest` is unused in the
+  arm body.
+
+**C7. Handler-boundary rules interact with C5.** The rule "reuse does
+not cross a `PerformEffect`" (§3.7) is an M5 concern, not M4. M4
+only needs to ensure `drop_insert`'s live-across dup pass does not
+mistake a `PerformEffect` for an ordinary call. Concretely:
+`PerformEffect` and `WithHandler` contribute to the "live across"
+set exactly like an ordinary call, but they force the enclosing
+block to end (§3.7) so last-use analysis within the block is
+unaffected.
+
 ### M4.5 — Borrow inference for hot parameters
 
 - [ ] Extend `ownership_classify` to mark a parameter `borrowed` iff
@@ -916,6 +1082,75 @@ The Perceus algorithm proper, with the closure and handler rules from
       `list_case.gb` show at least 20% reduction in `total_bytes` vs
       their M4 values (the M4 values are recorded in the PR
       description).
+
+#### M4.5 — Clarifications (added 2026-04-19)
+
+**C1. Fixpoint initial state.** Start every parameter `Borrowed` and
+**demote** on violation of (a)/(b)/(c). This is the "optimistic"
+direction. Rationale: a parameter that never appears in a `Dup` /
+heap-store / return position stays `Borrowed` at fixpoint. Starting
+from `Owned` would require a separate liveness witness for every
+borrow and never converges to the same set. Iterate decl-by-decl in
+any order until no decl's `OwnershipMap` changes in a full pass.
+
+**C2. "Flows into" (condition c) — operational definition.** A use of
+parameter `p` at occurrence `u` "flows into" operation `O` iff `u` is
+the direct operand of `O`, or `u` appears in a
+`CompExpr::Let { bind, value: u, body }` where every occurrence of
+`bind` in `body` also flows into some `O`. Concretely:
+
+- `p` read inside a `BinOp`, `ListGet`, `TupleProject`,
+  `RecordProject`, `Compare`, `Not`, or arithmetic operation —
+  **flows pure**.
+- `p` passed as argument to `Call f ... p ...` — flows pure iff `f`'s
+  matching parameter position is `Borrowed` in the current fixpoint
+  iterate.
+- `p` returned (appears in a tail `Value` position), stored in a
+  `ListLit` / `TupleLit` / `RecordLit` / `CreateClosure` field, used
+  in `AssignIndex` as the list target, or passed to an `Owned`
+  callee parameter — **demotes** `p` to `Owned`.
+- `p` used as scrutinee of `Case` — recurse: if every arm treats the
+  binding-forms it produces as a borrow (no further-violating use),
+  the scrutinee usage is a borrow.
+
+This is deliberately a local, syntax-directed analysis; no alias or
+escape analysis.
+
+**C3. Recursive and mutually recursive functions.** Treat every decl
+in a strongly connected component as one fixpoint subject. Initial
+state `Borrowed`; a violation in any decl demotes the matching
+parameter across **all** decls in the SCC before the next iterate.
+
+**C4. Where `tests/alloc_baseline.txt` lives.**
+`crates/goby-wasm/tests/alloc_baseline.txt`. The integration test
+file `crates/goby-wasm/tests/alloc_baseline.rs` iterates it, runs
+each example through the host-owned execution path (already supports
+`--debug-alloc-stats` reads via `Memory::read`), and compares
+`total_bytes`.
+
+**C5. Baseline-number recording procedure.** "Measured at the M4.5
+branch + 10% margin" is ambiguous; the normative procedure is:
+
+1. On the implementation branch for M4.5, after the borrow-inference
+   change is in place and all tests pass, run
+   `cargo test -p goby-wasm --features alloc_baseline_record`
+   (new cargo feature gate, just for this bootstrap) which regenerates
+   `alloc_baseline.txt` with the observed `total_bytes` for every
+   example.
+2. Multiply each value by 1.10 (round up to an integer) and commit
+   that file. Future runs fail if the observed number exceeds it.
+3. Record the M4-branch `total_bytes` for `fold.gb` and
+   `list_case.gb` in the PR description so the 20% reduction
+   claim is verifiable against a specific commit SHA. The 20%
+   reduction is checked against those recorded M4 numbers, not
+   against `alloc_baseline.txt`.
+
+**C6. Example coverage.** "Every example" means every `.gb` file in
+`examples/` that currently runs under the GeneralLowered Wasm path
+and terminates within the existing CI timeout. Examples that already
+require `--max-memory-mb` (e.g. `refcount_reuse_loop.gb`) are
+excluded from `alloc_baseline.txt` and covered separately by the M5
+acceptance test.
 
 ### M5 — Reuse analysis
 
