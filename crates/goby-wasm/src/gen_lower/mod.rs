@@ -1491,6 +1491,7 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
             return Ok(Err(GeneralLowerUnsupportedReason::NoIrDecl));
         }
     };
+    let ir_module = goby_core::perceus::run_perceus_passes(&ir_module);
     let Some(ir_decl) = ir_module.decls.iter().find(|decl| decl.name == "main") else {
         return Ok(Err(GeneralLowerUnsupportedReason::NoMainExecPlan));
     };
@@ -1678,6 +1679,14 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
                         ));
                     }
                 };
+                let aux_ir_decl =
+                    goby_core::perceus::run_perceus_passes(&goby_core::ir::IrModule {
+                        decls: vec![aux_ir_decl],
+                    })
+                    .decls
+                    .into_iter()
+                    .next()
+                    .expect("single-decl perceus rewrite must preserve decl");
                 if let Some(shape) = fold_prepend_callback_shape(&aux_ir_decl) {
                     fold_prepend_callback_shapes.insert(aux_ir_decl.name.clone(), shape);
                 }

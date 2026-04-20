@@ -1,10 +1,10 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-20 (Perceus M4 groundwork: shared IR Dup/Drop + Wasm __goby_dup/__goby_drop lowering)
+Last updated: 2026-04-20 (Perceus M4 first insertion slice: minimal ownership classify + immutable-let drop insertion)
 
 ## Current Focus
 
-**Perceus M3 complete. M4 groundwork is now in tree.** All M3 deliverables landed, and the first M4 runtime/IR slice is in place:
+**Perceus M3 complete. M4 has started.** All M3 deliverables landed, and the first M4 ownership/drop insertion slice is now in tree:
 
 - Free-list head table in linear memory (`HEAP_BASE` 56 → 408), `SizeClass` enum,
   `emit_alloc_with_flag` (free-list pop + bump fallback), `emit_free_list_push`.
@@ -29,9 +29,21 @@ Last updated: 2026-04-20 (Perceus M4 groundwork: shared IR Dup/Drop + Wasm __gob
   - emitter now generates module-local `__goby_dup` alongside `__goby_drop`
   - Perceus pipeline-order assertion helper added and called from general-lower
     and runtime-entry drivers
+- M4 first insertion slice landed on 2026-04-20:
+  - `goby-core::perceus::run_perceus_passes` now runs a minimal
+    `ownership_classify` + `drop_insert` rewrite over IR modules
+  - fresh immutable `let` bindings of aggregate literals/interpolated strings
+    can now get a terminal `Drop`
+  - the rewrite is wired into general-lower for user decls and stdlib-loaded
+    aux decls
+  - current guardrails:
+    - `let mut` is intentionally excluded for now
+    - lambda values are intentionally treated conservatively (no ownership/drop
+      insertion yet) to avoid misclassifying zero-capture function handles
 
-Next: **Perceus M4 proper** — ownership classification and static drop insertion
-pass that actually emits `Dup` / `Drop` into declaration bodies.
+Next: **Perceus M4 continuation** — extend ownership classification beyond the
+current immutable-literal subset, add safe handling for mutable bindings and
+lambda/closure ownership, then begin real `Dup` insertion.
 
 ---
 
@@ -87,10 +99,17 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 
 ## Immediate Next Actions
 
-1. **Perceus M4:** ownership classification pass and static drop insertion over
-   `IrDecl` bodies now that `Dup` / `Drop` and `__goby_dup` exist.
+1. **Perceus M4:** extend the current minimal pass so mutable bindings and
+   closure-producing paths are classified safely, then add `Dup` insertion for
+   shared/forwarded ownership edges.
 2. Extend `tooling/` syntax highlight definitions to cover `^` (tracked as a
    TODO under `doc/PLAN.md` §4.2.1).
+
+## Verification snapshot (2026-04-20, M4 first insertion slice)
+
+- `cargo fmt --all --check` — pass.
+- `cargo check` — pass.
+- `cargo test` — pass (workspace green).
 
 ## Verification snapshot (2026-04-18, M2 debug-alloc-stats slice)
 
