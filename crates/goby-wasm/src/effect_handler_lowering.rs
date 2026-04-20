@@ -223,6 +223,20 @@ fn rewrite_comp(
                 })
                 .collect::<Result<Vec<_>, CodegenError>>()?,
         }),
+        CompExpr::Dup { value } => continue_with(
+            CompExpr::Dup {
+                value: Box::new(rewrite_value(value, names)?),
+            },
+            k,
+            names,
+        ),
+        CompExpr::Drop { value } => continue_with(
+            CompExpr::Drop {
+                value: Box::new(rewrite_value(value, names)?),
+            },
+            k,
+            names,
+        ),
         CompExpr::PerformEffect { effect, op, args } => {
             if let Some(rewritten) = rewrite_handled_op_invocation(
                 Some(effect.as_str()),

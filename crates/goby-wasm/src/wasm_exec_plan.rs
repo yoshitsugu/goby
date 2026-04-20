@@ -163,6 +163,7 @@ fn comp_to_expr(comp: &CompExpr) -> Option<Expr> {
                 .map(ir_case_arm_to_ast)
                 .collect::<Option<Vec<_>>>()?,
         }),
+        CompExpr::Dup { .. } | CompExpr::Drop { .. } => None,
         CompExpr::AssignIndex { .. } => None,
     }
 }

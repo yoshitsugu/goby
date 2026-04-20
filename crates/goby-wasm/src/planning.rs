@@ -418,6 +418,9 @@ fn inspect_ir_comp(
         CompExpr::Assign { value, .. } => {
             inspect_ir_comp(value, out, declaration_names, qualified_operation_index);
         }
+        CompExpr::Dup { value } | CompExpr::Drop { value } => {
+            inspect_ir_value(value, out, declaration_names, qualified_operation_index);
+        }
         CompExpr::Case { scrutinee, arms } => {
             inspect_ir_value(scrutinee, out, declaration_names, qualified_operation_index);
             for arm in arms {
@@ -536,6 +539,7 @@ fn ir_comp_contains_resume(comp: &CompExpr) -> bool {
             ir_comp_contains_resume(then_) || ir_comp_contains_resume(else_)
         }
         CompExpr::Assign { value, .. } => ir_comp_contains_resume(value),
+        CompExpr::Dup { .. } | CompExpr::Drop { .. } => false,
         CompExpr::Case { arms, .. } => arms.iter().any(|arm| ir_comp_contains_resume(&arm.body)),
         CompExpr::Handle { clauses } => clauses
             .iter()

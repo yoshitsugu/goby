@@ -307,6 +307,9 @@ fn collect_comp_lambda_envs(
                 collect_comp_lambda_envs(&arm.body, &mut arm_bindings, known_decls, envs);
             }
         }
+        CompExpr::Dup { value } | CompExpr::Drop { value } => {
+            collect_value_lambda_envs(value, bindings, known_decls, envs);
+        }
         CompExpr::PerformEffect { args, .. } => {
             for arg in args {
                 collect_value_lambda_envs(arg, bindings, known_decls, envs);
@@ -462,6 +465,9 @@ fn analyze_comp(
                 bind_case_pattern(&arm.pattern, &mut arm_bindings);
                 analyze_comp(&arm.body, &arm_bindings, known_decls, captures);
             }
+        }
+        CompExpr::Dup { value } | CompExpr::Drop { value } => {
+            analyze_value(value, bindings, known_decls, captures);
         }
         CompExpr::PerformEffect { args, .. } => {
             for arg in args {

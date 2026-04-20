@@ -2514,9 +2514,9 @@ main =
 #[test]
 fn drop_frees_unique_list_and_subsequent_alloc_gets_free_list_hit() {
     use wasmtime::{Config, Engine, Linker, Module as WasmModule, Store};
+    use wasmtime_wasi::WasiCtxBuilder;
     use wasmtime_wasi::p1::{self, WasiP1Ctx};
     use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
-    use wasmtime_wasi::WasiCtxBuilder;
 
     // Compile a minimal Goby module (needs Print+Read for GeneralLowered path)
     // with test exports enabled.
@@ -2554,28 +2554,104 @@ main =
 
     // Register stub host intrinsics (no grapheme calls in this test).
     let module_name = crate::host_runtime::HostIntrinsicImport::MODULE;
-    linker.func_wrap(module_name, "__goby_value_to_string", |_: i64| -> i64 { 0 }).ok();
-    linker.func_wrap(module_name, "__goby_string_each_grapheme_count", |_: i64| -> i64 { 0 }).ok();
-    linker.func_wrap(module_name, "__goby_string_each_grapheme_state", |_: i64, _: i64| -> i64 { 0 }).ok();
-    linker.func_wrap(module_name, "__goby_string_concat", |_: i64, _: i64| -> i64 { 0 }).ok();
-    linker.func_wrap(module_name, "__goby_list_join_string", |_: i64, _: i64| -> i64 { 0 }).ok();
-    linker.func_wrap(module_name, "__goby_string_graphemes_list", |_: i64| -> i64 { 0 }).ok();
-    linker.func_wrap(module_name, "__goby_string_split_lines", |_: i64| -> i64 { 0 }).ok();
+    linker
+        .func_wrap(module_name, "__goby_value_to_string", |_: i64| -> i64 { 0 })
+        .ok();
+    linker
+        .func_wrap(
+            module_name,
+            "__goby_string_each_grapheme_count",
+            |_: i64| -> i64 { 0 },
+        )
+        .ok();
+    linker
+        .func_wrap(
+            module_name,
+            "__goby_string_each_grapheme_state",
+            |_: i64, _: i64| -> i64 { 0 },
+        )
+        .ok();
+    linker
+        .func_wrap(
+            module_name,
+            "__goby_string_concat",
+            |_: i64, _: i64| -> i64 { 0 },
+        )
+        .ok();
+    linker
+        .func_wrap(
+            module_name,
+            "__goby_list_join_string",
+            |_: i64, _: i64| -> i64 { 0 },
+        )
+        .ok();
+    linker
+        .func_wrap(
+            module_name,
+            "__goby_string_graphemes_list",
+            |_: i64| -> i64 { 0 },
+        )
+        .ok();
+    linker
+        .func_wrap(module_name, "__goby_string_split_lines", |_: i64| -> i64 {
+            0
+        })
+        .ok();
 
-    let instance = linker.instantiate(&mut store, &wasm_module).expect("instantiate");
-    let memory = instance.get_memory(&mut store, "memory").expect("memory export");
+    let instance = linker
+        .instantiate(&mut store, &wasm_module)
+        .expect("instantiate");
+    let memory = instance
+        .get_memory(&mut store, "memory")
+        .expect("memory export");
 
     // Manually initialize global slots that _start would set (heap cursor, host bump, stats).
     // This avoids proc_exit interaction: we don't call _start, so the store stays valid.
     let mc = &crate::memory_config::RUNTIME_MEMORY_CONFIG;
     let initial_cursor = mc.initial_linear_memory_bytes() - mc.host_bump_reserved_bytes;
     let host_bump = mc.host_bump_start();
-    memory.write(&mut store, crate::layout::GLOBAL_HEAP_CURSOR_OFFSET as usize, &initial_cursor.to_le_bytes()).expect("init cursor");
-    memory.write(&mut store, crate::layout::GLOBAL_HEAP_FLOOR_OFFSET as usize, &(crate::layout::HEAP_BASE).to_le_bytes()).expect("init floor");
-    memory.write(&mut store, crate::layout::GLOBAL_HOST_BUMP_CURSOR_OFFSET as usize, &host_bump.to_le_bytes()).expect("init host bump");
-    memory.write(&mut store, crate::layout::GLOBAL_FREE_LIST_HITS_OFFSET as usize, &0u64.to_le_bytes()).expect("init hits");
-    memory.write(&mut store, crate::layout::GLOBAL_ALLOC_BYTES_TOTAL_OFFSET as usize, &0u64.to_le_bytes()).expect("init alloc total");
-    memory.write(&mut store, crate::layout::GLOBAL_FREED_BYTES_OFFSET as usize, &0u64.to_le_bytes()).expect("init freed");
+    memory
+        .write(
+            &mut store,
+            crate::layout::GLOBAL_HEAP_CURSOR_OFFSET as usize,
+            &initial_cursor.to_le_bytes(),
+        )
+        .expect("init cursor");
+    memory
+        .write(
+            &mut store,
+            crate::layout::GLOBAL_HEAP_FLOOR_OFFSET as usize,
+            &(crate::layout::HEAP_BASE).to_le_bytes(),
+        )
+        .expect("init floor");
+    memory
+        .write(
+            &mut store,
+            crate::layout::GLOBAL_HOST_BUMP_CURSOR_OFFSET as usize,
+            &host_bump.to_le_bytes(),
+        )
+        .expect("init host bump");
+    memory
+        .write(
+            &mut store,
+            crate::layout::GLOBAL_FREE_LIST_HITS_OFFSET as usize,
+            &0u64.to_le_bytes(),
+        )
+        .expect("init hits");
+    memory
+        .write(
+            &mut store,
+            crate::layout::GLOBAL_ALLOC_BYTES_TOTAL_OFFSET as usize,
+            &0u64.to_le_bytes(),
+        )
+        .expect("init alloc total");
+    memory
+        .write(
+            &mut store,
+            crate::layout::GLOBAL_FREED_BYTES_OFFSET as usize,
+            &0u64.to_le_bytes(),
+        )
+        .expect("init freed");
 
     // Call __test_alloc_list_1chunk → get tagged header ptr.
     let alloc_fn = instance
@@ -2597,7 +2673,11 @@ main =
     // Read GLOBAL_FREE_LIST_HITS_OFFSET from linear memory.
     let mut hits_bytes = [0u8; 8];
     memory
-        .read(&store, crate::layout::GLOBAL_FREE_LIST_HITS_OFFSET as usize, &mut hits_bytes)
+        .read(
+            &store,
+            crate::layout::GLOBAL_FREE_LIST_HITS_OFFSET as usize,
+            &mut hits_bytes,
+        )
         .expect("read free_list_hits");
     let hits = u64::from_le_bytes(hits_bytes);
 

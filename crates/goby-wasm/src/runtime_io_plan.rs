@@ -434,6 +434,7 @@ fn ir_has_read_op(comp: &CompExpr) -> bool {
         CompExpr::If { then_, else_, .. } => ir_has_read_op(then_) || ir_has_read_op(else_),
         CompExpr::Call { .. } => false,
         CompExpr::Assign { value, .. } => ir_has_read_op(value),
+        CompExpr::Dup { .. } | CompExpr::Drop { .. } => false,
         CompExpr::Case { arms, .. } => arms.iter().any(|arm| ir_has_read_op(&arm.body)),
         CompExpr::Handle { clauses } => clauses.iter().any(|c| ir_has_read_op(&c.body)),
         CompExpr::WithHandler { handler, body } => ir_has_read_op(handler) || ir_has_read_op(body),
@@ -461,6 +462,7 @@ fn ir_has_specific_read_op(comp: &CompExpr, target_op: &str) -> bool {
         }
         CompExpr::Call { .. } => false,
         CompExpr::Assign { value, .. } => ir_has_specific_read_op(value, target_op),
+        CompExpr::Dup { .. } | CompExpr::Drop { .. } => false,
         CompExpr::Case { arms, .. } => arms
             .iter()
             .any(|arm| ir_has_specific_read_op(&arm.body, target_op)),

@@ -409,6 +409,9 @@ fn comp_expr_mentions_var(comp: &CompExpr, target: &str) -> bool {
                     .iter()
                     .any(|arm| comp_expr_mentions_var(&arm.body, target))
         }
+        CompExpr::Dup { value } | CompExpr::Drop { value } => {
+            value_expr_mentions_var(value, target)
+        }
         CompExpr::PerformEffect { args, .. } => {
             args.iter().any(|arg| value_expr_mentions_var(arg, target))
         }
@@ -563,6 +566,12 @@ fn rename_comp_var(comp: &CompExpr, from: &str, to: &str) -> CompExpr {
                     body: rename_comp_var(&arm.body, from, to),
                 })
                 .collect(),
+        },
+        CompExpr::Dup { value } => CompExpr::Dup {
+            value: Box::new(rename_value_var(value, from, to)),
+        },
+        CompExpr::Drop { value } => CompExpr::Drop {
+            value: Box::new(rename_value_var(value, from, to)),
         },
         CompExpr::PerformEffect { effect, op, args } => CompExpr::PerformEffect {
             effect: effect.clone(),
@@ -1762,6 +1771,7 @@ fn contains_self_decl_call(comp: &CompExpr, decl_name: &str) -> bool {
         CompExpr::Case { arms, .. } => arms
             .iter()
             .any(|arm| contains_self_decl_call(&arm.body, decl_name)),
+        CompExpr::Dup { .. } | CompExpr::Drop { .. } => false,
         CompExpr::PerformEffect { .. } => false,
         CompExpr::Handle { clauses } => clauses
             .iter()
@@ -2293,6 +2303,18 @@ fn lower_comp_inner(
             known_decls,
             lambda_decls,
         ),
+        CompExpr::Dup { value } => {
+            let mut instrs = lower_value_ctx(value, aliases, bindings, known_decls)?;
+            instrs.push(WasmBackendInstr::RefCountDup);
+            instrs.push(WasmBackendInstr::I64Const(encode_unit()));
+            Ok(instrs)
+        }
+        CompExpr::Drop { value } => {
+            let mut instrs = lower_value_ctx(value, aliases, bindings, known_decls)?;
+            instrs.push(WasmBackendInstr::RefCountDrop);
+            instrs.push(WasmBackendInstr::I64Const(encode_unit()));
+            Ok(instrs)
+        }
 
         other => Err(LowerError::UnsupportedForm {
             node: format!("{:?}", other),
@@ -5345,6 +5367,39 @@ build n =
         assert!(
             !has_in_place,
             "near-miss (rhs reads root) should NOT use ListSetInPlace"
+        );
+    }
+
+    #[test]
+    fn lower_dup_and_drop_emit_refcount_backend_ops() {
+        let dup = lower_comp(&CompExpr::Dup {
+            value: Box::new(ValueExpr::Var("xs".to_string())),
+        })
+        .expect("dup should lower");
+        assert_eq!(
+            dup,
+            vec![
+                WasmBackendInstr::LoadLocal {
+                    name: "xs".to_string()
+                },
+                WasmBackendInstr::RefCountDup,
+                WasmBackendInstr::I64Const(encode_unit()),
+            ]
+        );
+
+        let drop_instrs = lower_comp(&CompExpr::Drop {
+            value: Box::new(ValueExpr::Var("xs".to_string())),
+        })
+        .expect("drop should lower");
+        assert_eq!(
+            drop_instrs,
+            vec![
+                WasmBackendInstr::LoadLocal {
+                    name: "xs".to_string()
+                },
+                WasmBackendInstr::RefCountDrop,
+                WasmBackendInstr::I64Const(encode_unit()),
+            ]
         );
     }
 }

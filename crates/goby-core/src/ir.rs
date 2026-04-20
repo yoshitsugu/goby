@@ -157,6 +157,14 @@ pub enum CompExpr {
         scrutinee: Box<ValueExpr>,
         arms: Vec<IrCaseArm>,
     },
+    /// Increment the heap refcount of `value` when it is a heap pointer.
+    ///
+    /// Produces `Unit`.
+    Dup { value: Box<ValueExpr> },
+    /// Decrement the heap refcount of `value`; on zero, run child-drop.
+    ///
+    /// Produces `Unit`.
+    Drop { value: Box<ValueExpr> },
     /// Effect operation invocation.
     ///
     /// This node is constructable and printable. Lowering from
@@ -559,6 +567,18 @@ fn fmt_comp(out: &mut String, c: &CompExpr, depth: usize) {
                 fmt_comp(out, &arm.body, depth + 2);
             }
         }
+        CompExpr::Dup { value } => {
+            indent(out, depth);
+            out.push_str("dup ");
+            fmt_value(out, value);
+            out.push('\n');
+        }
+        CompExpr::Drop { value } => {
+            indent(out, depth);
+            out.push_str("drop ");
+            fmt_value(out, value);
+            out.push('\n');
+        }
         CompExpr::PerformEffect { effect, op, args } => {
             indent(out, depth);
             out.push_str("perform ");
@@ -724,6 +744,7 @@ fn validate_comp(c: &CompExpr, decl_name: &str) -> Result<(), IrValidateError> {
             }
             validate_comp(value, decl_name)
         }
+        CompExpr::Dup { value } | CompExpr::Drop { value } => validate_value(value, decl_name),
         CompExpr::Case { scrutinee, arms } => {
             if arms.is_empty() {
                 return Err(IrValidateError {
@@ -1382,6 +1403,49 @@ mod tests {
                     else_: Box::new(val(ValueExpr::IntLit(0))),
                 }),
                 body: Box::new(val(ValueExpr::Var("v".into()))),
+            },
+        )]);
+        assert!(validate_ir(&m).is_ok());
+    }
+
+    #[test]
+    fn fmt_dup_and_drop_nodes() {
+        let m = simple_module(vec![simple_decl(
+            "rc_ops",
+            IrType::Unit,
+            CompExpr::Seq {
+                stmts: vec![
+                    CompExpr::Dup {
+                        value: Box::new(ValueExpr::Var("xs".into())),
+                    },
+                    CompExpr::Drop {
+                        value: Box::new(ValueExpr::Var("xs".into())),
+                    },
+                ],
+                tail: Box::new(val(ValueExpr::Unit)),
+            },
+        )]);
+        assert_eq!(
+            fmt_ir(&m),
+            "decl rc_ops: Unit =\n  seq\n    dup xs\n    drop xs\n  =>\n    ()\n\n"
+        );
+    }
+
+    #[test]
+    fn validate_ok_dup_and_drop_nodes() {
+        let m = simple_module(vec![simple_decl(
+            "rc_ops",
+            IrType::Unit,
+            CompExpr::Seq {
+                stmts: vec![
+                    CompExpr::Dup {
+                        value: Box::new(ValueExpr::Var("xs".into())),
+                    },
+                    CompExpr::Drop {
+                        value: Box::new(ValueExpr::Var("xs".into())),
+                    },
+                ],
+                tail: Box::new(val(ValueExpr::Unit)),
             },
         )]);
         assert!(validate_ir(&m).is_ok());

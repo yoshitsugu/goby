@@ -1,10 +1,10 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-19 (Perceus M3 complete: __goby_drop full child-drop, acceptance test green)
+Last updated: 2026-04-20 (Perceus M4 groundwork: shared IR Dup/Drop + Wasm __goby_dup/__goby_drop lowering)
 
 ## Current Focus
 
-**Perceus M3 complete.** All M3 deliverables landed:
+**Perceus M3 complete. M4 groundwork is now in tree.** All M3 deliverables landed, and the first M4 runtime/IR slice is in place:
 
 - Free-list head table in linear memory (`HEAP_BASE` 56 → 408), `SizeClass` enum,
   `emit_alloc_with_flag` (free-list pop + bump fallback), `emit_free_list_push`.
@@ -22,9 +22,16 @@ Last updated: 2026-04-19 (Perceus M3 complete: __goby_drop full child-drop, acce
 - Acceptance test `drop_frees_unique_list_and_subsequent_alloc_gets_free_list_hit`
   passes: allocates 1-chunk list, drops it, re-allocates, asserts
   `GLOBAL_FREE_LIST_HITS_OFFSET > 0`.
+- M4 groundwork landed on 2026-04-20:
+  - shared IR now has `CompExpr::Dup` / `CompExpr::Drop`
+  - IR formatting/validation and traversal helpers understand those nodes
+  - general Wasm lowering maps them to backend refcount ops
+  - emitter now generates module-local `__goby_dup` alongside `__goby_drop`
+  - Perceus pipeline-order assertion helper added and called from general-lower
+    and runtime-entry drivers
 
-Next: **Perceus M4** — static drop insertion (`DropRef` IR node, ownership
-analysis pass, `__goby_dup` helper).
+Next: **Perceus M4 proper** — ownership classification and static drop insertion
+pass that actually emits `Dup` / `Drop` into declaration bodies.
 
 ---
 
@@ -80,8 +87,8 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 
 ## Immediate Next Actions
 
-1. **Perceus M4:** `DropRef` IR node, ownership analysis pass
-   (`perceus_ownership.rs`), `__goby_dup` helper emission.
+1. **Perceus M4:** ownership classification pass and static drop insertion over
+   `IrDecl` bodies now that `Dup` / `Drop` and `__goby_dup` exist.
 2. Extend `tooling/` syntax highlight definitions to cover `^` (tracked as a
    TODO under `doc/PLAN.md` §4.2.1).
 
@@ -110,6 +117,6 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 | Typechecker | Stable (`^`: Int × Int → Int) |
 | IR (`ir.rs`) | Stable (`IrBinOp::BitXor` present) |
 | IR lowering (`ir_lower.rs`) | Stable |
-| Wasm backend | memory64 complete; Perceus M1 + M2 + M3 complete |
+| Wasm backend | memory64 complete; Perceus M1 + M2 + M3 complete; M4 runtime helpers (`Dup`/`Drop` lowering, `__goby_dup`) present |
 | Effect handlers | Non-tail / multi-resume still produces `BackendLimitation` |
-| GC / reclamation | Bump allocator + refcount + free-list + `__goby_drop` (M3 complete); M4 (static drop insertion) next |
+| GC / reclamation | Bump allocator + refcount + free-list + `__goby_drop`; M4 groundwork present, static drop insertion still next |

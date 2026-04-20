@@ -35,6 +35,7 @@ use std::collections::{HashMap, HashSet};
 
 use goby_core::Module;
 use goby_core::ir::{CompExpr, IrCaseArm, IrDecl, IrHandlerClause, IrInterpPart, ValueExpr};
+use goby_core::perceus::assert_perceus_pipeline_order;
 use goby_core::stdlib::StdlibResolver;
 use goby_core::types::{TypeExpr, parse_function_type, parse_type_expr};
 
@@ -147,6 +148,7 @@ fn comp_mentions_name(comp: &CompExpr, target: &str) -> bool {
                 || path.iter().any(|index| value_mentions_name(index, target))
                 || comp_mentions_name(value, target)
         }
+        CompExpr::Dup { value } | CompExpr::Drop { value } => value_mentions_name(value, target),
         CompExpr::Case { scrutinee, arms } => {
             value_mentions_name(scrutinee, target)
                 || arms.iter().any(|arm| comp_mentions_name(&arm.body, target))
@@ -493,6 +495,20 @@ fn rewrite_comp_fold_prepend_callbacks(
                 })
                 .collect(),
         },
+        CompExpr::Dup { value } => CompExpr::Dup {
+            value: Box::new(rewrite_value_fold_prepend_callbacks(
+                value,
+                callback_shapes,
+                aliases,
+            )),
+        },
+        CompExpr::Drop { value } => CompExpr::Drop {
+            value: Box::new(rewrite_value_fold_prepend_callbacks(
+                value,
+                callback_shapes,
+                aliases,
+            )),
+        },
         CompExpr::PerformEffect { effect, op, args } => CompExpr::PerformEffect {
             effect: effect.clone(),
             op: op.clone(),
@@ -666,6 +682,7 @@ fn has_runtime_read_effect(comp: &CompExpr) -> bool {
         }
         CompExpr::Call { .. } | CompExpr::Value(_) => false,
         CompExpr::Assign { value, .. } => has_runtime_read_effect(value),
+        CompExpr::Dup { .. } | CompExpr::Drop { .. } => false,
         CompExpr::Case { arms, .. } => arms.iter().any(|arm| has_runtime_read_effect(&arm.body)),
         CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => false,
         CompExpr::AssignIndex { path, value, .. } => {
@@ -693,6 +710,7 @@ fn has_handler_constructs(comp: &CompExpr) -> bool {
         }
         CompExpr::Call { .. } => false,
         CompExpr::Assign { value, .. } => has_handler_constructs(value),
+        CompExpr::Dup { value } | CompExpr::Drop { value } => value_has_handler_constructs(value),
         CompExpr::Case { arms, .. } => arms.iter().any(|arm| has_handler_constructs(&arm.body)),
         CompExpr::PerformEffect { .. } => false,
     }
@@ -717,6 +735,9 @@ fn has_handler_rewrite_entrypoints(comp: &CompExpr) -> bool {
         }
         CompExpr::Call { .. } => false,
         CompExpr::Assign { value, .. } => has_handler_rewrite_entrypoints(value),
+        CompExpr::Dup { value } | CompExpr::Drop { value } => {
+            value_has_handler_rewrite_entrypoints(value)
+        }
         CompExpr::Case { arms, .. } => arms
             .iter()
             .any(|arm| has_handler_rewrite_entrypoints(&arm.body)),
@@ -740,6 +761,7 @@ fn has_rooted_list_update(comp: &CompExpr) -> bool {
         }
         CompExpr::Call { .. } | CompExpr::PerformEffect { .. } | CompExpr::Resume { .. } => false,
         CompExpr::Assign { value, .. } => has_rooted_list_update(value),
+        CompExpr::Dup { value } | CompExpr::Drop { value } => value_has_rooted_list_update(value),
         CompExpr::Case { arms, .. } => arms.iter().any(|arm| has_rooted_list_update(&arm.body)),
         CompExpr::Handle { clauses } => clauses
             .iter()
@@ -879,6 +901,9 @@ fn contains_future_handler_intrinsics(comp: &CompExpr) -> bool {
         | CompExpr::WithHandler { .. }
         | CompExpr::Resume { .. } => false,
         CompExpr::AssignIndex { value, .. } => contains_future_handler_intrinsics(value),
+        CompExpr::Dup { value } | CompExpr::Drop { value } => {
+            value_contains_future_handler_intrinsics(value)
+        }
     }
 }
 
@@ -948,6 +973,9 @@ fn comp_has_effect_boundary_activity(comp: &CompExpr) -> bool {
             .iter()
             .any(|arm| comp_has_effect_boundary_activity(&arm.body)),
         CompExpr::AssignIndex { value, .. } => comp_has_effect_boundary_activity(value),
+        CompExpr::Dup { value } | CompExpr::Drop { value } => {
+            value_has_effect_boundary_activity(value)
+        }
     }
 }
 
@@ -1014,6 +1042,7 @@ fn has_lambda_in_comp(comp: &CompExpr) -> bool {
             has_lambda_in_value(scrutinee) || arms.iter().any(|arm| has_lambda_in_comp(&arm.body))
         }
         CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => false,
+        CompExpr::Dup { value } | CompExpr::Drop { value } => has_lambda_in_value(value),
         CompExpr::AssignIndex { path, value, .. } => {
             path.iter().any(has_lambda_in_value) || has_lambda_in_comp(value)
         }
@@ -1070,6 +1099,7 @@ fn has_tuple_project_in_comp(comp: &CompExpr) -> bool {
                 || arms.iter().any(|arm| has_tuple_project_in_comp(&arm.body))
         }
         CompExpr::Handle { .. } | CompExpr::WithHandler { .. } | CompExpr::Resume { .. } => false,
+        CompExpr::Dup { value } | CompExpr::Drop { value } => has_tuple_project_in_value(value),
         CompExpr::AssignIndex { path, value, .. } => {
             path.iter().any(has_tuple_project_in_value) || has_tuple_project_in_comp(value)
         }
@@ -1428,12 +1458,23 @@ fn build_stdlib_export_map(
 type LowerModuleResult =
     Result<(Vec<backend_ir::WasmBackendInstr>, Vec<AuxDecl>), GeneralLowerUnsupportedReason>;
 
+fn assert_general_lower_perceus_pipeline() {
+    assert_perceus_pipeline_order(&[
+        "ir::from_resolved",
+        "closure_capture::materialize_envs",
+        "ownership_classify",
+        "drop_insert",
+        "reuse_pair",
+    ]);
+}
+
 /// Attempt to lower a module's `main` body through the general lowering path.
 ///
 /// Returns `Ok(Ok((main_instrs, aux_decls)))` when the general path succeeds,
 /// `Ok(Err(reason))` when the IR contains unsupported forms (fall through to next path),
 /// or `Err(CodegenError)` on hard codegen failures.
 pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenError> {
+    assert_general_lower_perceus_pipeline();
     let handler_legality = analyze_module_handler_legality(module)?;
     let allow_safe_handler_lowering = handler_legality.all_one_shot_tail_resumptive();
     let ir_module = match goby_core::ir_lower::lower_module(module) {

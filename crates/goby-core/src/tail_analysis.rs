@@ -127,6 +127,7 @@ fn walk_comp_inner<F>(
                 walk_comp_inner(&arm.body, tail_position, config, visit);
             }
         }
+        CompExpr::Dup { value } | CompExpr::Drop { value } => walk_value(value, config, visit),
         CompExpr::PerformEffect { args, .. } => {
             for arg in args {
                 walk_value(arg, config, visit);

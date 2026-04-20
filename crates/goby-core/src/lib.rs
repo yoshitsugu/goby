@@ -20,6 +20,7 @@ mod parser_test_support;
 mod parser_top;
 mod parser_util;
 mod path_util;
+pub mod perceus;
 pub mod resolved;
 pub mod span;
 pub mod stdlib;

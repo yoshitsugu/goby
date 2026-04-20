@@ -1,3 +1,4 @@
+use goby_core::perceus::assert_perceus_pipeline_order;
 use goby_core::{Module, Stmt};
 
 use crate::RuntimeOutputResolver;
@@ -10,6 +11,13 @@ use crate::wasm_exec_plan::main_exec_plan;
 
 #[cfg(test)]
 pub(crate) fn resolve_module_runtime_output(module: &Module) -> Option<String> {
+    assert_perceus_pipeline_order(&[
+        "ir::from_resolved",
+        "closure_capture::materialize_envs",
+        "ownership_classify",
+        "drop_insert",
+        "reuse_pair",
+    ]);
     resolve_module_runtime_output_with_mode(module, lower::EffectExecutionMode::PortableFallback)
 }
 
@@ -34,6 +42,13 @@ pub(crate) fn resolve_module_runtime_output_with_mode_and_stdin(
     execution_mode: lower::EffectExecutionMode,
     stdin_seed: Option<String>,
 ) -> Option<String> {
+    assert_perceus_pipeline_order(&[
+        "ir::from_resolved",
+        "closure_capture::materialize_envs",
+        "ownership_classify",
+        "drop_insert",
+        "reuse_pair",
+    ]);
     let runtime = main_exec_plan(module)?.runtime?;
     resolve_main_runtime_output_with_mode_and_stdin_internal(
         module,
@@ -48,6 +63,13 @@ pub(crate) fn resolve_module_runtime_output_for_compile(
     module: &Module,
     execution_mode: lower::EffectExecutionMode,
 ) -> Result<Option<String>, String> {
+    assert_perceus_pipeline_order(&[
+        "ir::from_resolved",
+        "closure_capture::materialize_envs",
+        "ownership_classify",
+        "drop_insert",
+        "reuse_pair",
+    ]);
     let Some(runtime) = main_exec_plan(module).and_then(|plan| plan.runtime) else {
         return Ok(None);
     };

@@ -291,6 +291,10 @@ pub(crate) enum WasmBackendInstr {
     /// The intrinsic's fixed arity arguments must be on the stack before this instruction.
     /// These intrinsics form the backend primitive substrate beneath stdlib helpers.
     Intrinsic { intrinsic: BackendIntrinsic },
+    /// Increment the refcount of a tagged heap value when it is heap-allocated.
+    RefCountDup,
+    /// Decrement the refcount of a tagged heap value and run runtime child-drop on zero.
+    RefCountDrop,
     /// Discard the top-of-stack value.
     Drop,
     /// Conditional expression.

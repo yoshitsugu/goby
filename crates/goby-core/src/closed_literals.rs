@@ -90,6 +90,9 @@ fn collect_closed_literals_in_comp(comp: &crate::ir::CompExpr, out: &mut Vec<Val
                 collect_closed_literals_in_comp(&arm.body, out);
             }
         }
+        CompExpr::Dup { value } | CompExpr::Drop { value } => {
+            collect_closed_literals_in_value(value, out);
+        }
         CompExpr::PerformEffect { args, .. } => {
             for arg in args {
                 collect_closed_literals_in_value(arg, out);

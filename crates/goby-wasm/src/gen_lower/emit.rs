@@ -578,6 +578,10 @@ struct EmitContext {
     /// Map from declaration name to funcref table slot index (for `PushFuncHandle`).
     /// Slot 0 = first aux decl, slot 1 = second aux decl, etc.
     decl_table_slots: HashMap<String, u32>,
+    /// Wasm function index of the module-local `__goby_dup` helper.
+    goby_dup_func_idx: u32,
+    /// Wasm function index of the module-local `__goby_drop` helper.
+    goby_drop_func_idx: u32,
     /// Type index for `(i64) -> i64` in the Wasm type section, used by `IndirectCall { arity: 1 }`.
     /// `None` when the module has no arity-1 `IndirectCall` instructions.
     indirect_call_type_idx_1: Option<u32>,
@@ -625,6 +629,8 @@ impl EmitContext {
         decl_returns_wasm_heap: HashMap<String, bool>,
         decl_uses_heap: HashMap<String, bool>,
         decl_table_slots: HashMap<String, u32>,
+        goby_dup_func_idx: u32,
+        goby_drop_func_idx: u32,
         indirect_call_type_idx_1: Option<u32>,
         indirect_call_type_idx_2: Option<u32>,
         indirect_call_type_idx_3: Option<u32>,
@@ -637,6 +643,8 @@ impl EmitContext {
             decl_returns_wasm_heap,
             decl_uses_heap,
             decl_table_slots,
+            goby_dup_func_idx,
+            goby_drop_func_idx,
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
             indirect_call_type_idx_3,
@@ -1646,8 +1654,8 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         None
     };
 
-    // type for __goby_drop: (i64) -> ()
-    let goby_drop_type_idx = types.len();
+    // type for __goby_dup / __goby_drop: (i64) -> ()
+    let goby_rc_type_idx = types.len();
     types.ty().function([ValType::I64], []);
 
     // type for __test_alloc_list_1chunk: () -> i64  (returns tagged header ptr)
@@ -1689,7 +1697,9 @@ pub(crate) fn emit_general_module_with_aux_and_options(
     // Keeping main first means _start index = HOST_IMPORT_BASE_IDX + used_host_imports.len()
     // regardless of how many aux decls are added.
     let main_func_idx = HOST_IMPORT_BASE_IDX + used_host_imports.len() as u32;
-    // __goby_drop is emitted as the last function in the module (after dispatchers).
+    // __goby_dup and __goby_drop are emitted as the last runtime helpers in the module
+    // (after dispatchers).
+    let goby_dup_func_idx: u32;
     let goby_drop_func_idx: u32;
     let mut functions = FunctionSection::new();
     functions.function(main_type);
@@ -1701,15 +1711,17 @@ pub(crate) fn emit_general_module_with_aux_and_options(
     }
     {
         let idx = main_func_idx + 1 + aux_decls.len() as u32 + tail_group_plans.len() as u32;
-        goby_drop_func_idx = idx;
-        functions.function(goby_drop_type_idx);
+        goby_dup_func_idx = idx;
+        goby_drop_func_idx = idx + 1;
+        functions.function(goby_rc_type_idx);
+        functions.function(goby_rc_type_idx);
     }
     // Test-only functions: __test_alloc_list_1chunk and __test_drop_ptr
     let test_alloc_func_idx = goby_drop_func_idx + 1;
     let test_drop_func_idx = goby_drop_func_idx + 2;
     if options.expose_perceus_test_exports {
         functions.function(test_alloc_type_idx); // () -> i64
-        functions.function(goby_drop_type_idx);  // (i64) -> ()
+        functions.function(goby_rc_type_idx); // (i64) -> ()
     }
     module.section(&functions);
 
@@ -1772,7 +1784,11 @@ pub(crate) fn emit_general_module_with_aux_and_options(
     exports.export("memory", ExportKind::Memory, 0);
     exports.export("_start", ExportKind::Func, main_func_idx);
     if options.expose_perceus_test_exports {
-        exports.export("__test_alloc_list_1chunk", ExportKind::Func, test_alloc_func_idx);
+        exports.export(
+            "__test_alloc_list_1chunk",
+            ExportKind::Func,
+            test_alloc_func_idx,
+        );
         exports.export("__test_drop_ptr", ExportKind::Func, test_drop_func_idx);
         exports.export("__goby_drop", ExportKind::Func, goby_drop_func_idx);
     }
@@ -1817,6 +1833,8 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             decl_returns_wasm_heap.clone(),
             decl_uses_heap.clone(),
             decl_table_slots.clone(),
+            goby_dup_func_idx,
+            goby_drop_func_idx,
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
             indirect_call_type_idx_3,
@@ -1903,6 +1921,8 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             decl_returns_wasm_heap.clone(),
             decl_uses_heap.clone(),
             decl_table_slots.clone(),
+            goby_dup_func_idx,
+            goby_drop_func_idx,
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
             indirect_call_type_idx_3,
@@ -1939,6 +1959,8 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             &decl_returns_wasm_heap,
             &decl_uses_heap,
             &decl_table_slots,
+            goby_dup_func_idx,
+            goby_drop_func_idx,
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
             indirect_call_type_idx_3,
@@ -1950,6 +1972,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             options,
         )?;
     }
+    emit_goby_dup_function(&mut code, pw);
     // Emit __goby_drop as the last function in the code section.
     emit_goby_drop_function(&mut code, layout, pw, goby_drop_func_idx);
 
@@ -1973,6 +1996,7 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             &plan.dispatcher_name,
         );
     }
+    function_names.append(goby_dup_func_idx, "__goby_dup");
     function_names.append(goby_drop_func_idx, "__goby_drop");
     if options.expose_perceus_test_exports {
         function_names.append(test_alloc_func_idx, "__test_alloc_list_1chunk");
@@ -2139,6 +2163,14 @@ fn emit_instrs_with_heap_depth(
             WasmBackendInstr::PushStaticString { text } => {
                 let ptr = static_strings.ptr(text)?;
                 function.instruction(&Instruction::I64Const(encode_string_ptr(ptr as u32)));
+            }
+
+            WasmBackendInstr::RefCountDup => {
+                function.instruction(&Instruction::Call(ctx.goby_dup_func_idx));
+            }
+
+            WasmBackendInstr::RefCountDrop => {
+                function.instruction(&Instruction::Call(ctx.goby_drop_func_idx));
             }
 
             WasmBackendInstr::Drop => {
@@ -4287,6 +4319,8 @@ fn emit_tail_call_group_dispatcher(
     decl_returns_wasm_heap: &HashMap<String, bool>,
     decl_uses_heap: &HashMap<String, bool>,
     decl_table_slots: &HashMap<String, u32>,
+    goby_dup_func_idx: u32,
+    goby_drop_func_idx: u32,
     indirect_call_type_idx_1: Option<u32>,
     indirect_call_type_idx_2: Option<u32>,
     indirect_call_type_idx_3: Option<u32>,
@@ -4373,6 +4407,8 @@ fn emit_tail_call_group_dispatcher(
         decl_returns_wasm_heap,
         decl_uses_heap,
         decl_table_slots,
+        goby_dup_func_idx,
+        goby_drop_func_idx,
         indirect_call_type_idx_1,
         indirect_call_type_idx_2,
         indirect_call_type_idx_3,
@@ -4410,6 +4446,8 @@ fn emit_tail_call_group_dispatch_chain(
     decl_returns_wasm_heap: &HashMap<String, bool>,
     decl_uses_heap: &HashMap<String, bool>,
     decl_table_slots: &HashMap<String, u32>,
+    goby_dup_func_idx: u32,
+    goby_drop_func_idx: u32,
     indirect_call_type_idx_1: Option<u32>,
     indirect_call_type_idx_2: Option<u32>,
     indirect_call_type_idx_3: Option<u32>,
@@ -4449,6 +4487,8 @@ fn emit_tail_call_group_dispatch_chain(
         decl_returns_wasm_heap.clone(),
         decl_uses_heap.clone(),
         decl_table_slots.clone(),
+        goby_dup_func_idx,
+        goby_drop_func_idx,
         indirect_call_type_idx_1,
         indirect_call_type_idx_2,
         indirect_call_type_idx_3,
@@ -4496,6 +4536,8 @@ fn emit_tail_call_group_dispatch_chain(
             decl_returns_wasm_heap,
             decl_uses_heap,
             decl_table_slots,
+            goby_dup_func_idx,
+            goby_drop_func_idx,
             indirect_call_type_idx_1,
             indirect_call_type_idx_2,
             indirect_call_type_idx_3,
@@ -5269,6 +5311,109 @@ fn emit_free_list_push(
     let _ = pw;
 }
 
+/// Emit the `__goby_dup` Wasm helper into `code`.
+///
+/// Signature: `(tagged_value: i64) -> ()`
+///
+/// Non-heap values are ignored. Heap values branch on the static-literal sentinel and
+/// otherwise increment the refcount at `payload_ptr - REFCOUNT_WORD_BYTES`.
+fn emit_goby_dup_function(code: &mut CodeSection, pw: PtrWidth) {
+    let param_tagged: u32 = 0;
+    let l_tag: u32 = 1;
+    let l_payload: u32 = 2;
+    let l_refcount: u32 = 3;
+
+    let mut function = Function::new(vec![(3, ValType::I64)]);
+    const PAYLOAD_MASK: i64 = 0x0FFF_FFFF_FFFF_FFFFu64 as i64;
+
+    let push_header_addr = |f: &mut Function| {
+        f.instruction(&Instruction::LocalGet(l_payload));
+        f.instruction(&Instruction::I64Const(-(REFCOUNT_WORD_BYTES as i64)));
+        f.instruction(&Instruction::I64Add);
+        if pw == PtrWidth::W32 {
+            f.instruction(&Instruction::I32WrapI64);
+        }
+    };
+
+    function.instruction(&Instruction::LocalGet(param_tagged));
+    function.instruction(&Instruction::I64Eqz);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Return);
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::LocalGet(param_tagged));
+    function.instruction(&Instruction::I64Const(60));
+    function.instruction(&Instruction::I64ShrU);
+    function.instruction(&Instruction::I64Const(0xF));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::LocalSet(l_tag));
+
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(TAG_STRING as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(TAG_LIST as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::I32Or);
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(TAG_TUPLE as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::I32Or);
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(TAG_RECORD as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::I32Or);
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(TAG_CLOSURE as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::I32Or);
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(TAG_CELL as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::I32Or);
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(TAG_CHUNK as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::I32Or);
+    function.instruction(&Instruction::I32Eqz);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Return);
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::LocalGet(param_tagged));
+    function.instruction(&Instruction::I64Const(PAYLOAD_MASK));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::LocalSet(l_payload));
+
+    push_header_addr(&mut function);
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(l_refcount));
+
+    function.instruction(&Instruction::LocalGet(l_refcount));
+    function.instruction(&Instruction::I64Const(-1i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Return);
+    function.instruction(&Instruction::End);
+
+    push_header_addr(&mut function);
+    function.instruction(&Instruction::LocalGet(l_refcount));
+    function.instruction(&Instruction::I64Const(1));
+    function.instruction(&Instruction::I64Add);
+    function.instruction(&Instruction::I64Store(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+
+    function.instruction(&Instruction::End);
+    code.function(&function);
+}
+
 /// Emit the `__goby_drop` Wasm helper function into `code`.
 ///
 /// Signature: `(tagged_ptr: i64) -> ()`
@@ -5634,51 +5779,50 @@ fn emit_goby_drop_function(
     // Helper: emit a counted loop that calls __goby_drop(mem[base + 8*i]) for i in 0..count.
     // base_offset_bytes: constant byte offset from l_payload to the first element.
     // count_local: i64 local holding the element count.
-    let emit_child_drop_loop =
-        |f: &mut Function,
-         base_offset_bytes: u64,
-         count_local: u32,
-         item_local: u32,
-         loop_i_local: u32| {
-            // i = 0
-            f.instruction(&Instruction::I64Const(0));
-            f.instruction(&Instruction::LocalSet(loop_i_local));
-            f.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
-            f.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
-            // if i >= count: break
-            f.instruction(&Instruction::LocalGet(loop_i_local));
-            f.instruction(&Instruction::LocalGet(count_local));
-            f.instruction(&Instruction::I64GeU);
-            f.instruction(&Instruction::BrIf(1)); // br to block (exit)
-            // item = mem[payload + base_offset + i*8]
-            f.instruction(&Instruction::LocalGet(l_payload));
-            f.instruction(&Instruction::I64Const(base_offset_bytes as i64));
-            f.instruction(&Instruction::I64Add);
-            f.instruction(&Instruction::LocalGet(loop_i_local));
-            f.instruction(&Instruction::I64Const(8));
-            f.instruction(&Instruction::I64Mul);
-            f.instruction(&Instruction::I64Add);
-            if pw == PtrWidth::W32 {
-                f.instruction(&Instruction::I32WrapI64);
-            }
-            f.instruction(&Instruction::I64Load(MemArg {
-                offset: 0,
-                align: 3,
-                memory_index: 0,
-            }));
-            f.instruction(&Instruction::LocalSet(item_local));
-            // __goby_drop(item)
-            f.instruction(&Instruction::LocalGet(item_local));
-            f.instruction(&Instruction::Call(self_func_idx));
-            // i++
-            f.instruction(&Instruction::LocalGet(loop_i_local));
-            f.instruction(&Instruction::I64Const(1));
-            f.instruction(&Instruction::I64Add);
-            f.instruction(&Instruction::LocalSet(loop_i_local));
-            f.instruction(&Instruction::Br(0)); // br to loop
-            f.instruction(&Instruction::End); // end loop
-            f.instruction(&Instruction::End); // end block
-        };
+    let emit_child_drop_loop = |f: &mut Function,
+                                base_offset_bytes: u64,
+                                count_local: u32,
+                                item_local: u32,
+                                loop_i_local: u32| {
+        // i = 0
+        f.instruction(&Instruction::I64Const(0));
+        f.instruction(&Instruction::LocalSet(loop_i_local));
+        f.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+        f.instruction(&Instruction::Loop(wasm_encoder::BlockType::Empty));
+        // if i >= count: break
+        f.instruction(&Instruction::LocalGet(loop_i_local));
+        f.instruction(&Instruction::LocalGet(count_local));
+        f.instruction(&Instruction::I64GeU);
+        f.instruction(&Instruction::BrIf(1)); // br to block (exit)
+        // item = mem[payload + base_offset + i*8]
+        f.instruction(&Instruction::LocalGet(l_payload));
+        f.instruction(&Instruction::I64Const(base_offset_bytes as i64));
+        f.instruction(&Instruction::I64Add);
+        f.instruction(&Instruction::LocalGet(loop_i_local));
+        f.instruction(&Instruction::I64Const(8));
+        f.instruction(&Instruction::I64Mul);
+        f.instruction(&Instruction::I64Add);
+        if pw == PtrWidth::W32 {
+            f.instruction(&Instruction::I32WrapI64);
+        }
+        f.instruction(&Instruction::I64Load(MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        f.instruction(&Instruction::LocalSet(item_local));
+        // __goby_drop(item)
+        f.instruction(&Instruction::LocalGet(item_local));
+        f.instruction(&Instruction::Call(self_func_idx));
+        // i++
+        f.instruction(&Instruction::LocalGet(loop_i_local));
+        f.instruction(&Instruction::I64Const(1));
+        f.instruction(&Instruction::I64Add);
+        f.instruction(&Instruction::LocalSet(loop_i_local));
+        f.instruction(&Instruction::Br(0)); // br to loop
+        f.instruction(&Instruction::End); // end loop
+        f.instruction(&Instruction::End); // end block
+    };
 
     // -----------------------------------------------------------------------
     // TAG_CHUNK (0xA) — internal list chunk drop.
@@ -10247,8 +10391,16 @@ fn emit_test_alloc_list_1chunk(code: &mut CodeSection, layout: &MemoryLayout, pw
     let l_header: u32 = 2;
     let mut f = Function::new(vec![(3, ValType::I64)]);
 
-    let mem8 = MemArg { offset: 0, align: 3, memory_index: 0 };
-    let mem4 = MemArg { offset: 0, align: 2, memory_index: 0 };
+    let mem8 = MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    };
+    let mem4 = MemArg {
+        offset: 0,
+        align: 2,
+        memory_index: 0,
+    };
 
     // Load alloc cursor from linear memory.
     f.instruction(&ptr_const(pw, GLOBAL_HEAP_CURSOR_OFFSET as u64));
@@ -10492,6 +10644,21 @@ mod tests {
         ];
         let wasm = emit_general_module(&instrs, &default_layout())
             .expect("emit SplitGetPrint should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_refcount_dup_and_drop_helpers_produce_valid_wasm() {
+        let instrs = vec![
+            I::I64Const(0),
+            I::RefCountDup,
+            I::I64Const(0),
+            I::RefCountDrop,
+            I::I64Const(encode_unit()),
+            I::Drop,
+        ];
+        let wasm = emit_general_module(&instrs, &default_layout())
+            .expect("emit refcount helper ops should succeed");
         assert_valid_wasm(&wasm);
     }
 
