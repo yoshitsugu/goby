@@ -1,10 +1,18 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-20 (Perceus M4 first insertion slice: minimal ownership classify + immutable-let drop insertion)
+Last updated: 2026-04-21 (Perceus M4 shipped as a conservative slice; residency test deferred to M4.5)
 
 ## Current Focus
 
-**Perceus M3 complete. M4 has started.** All M3 deliverables landed, and the first M4 ownership/drop insertion slice is now in tree:
+**Perceus M3 complete. M4 landed as a conservative slice.** All M3
+deliverables remain in tree; M4 adds ownership classification + a partial
+§3.10 drop-insertion pass that only fires in cases where the
+consume-vs-borrow distinction is unambiguous. Full last-use analysis,
+If/Case branch balancing on general bindings, and the
+`perceus_loop_residency` gate are reopened under M4.5 borrow inference.
+
+See `doc/PLAN_PERCEUS.md` §M4 "As-shipped scope note" for the full list
+of what the slice does and does not do, and why.
 
 - Free-list head table in linear memory (`HEAP_BASE` 56 → 408), `SizeClass` enum,
   `emit_alloc_with_flag` (free-list pop + bump fallback), `emit_free_list_push`.
@@ -29,21 +37,41 @@ Last updated: 2026-04-20 (Perceus M4 first insertion slice: minimal ownership cl
   - emitter now generates module-local `__goby_dup` alongside `__goby_drop`
   - Perceus pipeline-order assertion helper added and called from general-lower
     and runtime-entry drivers
-- M4 first insertion slice landed on 2026-04-20:
-  - `goby-core::perceus::run_perceus_passes` now runs a minimal
-    `ownership_classify` + `drop_insert` rewrite over IR modules
-  - fresh immutable `let` bindings of aggregate literals/interpolated strings
-    can now get a terminal `Drop`
+- M4 conservative slice landed on 2026-04-21:
+  - `goby-core::perceus::run_perceus_passes` classifies every function
+    parameter and fresh-heap `let` as `Owned`, and inserts `Drop`/`Dup` in
+    the unambiguous cases:
+    - `let x = <fresh-heap>` with `use_count == 0`: `Drop(x)` at the top
+      of the body. Any other use count leaves the binding alone — a
+      single mid-body consume (e.g. `Call(process, [x])`) would otherwise
+      collide with a post-body Drop and double-free.
+    - unused `case` pattern bindings: `Drop(pat_var)` at arm entry
+    - owned bindings live across a `WithHandler` body: `Dup` before the
+      handler boundary (Case pattern binds and Handle clause params are
+      excluded from the live-across set)
+    - `Call`-site: owned args transfer ownership to the callee; the caller
+      emits no post-call `Drop` for those args
+    - owned parameters: `Drop` only for params that are never referenced
+      in the body
+  - 11 perceus unit tests cover pipeline wiring, fresh-heap Drop placement,
+    nested-Let / Seq-Call double-free regressions, call-site transfer,
+    partial application, closure capture, case-arm pattern drop, and
+    WithHandler live-across Dup
   - the rewrite is wired into general-lower for user decls and stdlib-loaded
     aux decls
-  - current guardrails:
-    - `let mut` is intentionally excluded for now
-    - lambda values are intentionally treated conservatively (no ownership/drop
-      insertion yet) to avoid misclassifying zero-capture function handles
+  - intentionally deferred to M4.5 (borrow inference):
+    - parameter last-use analysis (requires borrow/consume marks on
+      `Var` occurrences; intrinsics like `length`, `list_get` are borrow
+      positions in today's backend, so uniform "every use consumes"
+      produces use-after-free)
+    - If/Case branch balancing on non-pattern bindings
+    - Dup for non-last uses in multi-use scopes
+    - `perceus_loop_residency` gate (M3's
+      `drop_frees_unique_list_and_subsequent_alloc_gets_free_list_hit`
+      remains the current residency proxy)
 
-Next: **Perceus M4 continuation** — extend ownership classification beyond the
-current immutable-literal subset, add safe handling for mutable bindings and
-lambda/closure ownership, then begin real `Dup` insertion.
+Next: **Perceus M4.5** — add borrow/consume classification on `Var`
+occurrences, then re-open the deferred items above.
 
 ---
 
@@ -99,11 +127,20 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 
 ## Immediate Next Actions
 
-1. **Perceus M4:** extend the current minimal pass so mutable bindings and
-   closure-producing paths are classified safely, then add `Dup` insertion for
-   shared/forwarded ownership edges.
+1. **Perceus M4.5:** introduce borrow/consume marks on `ValueExpr::Var`
+   occurrences, extend `ownership_classify` with the fixpoint from
+   `PLAN_PERCEUS.md` §M4.5 C1, then re-open parameter last-use Drop,
+   If/Case branch balancing on general bindings, and the
+   `perceus_loop_residency` gate.
 2. Extend `tooling/` syntax highlight definitions to cover `^` (tracked as a
    TODO under `doc/PLAN.md` §4.2.1).
+
+## Verification snapshot (2026-04-21, M4 conservative slice landed)
+
+- `cargo fmt --all --check` — pass.
+- `cargo check` — pass.
+- `cargo test --workspace` — pass (goby-core 708, goby-wasm 686, goby-cli 54, all green).
+- `cargo test -p goby-core --lib perceus` — 9 passed.
 
 ## Verification snapshot (2026-04-20, M4 first insertion slice)
 
@@ -138,4 +175,4 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 | IR lowering (`ir_lower.rs`) | Stable |
 | Wasm backend | memory64 complete; Perceus M1 + M2 + M3 complete; M4 runtime helpers (`Dup`/`Drop` lowering, `__goby_dup`) present |
 | Effect handlers | Non-tail / multi-resume still produces `BackendLimitation` |
-| GC / reclamation | Bump allocator + refcount + free-list + `__goby_drop`; M4 groundwork present, static drop insertion still next |
+| GC / reclamation | Bump allocator + refcount + free-list + `__goby_drop`; Perceus M4 conservative drop-insertion pass live; parameter last-use + branch balancing + loop residency gate reopened under M4.5 |

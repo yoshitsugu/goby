@@ -24,9 +24,9 @@ use crate::gen_lower::ptr::{
 use goby_core::ir::IrBinOp;
 
 use crate::gen_lower::value::{
-    TAG_BOOL, TAG_CELL, TAG_CHUNK, TAG_CLOSURE, TAG_INT, TAG_LIST, TAG_RECORD, TAG_STRING,
-    TAG_TUPLE, encode_bool, encode_int, encode_list_ptr, encode_record_ptr, encode_string_ptr,
-    encode_tuple_ptr, encode_unit,
+    TAG_BOOL, TAG_CELL, TAG_CHUNK, TAG_CLOSURE, TAG_FUNC, TAG_INT, TAG_LIST, TAG_RECORD,
+    TAG_STRING, TAG_TUPLE, encode_bool, encode_int, encode_list_ptr, encode_record_ptr,
+    encode_string_ptr, encode_tuple_ptr, encode_unit,
 };
 use crate::host_runtime::{
     HOST_BUMP_RESERVED_BYTES, HOST_INTRINSIC_IMPORTS, IntrinsicExecutionBoundary,
@@ -5630,9 +5630,38 @@ fn emit_goby_drop_function(
         }
     };
 
-    // --- 1. Null check ---
+    // --- 1. Non-heap short-circuit (w64 path only; the w32 legacy path above
+    //        keeps the original I64Eqz-against-tagged_ptr test).
+    //
+    // Tag lives in bits 63–60 of the tagged word. Scalar tags:
+    //   Unit=0x0 (whole word is 0), Int=0x1, Bool=0x2. Their payloads are
+    //   inline, so the drop is a no-op.
+    // Func=0x5 is a funcref table index, not a heap pointer — also a no-op.
+    // All remaining tags (TAG_STRING=0x3, TAG_LIST=0x4, TAG_TUPLE=0x6,
+    // TAG_RECORD=0x7, TAG_CLOSURE=0x8, TAG_CELL=0x9, TAG_CHUNK=0xA) are
+    // heap pointers and fall through to the refcount decrement below.
+    //
+    // Note: the `tag <= 2` check covers encode_unit() (tagged_ptr == 0)
+    // because its tag bits are 0, but it is a *tag* comparison, not a
+    // comparison against the raw word value, so an `Int(0)` (tag=0x1,
+    // payload=0) is still correctly classified as non-heap.
     function.instruction(&Instruction::LocalGet(param_tagged));
-    function.instruction(&Instruction::I64Eqz);
+    function.instruction(&Instruction::I64Const(60));
+    function.instruction(&Instruction::I64ShrU);
+    function.instruction(&Instruction::LocalSet(l_tag)); // l_tag holds just the 4-bit tag
+
+    // if tag <= 2: non-heap scalar (Unit/Int/Bool) → return
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(2));
+    function.instruction(&Instruction::I64LeU);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::Return);
+    function.instruction(&Instruction::End);
+
+    // if tag == 5: Func (funcref index, not a heap ptr) → return
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(TAG_FUNC as i64));
+    function.instruction(&Instruction::I64Eq);
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
     function.instruction(&Instruction::Return);
     function.instruction(&Instruction::End);
