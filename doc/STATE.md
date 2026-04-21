@@ -1,15 +1,16 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-21 (Perceus M4 shipped as a conservative slice; residency test deferred to M4.5)
+Last updated: 2026-04-21 (Perceus M4.5 borrow-classifier slice started)
 
 ## Current Focus
 
-**Perceus M3 complete. M4 landed as a conservative slice.** All M3
-deliverables remain in tree; M4 adds ownership classification + a partial
-§3.10 drop-insertion pass that only fires in cases where the
-consume-vs-borrow distinction is unambiguous. Full last-use analysis,
-If/Case branch balancing on general bindings, and the
-`perceus_loop_residency` gate are reopened under M4.5 borrow inference.
+**Perceus M3 complete. M4 landed as a conservative slice. M4.5 is now
+started.** All M3 deliverables remain in tree; M4 adds ownership
+classification + a partial §3.10 drop-insertion pass that only fires in
+cases where the consume-vs-borrow distinction is unambiguous. M4.5 now has
+the first borrow-classifier slice: parameter ownership is inferred by a
+module fixpoint that starts parameters as `Borrowed` and demotes them to
+`Owned` on returned/stored/consuming/unknown flow.
 
 See `doc/PLAN_PERCEUS.md` §M4 "As-shipped scope note" for the full list
 of what the slice does and does not do, and why.
@@ -69,9 +70,24 @@ of what the slice does and does not do, and why.
     - `perceus_loop_residency` gate (M3's
       `drop_frees_unique_list_and_subsequent_alloc_gets_free_list_hit`
       remains the current residency proxy)
+- M4.5 borrow-classifier slice landed on 2026-04-21:
+  - `ownership_classify_module` now performs a module-level parameter
+    fixpoint: all params start `Borrowed`, and returned params, heap-stored
+    params, lambda captures, effect args, unknown call args, and args passed
+    to `Owned` callee params demote to `Owned`.
+  - pure uses through `BinOp`, `ListGet`, `TupleProject`, interp reads, `If`
+    conditions, `Case` scrutinees, `Dup`, and `Resume` remain borrowed.
+  - `drop_insert` skips parameter `Drop`/`Dup` for `Borrowed` params and can
+    now restore a post-body `Drop` for fresh owned `let` bindings whose uses
+    are known borrows, preserving the body result through a generated temp.
+  - focused Perceus tests grew from 11 to 16, covering pure borrowed params,
+    borrowed-call owner drops, owned call transfer, unknown-call
+    conservatism, and WithHandler Dup skipping for borrowed params.
 
-Next: **Perceus M4.5** — add borrow/consume classification on `Var`
-occurrences, then re-open the deferred items above.
+Next: **Perceus M4.5 continuation** — broaden borrow-flow precision for
+`let` aliases and SCC-recursive groups, then re-open parameter last-use Drop,
+If/Case branch balancing on general bindings, non-last-use Dup insertion, and
+the `perceus_loop_residency` / `alloc_baseline` gates.
 
 ---
 
@@ -127,11 +143,11 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 
 ## Immediate Next Actions
 
-1. **Perceus M4.5:** introduce borrow/consume marks on `ValueExpr::Var`
-   occurrences, extend `ownership_classify` with the fixpoint from
-   `PLAN_PERCEUS.md` §M4.5 C1, then re-open parameter last-use Drop,
-   If/Case branch balancing on general bindings, and the
-   `perceus_loop_residency` gate.
+1. **Perceus M4.5 continuation:** improve borrow-flow precision for
+   `CompExpr::Let { bind, value: Var(p), body }` aliases and recursive SCCs,
+   then re-open parameter last-use Drop, If/Case branch balancing on general
+   bindings, non-last-use Dup insertion, and the `perceus_loop_residency` /
+   `alloc_baseline` gates.
 2. Extend `tooling/` syntax highlight definitions to cover `^` (tracked as a
    TODO under `doc/PLAN.md` §4.2.1).
 
@@ -141,6 +157,14 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 - `cargo check` — pass.
 - `cargo test --workspace` — pass (goby-core 708, goby-wasm 686, goby-cli 54, all green).
 - `cargo test -p goby-core --lib perceus` — 9 passed.
+
+## Verification snapshot (2026-04-21, M4.5 borrow-classifier slice)
+
+- `cargo fmt --all --check` — pass.
+- `cargo check` — pass (existing `goby-wasm::size_class` dead-code warnings).
+- `cargo test -p goby-core --lib perceus` — pass (16 passed).
+- `cargo test --workspace` — pass (goby-core 717, goby-wasm 686, goby-cli 54, all green).
+- devflow step gate (`cargo fmt --all --check`; `cargo check`; `cargo test --workspace`) — pass.
 
 ## Verification snapshot (2026-04-20, M4 first insertion slice)
 

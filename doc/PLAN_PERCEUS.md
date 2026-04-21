@@ -1130,7 +1130,7 @@ unaffected.
           `RecordProject`) or a call whose matching parameter is also
           `borrowed`.
       Condition (c) requires a fixpoint; iterate decl-by-decl.
-- [ ] `drop_insert` skips `dup`/`drop` for borrowed parameters.
+- [x] `drop_insert` skips `dup`/`drop` for borrowed parameters.
 - [ ] Regression gate: new integration test `alloc_baseline` reads
       `tests/alloc_baseline.txt` (one line per example:
       `<example_basename> <max_total_bytes>`). The test runs each
@@ -1142,6 +1142,14 @@ unaffected.
       `list_case.gb` show at least 20% reduction in `total_bytes` vs
       their M4 values (the M4 values are recorded in the PR
       description).
+
+M4.5 slice note (2026-04-21): the first borrow-classifier slice is in
+tree. It implements the optimistic module fixpoint for ordinary decls,
+borrowed-parameter Dup/Drop skipping, borrowed-call owner-side Drop for fresh
+owned lets, and focused `goby-core::perceus` tests. Precision still to reopen:
+`let` alias flow from C2, SCC-wide recursive parameter demotion from C3,
+general If/Case branch balancing, non-last-use Dup insertion, and the
+`alloc_baseline` / `perceus_loop_residency` gates.
 
 #### M4.5 — Clarifications (added 2026-04-19)
 
