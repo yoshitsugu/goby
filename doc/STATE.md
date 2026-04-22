@@ -129,6 +129,10 @@ it moves to the GeneralLowered path.
   - `crates/goby-core/src/perceus_reuse.rs` adds the first `insert_reuse`
     pass skeleton and focused tests for same-block drop-to-allocation pairing
     and effect-boundary non-pairing.
+  - follow-up in the same M5 scaffold tightened the pass so pairing only
+    fires when the dropped value has a known reusable `SizeClass` and the
+    following allocation has the identical class; mismatched/unknown drops
+    remain ordinary `Drop`.
   - The pass is intentionally not wired into `run_perceus_passes` yet; Wasm
     lowering/runtime support for the new nodes remains the next M5 slice.
 

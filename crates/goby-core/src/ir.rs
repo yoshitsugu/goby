@@ -1591,4 +1591,78 @@ mod tests {
         )]);
         assert!(validate_ir(&m).is_ok());
     }
+
+    #[test]
+    fn fmt_reuse_nodes() {
+        let m = simple_module(vec![simple_decl(
+            "reuse_ops",
+            IrType::Unknown,
+            CompExpr::Seq {
+                stmts: vec![CompExpr::DropReuse {
+                    value: Box::new(ValueExpr::Var("old".into())),
+                    bind: "__reuse".into(),
+                }],
+                tail: Box::new(CompExpr::AllocReuse {
+                    token: "__reuse".into(),
+                    size_class: crate::size_class::SizeClass::Tuple(2),
+                    init: AllocInit::TupleLit(vec![ValueExpr::IntLit(1), ValueExpr::IntLit(2)]),
+                }),
+            },
+        )]);
+        assert_eq!(
+            fmt_ir(&m),
+            "decl reuse_ops: ? =\n  seq\n    drop_reuse old as __reuse\n  =>\n    alloc_reuse __reuse Tuple(2) = (1, 2)\n\n"
+        );
+    }
+
+    #[test]
+    fn validate_reuse_nodes_require_bind_token_and_reusable_class() {
+        let ok = simple_module(vec![simple_decl(
+            "reuse_ok",
+            IrType::Unknown,
+            CompExpr::Seq {
+                stmts: vec![CompExpr::DropReuse {
+                    value: Box::new(ValueExpr::Var("old".into())),
+                    bind: "__reuse".into(),
+                }],
+                tail: Box::new(CompExpr::AllocReuse {
+                    token: "__reuse".into(),
+                    size_class: crate::size_class::SizeClass::Tuple(1),
+                    init: AllocInit::TupleLit(vec![ValueExpr::IntLit(1)]),
+                }),
+            },
+        )]);
+        assert!(validate_ir(&ok).is_ok());
+
+        let empty_bind = simple_module(vec![simple_decl(
+            "reuse_bad_bind",
+            IrType::Unit,
+            CompExpr::DropReuse {
+                value: Box::new(ValueExpr::Var("old".into())),
+                bind: String::new(),
+            },
+        )]);
+        assert!(
+            validate_ir(&empty_bind)
+                .unwrap_err()
+                .message
+                .contains("DropReuse bind must not be empty")
+        );
+
+        let large_alloc = simple_module(vec![simple_decl(
+            "reuse_bad_class",
+            IrType::Unknown,
+            CompExpr::AllocReuse {
+                token: "__reuse".into(),
+                size_class: crate::size_class::SizeClass::Large,
+                init: AllocInit::TupleLit(vec![ValueExpr::IntLit(1)]),
+            },
+        )]);
+        assert!(
+            validate_ir(&large_alloc)
+                .unwrap_err()
+                .message
+                .contains("AllocReuse size class must be reusable")
+        );
+    }
 }
