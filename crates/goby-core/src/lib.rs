@@ -22,6 +22,7 @@ mod parser_util;
 mod path_util;
 pub mod perceus;
 pub mod resolved;
+pub mod size_class;
 pub mod span;
 pub mod stdlib;
 pub mod str_util;
