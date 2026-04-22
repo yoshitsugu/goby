@@ -44,7 +44,7 @@ mod support;
 mod wasm_exec;
 mod wasm_exec_plan;
 
-pub use crate::execution_plan::CompileOptions;
+pub use crate::execution_plan::{CapturedRuntimeOutput, CompileOptions};
 use crate::runtime_env::{
     EmbeddedEffectRuntime, RuntimeImportContext, effective_runtime_imports,
     load_runtime_import_context, runtime_import_selects_name,
@@ -194,6 +194,22 @@ pub fn execute_runtime_module_with_stdin_config_and_options(
     compile_options: CompileOptions,
 ) -> Result<Option<String>, CodegenError> {
     execution_plan::execute_runtime_module_with_stdin_config_and_options_entrypoint(
+        module,
+        stdin_seed,
+        memory_config,
+        compile_options,
+    )
+}
+
+/// Like `execute_runtime_module_with_stdin_config_and_options`, but captures
+/// the runtime-owned Wasm path's stdout and stderr separately.
+pub fn execute_runtime_module_with_stdin_config_and_options_captured(
+    module: &Module,
+    stdin_seed: Option<String>,
+    memory_config: Option<memory_config::WasmMemoryConfig>,
+    compile_options: CompileOptions,
+) -> Result<Option<CapturedRuntimeOutput>, CodegenError> {
+    execution_plan::execute_runtime_module_with_stdin_config_and_options_captured_entrypoint(
         module,
         stdin_seed,
         memory_config,

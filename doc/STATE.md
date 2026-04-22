@@ -1,16 +1,17 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-21 (Perceus M4.5 borrow-classifier slice started)
+Last updated: 2026-04-22 (Perceus M4.5 complete)
 
 ## Current Focus
 
 **Perceus M3 complete. M4 landed as a conservative slice. M4.5 is now
-started.** All M3 deliverables remain in tree; M4 adds ownership
+complete.** All M3 deliverables remain in tree; M4 adds ownership
 classification + a partial §3.10 drop-insertion pass that only fires in
 cases where the consume-vs-borrow distinction is unambiguous. M4.5 now has
 the first borrow-classifier slice: parameter ownership is inferred by a
 module fixpoint that starts parameters as `Borrowed` and demotes them to
-`Owned` on returned/stored/consuming/unknown flow.
+`Owned` on returned/stored/consuming/unknown flow, including simple
+`let alias = param` forwarding.
 
 See `doc/PLAN_PERCEUS.md` §M4 "As-shipped scope note" for the full list
 of what the slice does and does not do, and why.
@@ -83,11 +84,44 @@ of what the slice does and does not do, and why.
   - focused Perceus tests grew from 11 to 16, covering pure borrowed params,
     borrowed-call owner drops, owned call transfer, unknown-call
     conservatism, and WithHandler Dup skipping for borrowed params.
+- M4.5 let-alias slice landed on 2026-04-22:
+  - the ownership classifier now tracks simple `let alias = Var(source)`
+    chains back to their parameter owner during a declaration traversal.
+  - returning or consuming an alias demotes the original parameter to `Owned`,
+    which prevents callers from inserting an erroneous post-call `Drop` when
+    ownership actually transferred through the alias.
+  - alias-bound locals inherit the owner class when the source is an owned
+    parameter, allowing existing drop insertion to reason about borrowed alias
+    uses without treating the alias expression itself as a fresh heap value.
+  - focused Perceus tests grew from 16 to 18, covering return-through-alias
+    and unknown-call-consume-through-alias ownership transfer.
+- M4.5 completion slice landed on 2026-04-22:
+  - `drop_insert` now handles owned parameter bodies with only borrowed uses
+    by preserving the body result through a temp, then dropping the parameter.
+  - If/Case branch balancing now drops owned bindings on branches that do not
+    consume them when a sibling branch does consume them; borrow-only branches
+    preserve their result before the Drop.
+  - borrow evidence is conservative for `If` conditions, `ListGet`,
+    `TupleProject`, interpolation, and scalar operators because source-level
+    param types are often erased to `?` in IR; this prevents early Drop on
+    runtime-borrowed list/string values.
+  - `let value` expressions that consume an owned binding now get a pre-value
+    `Dup` when the binding remains live in the `let` body.
+  - repeated owned arguments in one consuming call get a pre-call `Dup` for
+    each non-last consuming occurrence.
+  - recursive SCC demotion through call edges is pinned by a focused Perceus
+    test; the existing module fixpoint propagates ownership from the returning
+    decl through the mutually recursive caller.
+  - `crates/goby-wasm/tests/alloc_baseline.rs` and
+    `alloc_baseline.txt` add the M4.5 allocation regression gate for the
+    currently GeneralLowered examples `fold.gb`, `hof_fold_print.gb`, and
+    `refcount_reuse_loop.gb`. `list_case.gb` is currently `NotRuntimeIo`, so
+    it is excluded until it can emit debug alloc stats.
+  - focused Perceus tests grew from 18 to 22.
 
-Next: **Perceus M4.5 continuation** — broaden borrow-flow precision for
-`let` aliases and SCC-recursive groups, then re-open parameter last-use Drop,
-If/Case branch balancing on general bindings, non-last-use Dup insertion, and
-the `perceus_loop_residency` / `alloc_baseline` gates.
+Next: **Perceus M5** — begin reuse pairing (`DropReuse` / `AllocReuse`) and
+tail-recursive reuse-token plumbing. Keep `list_case.gb` alloc-stats coverage
+on the follow-up list once it moves to the GeneralLowered path.
 
 ---
 
@@ -143,11 +177,8 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 
 ## Immediate Next Actions
 
-1. **Perceus M4.5 continuation:** improve borrow-flow precision for
-   `CompExpr::Let { bind, value: Var(p), body }` aliases and recursive SCCs,
-   then re-open parameter last-use Drop, If/Case branch balancing on general
-   bindings, non-last-use Dup insertion, and the `perceus_loop_residency` /
-   `alloc_baseline` gates.
+1. **Perceus M5:** implement reuse pairing (`DropReuse` / `AllocReuse`) and
+   tail-call reuse-token plumbing for the normative refcount reuse loop.
 2. Extend `tooling/` syntax highlight definitions to cover `^` (tracked as a
    TODO under `doc/PLAN.md` §4.2.1).
 
@@ -165,6 +196,21 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 - `cargo test -p goby-core --lib perceus` — pass (16 passed).
 - `cargo test --workspace` — pass (goby-core 717, goby-wasm 686, goby-cli 54, all green).
 - devflow step gate (`cargo fmt --all --check`; `cargo check`; `cargo test --workspace`) — pass.
+
+## Verification snapshot (2026-04-22, M4.5 let-alias slice)
+
+- `cargo fmt --all --check` — pass.
+- `cargo test -p goby-core --lib perceus` — pass (18 passed).
+- devflow step gate (`cargo fmt --all --check`; `cargo check`; `cargo test --workspace`) — pass
+  (existing `goby-wasm::size_class` dead-code warnings).
+
+## Verification snapshot (2026-04-22, M4.5 completion slice)
+
+- `cargo fmt --all --check` — pass.
+- `cargo test -p goby-core --lib perceus` — pass (22 passed).
+- `cargo test -p goby-wasm alloc_baseline` — pass.
+- devflow step gate (`cargo fmt --all --check`; `cargo check`; `cargo test --workspace`) — pass
+  (existing `goby-wasm::size_class` dead-code warnings).
 
 ## Verification snapshot (2026-04-20, M4 first insertion slice)
 

@@ -20,6 +20,12 @@ pub struct CompileOptions {
     pub debug_alloc_stats: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedRuntimeOutput {
+    pub stdout: String,
+    pub stderr: String,
+}
+
 #[derive(Debug, Clone)]
 struct FallbackExecutionContext {
     runtime_mode: lower::EffectExecutionMode,
@@ -168,6 +174,41 @@ pub(crate) fn execute_runtime_module_with_stdin_config_and_options_entrypoint(
         RuntimeStdinExecutionPlan::InterpreterBridge(context) => {
             // InterpreterBridge runs in the Rust interpreter; memory_config does not apply.
             execute_interpreter_bridge_with_context(module, context.as_ref(), stdin_seed)
+        }
+        RuntimeStdinExecutionPlan::UnsupportedWithReason(reason) => Err(CodegenError {
+            message: format!("general lowering unsupported: {reason}"),
+        }),
+        RuntimeStdinExecutionPlan::Fallthrough => Ok(None),
+    }
+}
+
+pub(crate) fn execute_runtime_module_with_stdin_config_and_options_captured_entrypoint(
+    module: &Module,
+    stdin_seed: Option<String>,
+    memory_config: Option<crate::memory_config::WasmMemoryConfig>,
+    compile_options: CompileOptions,
+) -> Result<Option<CapturedRuntimeOutput>, CodegenError> {
+    match runtime_stdin_execution_plan(module)? {
+        RuntimeStdinExecutionPlan::GeneralLowered => {
+            let wasm = compile_module_with_options_entrypoint(module, compile_options)?;
+            let cfg = memory_config.unwrap_or(crate::memory_config::RUNTIME_MEMORY_CONFIG);
+            let (stdout, stderr) = wasm_exec::run_wasm_bytes_with_config_and_options_captured(
+                &wasm,
+                stdin_seed.as_deref(),
+                cfg,
+            )
+            .map_err(|message| CodegenError { message })?;
+            Ok(Some(CapturedRuntimeOutput { stdout, stderr }))
+        }
+        RuntimeStdinExecutionPlan::InterpreterBridge(context) => {
+            execute_interpreter_bridge_with_context(module, context.as_ref(), stdin_seed).map(
+                |output| {
+                    output.map(|stdout| CapturedRuntimeOutput {
+                        stdout,
+                        stderr: String::new(),
+                    })
+                },
+            )
         }
         RuntimeStdinExecutionPlan::UnsupportedWithReason(reason) => Err(CodegenError {
             message: format!("general lowering unsupported: {reason}"),

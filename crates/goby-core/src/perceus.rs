@@ -90,6 +90,7 @@ fn ownership_classify_decl(
 ) -> HashMap<String, OwnershipClass> {
     let mut classes = HashMap::new();
     let mut params = HashSet::new();
+    let mut aliases = HashMap::new();
     let current = module_params
         .get(&decl.name)
         .expect("parameter ownership facts must exist");
@@ -97,8 +98,159 @@ fn ownership_classify_decl(
         params.insert(param_name.clone());
         classes.insert(param_name.clone(), current[idx]);
     }
-    classify_comp(&decl.body, &mut classes, &params, module_params);
+    classify_comp(
+        &decl.body,
+        &mut classes,
+        &params,
+        module_params,
+        &mut aliases,
+    );
+    for scalar_param in collect_scalar_param_evidence(&decl.body, &params) {
+        classes.insert(scalar_param, OwnershipClass::Borrowed);
+    }
     classes
+}
+
+fn collect_scalar_param_evidence(comp: &CompExpr, params: &HashSet<String>) -> HashSet<String> {
+    let mut scalar = HashSet::new();
+    collect_scalar_param_evidence_comp(comp, params, &mut scalar);
+    scalar
+}
+
+fn collect_scalar_param_evidence_comp(
+    comp: &CompExpr,
+    params: &HashSet<String>,
+    scalar: &mut HashSet<String>,
+) {
+    match comp {
+        CompExpr::Value(value) => collect_scalar_param_evidence_value(value, params, scalar),
+        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
+            collect_scalar_param_evidence_comp(value, params, scalar);
+            collect_scalar_param_evidence_comp(body, params, scalar);
+        }
+        CompExpr::Seq { stmts, tail } => {
+            for stmt in stmts {
+                collect_scalar_param_evidence_comp(stmt, params, scalar);
+            }
+            collect_scalar_param_evidence_comp(tail, params, scalar);
+        }
+        CompExpr::If { cond, then_, else_ } => {
+            mark_scalar_param_value(cond, params, scalar);
+            collect_scalar_param_evidence_value(cond, params, scalar);
+            collect_scalar_param_evidence_comp(then_, params, scalar);
+            collect_scalar_param_evidence_comp(else_, params, scalar);
+        }
+        CompExpr::Call { callee, args } => {
+            collect_scalar_param_evidence_value(callee, params, scalar);
+            for arg in args {
+                collect_scalar_param_evidence_value(arg, params, scalar);
+            }
+        }
+        CompExpr::Assign { value, .. } => {
+            collect_scalar_param_evidence_comp(value, params, scalar);
+        }
+        CompExpr::AssignIndex { path, value, .. } => {
+            for index in path {
+                mark_scalar_param_value(index, params, scalar);
+            }
+            collect_scalar_param_evidence_comp(value, params, scalar);
+        }
+        CompExpr::Case { scrutinee, arms } => {
+            collect_scalar_param_evidence_value(scrutinee, params, scalar);
+            for arm in arms {
+                collect_scalar_param_evidence_comp(&arm.body, params, scalar);
+            }
+        }
+        CompExpr::Dup { value } | CompExpr::Drop { value } | CompExpr::Resume { value } => {
+            collect_scalar_param_evidence_value(value, params, scalar);
+        }
+        CompExpr::PerformEffect { args, .. } => {
+            for arg in args {
+                collect_scalar_param_evidence_value(arg, params, scalar);
+            }
+        }
+        CompExpr::Handle { clauses } => {
+            for clause in clauses {
+                collect_scalar_param_evidence_comp(&clause.body, params, scalar);
+            }
+        }
+        CompExpr::WithHandler { handler, body } => {
+            collect_scalar_param_evidence_comp(handler, params, scalar);
+            collect_scalar_param_evidence_comp(body, params, scalar);
+        }
+    }
+}
+
+fn collect_scalar_param_evidence_value(
+    value: &ValueExpr,
+    params: &HashSet<String>,
+    scalar: &mut HashSet<String>,
+) {
+    match value {
+        ValueExpr::BinOp { left, right, .. } => {
+            mark_scalar_param_value(left, params, scalar);
+            mark_scalar_param_value(right, params, scalar);
+            collect_scalar_param_evidence_value(left, params, scalar);
+            collect_scalar_param_evidence_value(right, params, scalar);
+        }
+        ValueExpr::ListGet { list, index } => {
+            mark_scalar_param_value(list, params, scalar);
+            collect_scalar_param_evidence_value(list, params, scalar);
+            mark_scalar_param_value(index, params, scalar);
+            collect_scalar_param_evidence_value(index, params, scalar);
+        }
+        ValueExpr::ListLit { elements, spread } => {
+            for element in elements {
+                collect_scalar_param_evidence_value(element, params, scalar);
+            }
+            if let Some(spread) = spread {
+                collect_scalar_param_evidence_value(spread, params, scalar);
+            }
+        }
+        ValueExpr::TupleLit(items) => {
+            for item in items {
+                collect_scalar_param_evidence_value(item, params, scalar);
+            }
+        }
+        ValueExpr::RecordLit { fields, .. } => {
+            for (_, field) in fields {
+                collect_scalar_param_evidence_value(field, params, scalar);
+            }
+        }
+        ValueExpr::Lambda { param: _, body } => {
+            collect_scalar_param_evidence_comp(body, params, scalar);
+        }
+        ValueExpr::Interp(parts) => {
+            for part in parts {
+                if let IrInterpPart::Expr(value) = part {
+                    mark_scalar_param_value(value, params, scalar);
+                    collect_scalar_param_evidence_value(value, params, scalar);
+                }
+            }
+        }
+        ValueExpr::TupleProject { tuple, .. } => {
+            mark_scalar_param_value(tuple, params, scalar);
+            collect_scalar_param_evidence_value(tuple, params, scalar);
+        }
+        ValueExpr::IntLit(_)
+        | ValueExpr::BoolLit(_)
+        | ValueExpr::StrLit(_)
+        | ValueExpr::Var(_)
+        | ValueExpr::GlobalRef { .. }
+        | ValueExpr::Unit => {}
+    }
+}
+
+fn mark_scalar_param_value(
+    value: &ValueExpr,
+    params: &HashSet<String>,
+    scalar: &mut HashSet<String>,
+) {
+    if let ValueExpr::Var(name) = value
+        && params.contains(name)
+    {
+        scalar.insert(name.clone());
+    }
 }
 
 fn classify_comp(
@@ -106,74 +258,84 @@ fn classify_comp(
     classes: &mut HashMap<String, OwnershipClass>,
     params: &HashSet<String>,
     module_params: &HashMap<String, Vec<OwnershipClass>>,
+    aliases: &mut HashMap<String, String>,
 ) {
     match comp {
-        CompExpr::Value(value) => classify_return_value(value, classes, params),
+        CompExpr::Value(value) => classify_return_value(value, classes, params, aliases),
         CompExpr::Let {
             name, value, body, ..
         } => {
-            classify_bound_comp(value, classes, params, module_params);
-            classes.insert(name.clone(), classify_owned_result(value));
-            classify_comp(body, classes, params, module_params);
+            classify_bound_comp(value, classes, params, module_params, aliases);
+            classes.insert(name.clone(), classify_owned_result(value, classes, aliases));
+            let previous_alias = bind_alias(name, value, params, aliases);
+            classify_comp(body, classes, params, module_params, aliases);
+            restore_alias(name, previous_alias, aliases);
         }
         CompExpr::LetMut {
             name, value, body, ..
         } => {
-            classify_bound_comp(value, classes, params, module_params);
+            classify_bound_comp(value, classes, params, module_params, aliases);
             classes.insert(name.clone(), OwnershipClass::Borrowed);
-            classify_comp(body, classes, params, module_params);
+            let previous_alias = aliases.remove(name);
+            classify_comp(body, classes, params, module_params, aliases);
+            restore_alias(name, previous_alias, aliases);
         }
         CompExpr::Seq { stmts, tail } => {
             for stmt in stmts {
-                classify_comp(stmt, classes, params, module_params);
+                classify_comp(stmt, classes, params, module_params, aliases);
             }
-            classify_comp(tail, classes, params, module_params);
+            classify_comp(tail, classes, params, module_params, aliases);
         }
         CompExpr::If { cond, then_, else_ } => {
-            classify_borrowed_value(cond, classes, params);
-            classify_comp(then_, classes, params, module_params);
-            classify_comp(else_, classes, params, module_params);
+            classify_borrowed_value(cond, classes, params, aliases);
+            classify_comp(then_, classes, params, module_params, aliases);
+            classify_comp(else_, classes, params, module_params, aliases);
         }
         CompExpr::Call { callee, args } => {
-            classify_borrowed_value(callee, classes, params);
-            classify_call_args(callee, args, classes, params, module_params);
+            classify_borrowed_value(callee, classes, params, aliases);
+            classify_call_args(callee, args, classes, params, module_params, aliases);
         }
         CompExpr::Assign { value, .. } => {
-            classify_bound_comp(value, classes, params, module_params)
+            classify_bound_comp(value, classes, params, module_params, aliases)
         }
         CompExpr::AssignIndex { path, value, .. } => {
             for index in path {
-                classify_borrowed_value(index, classes, params);
+                classify_borrowed_value(index, classes, params, aliases);
             }
-            classify_bound_comp(value, classes, params, module_params);
+            classify_bound_comp(value, classes, params, module_params, aliases);
         }
         CompExpr::Case { scrutinee, arms } => {
-            classify_borrowed_value(scrutinee, classes, params);
+            classify_borrowed_value(scrutinee, classes, params, aliases);
             for arm in arms {
                 // Pattern-bound variables own the sub-parts of the scrutinee.
                 classify_case_pattern_bindings(&arm.pattern, classes);
-                classify_comp(&arm.body, classes, params, module_params);
+                let shadowed_aliases =
+                    remove_aliases(&collect_pattern_bindings(&arm.pattern), aliases);
+                classify_comp(&arm.body, classes, params, module_params, aliases);
+                restore_aliases(shadowed_aliases, aliases);
             }
         }
         CompExpr::Dup { value } | CompExpr::Resume { value } => {
-            classify_borrowed_value(value, classes, params)
+            classify_borrowed_value(value, classes, params, aliases)
         }
         CompExpr::Drop { value } => {
-            classify_consumed_value(value, classes, params);
+            classify_consumed_value(value, classes, params, aliases);
         }
         CompExpr::PerformEffect { args, .. } => {
             for arg in args {
-                classify_consumed_value(arg, classes, params);
+                classify_consumed_value(arg, classes, params, aliases);
             }
         }
         CompExpr::Handle { clauses } => {
             for clause in clauses {
-                classify_comp(&clause.body, classes, params, module_params);
+                let shadowed_aliases = remove_aliases(&clause.params, aliases);
+                classify_comp(&clause.body, classes, params, module_params, aliases);
+                restore_aliases(shadowed_aliases, aliases);
             }
         }
         CompExpr::WithHandler { handler, body } => {
-            classify_comp(handler, classes, params, module_params);
-            classify_comp(body, classes, params, module_params);
+            classify_comp(handler, classes, params, module_params, aliases);
+            classify_comp(body, classes, params, module_params, aliases);
         }
     }
 }
@@ -183,10 +345,11 @@ fn classify_bound_comp(
     classes: &mut HashMap<String, OwnershipClass>,
     params: &HashSet<String>,
     module_params: &HashMap<String, Vec<OwnershipClass>>,
+    aliases: &mut HashMap<String, String>,
 ) {
     match comp {
-        CompExpr::Value(value) => classify_bound_value(value, classes, params),
-        _ => classify_comp(comp, classes, params, module_params),
+        CompExpr::Value(value) => classify_bound_value(value, classes, params, aliases),
+        _ => classify_comp(comp, classes, params, module_params, aliases),
     }
 }
 
@@ -224,12 +387,66 @@ fn demote_param(
     }
 }
 
+fn demote_owner(
+    name: &str,
+    classes: &mut HashMap<String, OwnershipClass>,
+    params: &HashSet<String>,
+    aliases: &HashMap<String, String>,
+) {
+    let owner = aliases.get(name).map_or(name, String::as_str);
+    demote_param(owner, classes, params);
+}
+
+fn bind_alias(
+    name: &str,
+    value: &CompExpr,
+    params: &HashSet<String>,
+    aliases: &mut HashMap<String, String>,
+) -> Option<String> {
+    let previous = aliases.remove(name);
+    if let CompExpr::Value(ValueExpr::Var(source)) = value {
+        let owner = aliases.get(source).map_or(source, |root| root);
+        if params.contains(owner) {
+            aliases.insert(name.to_string(), owner.clone());
+        }
+    }
+    previous
+}
+
+fn restore_alias(name: &str, previous: Option<String>, aliases: &mut HashMap<String, String>) {
+    if let Some(previous) = previous {
+        aliases.insert(name.to_string(), previous);
+    } else {
+        aliases.remove(name);
+    }
+}
+
+fn remove_aliases(
+    names: &[String],
+    aliases: &mut HashMap<String, String>,
+) -> Vec<(String, Option<String>)> {
+    names
+        .iter()
+        .map(|name| (name.clone(), aliases.remove(name)))
+        .collect()
+}
+
+fn restore_aliases(
+    shadowed_aliases: Vec<(String, Option<String>)>,
+    aliases: &mut HashMap<String, String>,
+) {
+    for (name, previous) in shadowed_aliases {
+        restore_alias(&name, previous, aliases);
+    }
+}
+
 fn classify_call_args(
     callee: &ValueExpr,
     args: &[ValueExpr],
     classes: &mut HashMap<String, OwnershipClass>,
     params: &HashSet<String>,
     module_params: &HashMap<String, Vec<OwnershipClass>>,
+    aliases: &HashMap<String, String>,
 ) {
     let callee_params = callee_param_classes(callee, module_params);
     for (idx, arg) in args.iter().enumerate() {
@@ -237,9 +454,9 @@ fn classify_call_args(
             .and_then(|params| params.get(idx))
             .is_some_and(|class| *class == OwnershipClass::Borrowed)
         {
-            classify_borrowed_value(arg, classes, params);
+            classify_borrowed_value(arg, classes, params, aliases);
         } else {
-            classify_consumed_value(arg, classes, params);
+            classify_consumed_value(arg, classes, params, aliases);
         }
     }
 }
@@ -258,44 +475,49 @@ fn classify_return_value(
     value: &ValueExpr,
     classes: &mut HashMap<String, OwnershipClass>,
     params: &HashSet<String>,
+    aliases: &HashMap<String, String>,
 ) {
     match value {
         ValueExpr::ListLit { elements, spread } => {
             for element in elements {
-                classify_consumed_value(element, classes, params);
+                classify_consumed_value(element, classes, params, aliases);
             }
             if let Some(spread) = spread {
-                classify_consumed_value(spread, classes, params);
+                classify_consumed_value(spread, classes, params, aliases);
             }
         }
         ValueExpr::TupleLit(items) => {
             for item in items {
-                classify_consumed_value(item, classes, params);
+                classify_consumed_value(item, classes, params, aliases);
             }
         }
         ValueExpr::RecordLit { fields, .. } => {
             for (_, field) in fields {
-                classify_consumed_value(field, classes, params);
+                classify_consumed_value(field, classes, params, aliases);
             }
         }
-        ValueExpr::Lambda { param, body } => classify_lambda_capture(body, param, classes, params),
+        ValueExpr::Lambda { param, body } => {
+            classify_lambda_capture(body, param, classes, params, aliases)
+        }
         ValueExpr::Interp(parts) => {
             for part in parts {
                 if let IrInterpPart::Expr(value) = part {
-                    classify_borrowed_value(value, classes, params);
+                    classify_consumed_value(value, classes, params, aliases);
                 }
             }
         }
         ValueExpr::BinOp { left, right, .. } => {
-            classify_borrowed_value(left, classes, params);
-            classify_borrowed_value(right, classes, params);
+            classify_borrowed_value(left, classes, params, aliases);
+            classify_borrowed_value(right, classes, params, aliases);
         }
-        ValueExpr::TupleProject { tuple, .. } => classify_borrowed_value(tuple, classes, params),
+        ValueExpr::TupleProject { tuple, .. } => {
+            classify_borrowed_value(tuple, classes, params, aliases)
+        }
         ValueExpr::ListGet { list, index } => {
-            classify_borrowed_value(list, classes, params);
-            classify_borrowed_value(index, classes, params);
+            classify_borrowed_value(list, classes, params, aliases);
+            classify_borrowed_value(index, classes, params, aliases);
         }
-        ValueExpr::Var(name) => demote_param(name, classes, params),
+        ValueExpr::Var(name) => demote_owner(name, classes, params, aliases),
         ValueExpr::IntLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
@@ -308,10 +530,11 @@ fn classify_bound_value(
     value: &ValueExpr,
     classes: &mut HashMap<String, OwnershipClass>,
     params: &HashSet<String>,
+    aliases: &HashMap<String, String>,
 ) {
     match value {
         ValueExpr::Var(_) => {}
-        _ => classify_return_value(value, classes, params),
+        _ => classify_return_value(value, classes, params, aliases),
     }
 }
 
@@ -319,42 +542,47 @@ fn classify_borrowed_value(
     value: &ValueExpr,
     classes: &mut HashMap<String, OwnershipClass>,
     params: &HashSet<String>,
+    aliases: &HashMap<String, String>,
 ) {
     match value {
         ValueExpr::ListLit { elements, spread } => {
             for element in elements {
-                classify_consumed_value(element, classes, params);
+                classify_consumed_value(element, classes, params, aliases);
             }
             if let Some(spread) = spread {
-                classify_consumed_value(spread, classes, params);
+                classify_consumed_value(spread, classes, params, aliases);
             }
         }
         ValueExpr::TupleLit(items) => {
             for item in items {
-                classify_consumed_value(item, classes, params);
+                classify_consumed_value(item, classes, params, aliases);
             }
         }
         ValueExpr::RecordLit { fields, .. } => {
             for (_, field) in fields {
-                classify_consumed_value(field, classes, params);
+                classify_consumed_value(field, classes, params, aliases);
             }
         }
-        ValueExpr::Lambda { param, body } => classify_lambda_capture(body, param, classes, params),
+        ValueExpr::Lambda { param, body } => {
+            classify_lambda_capture(body, param, classes, params, aliases)
+        }
         ValueExpr::Interp(parts) => {
             for part in parts {
                 if let IrInterpPart::Expr(value) = part {
-                    classify_borrowed_value(value, classes, params);
+                    classify_borrowed_value(value, classes, params, aliases);
                 }
             }
         }
         ValueExpr::BinOp { left, right, .. } => {
-            classify_borrowed_value(left, classes, params);
-            classify_borrowed_value(right, classes, params);
+            classify_borrowed_value(left, classes, params, aliases);
+            classify_borrowed_value(right, classes, params, aliases);
         }
-        ValueExpr::TupleProject { tuple, .. } => classify_borrowed_value(tuple, classes, params),
+        ValueExpr::TupleProject { tuple, .. } => {
+            classify_borrowed_value(tuple, classes, params, aliases)
+        }
         ValueExpr::ListGet { list, index } => {
-            classify_borrowed_value(list, classes, params);
-            classify_borrowed_value(index, classes, params);
+            classify_borrowed_value(list, classes, params, aliases);
+            classify_borrowed_value(index, classes, params, aliases);
         }
         ValueExpr::IntLit(_)
         | ValueExpr::BoolLit(_)
@@ -369,43 +597,48 @@ fn classify_consumed_value(
     value: &ValueExpr,
     classes: &mut HashMap<String, OwnershipClass>,
     params: &HashSet<String>,
+    aliases: &HashMap<String, String>,
 ) {
     match value {
-        ValueExpr::Var(name) => demote_param(name, classes, params),
+        ValueExpr::Var(name) => demote_owner(name, classes, params, aliases),
         ValueExpr::ListLit { elements, spread } => {
             for element in elements {
-                classify_consumed_value(element, classes, params);
+                classify_consumed_value(element, classes, params, aliases);
             }
             if let Some(spread) = spread {
-                classify_consumed_value(spread, classes, params);
+                classify_consumed_value(spread, classes, params, aliases);
             }
         }
         ValueExpr::TupleLit(items) => {
             for item in items {
-                classify_consumed_value(item, classes, params);
+                classify_consumed_value(item, classes, params, aliases);
             }
         }
         ValueExpr::RecordLit { fields, .. } => {
             for (_, field) in fields {
-                classify_consumed_value(field, classes, params);
+                classify_consumed_value(field, classes, params, aliases);
             }
         }
-        ValueExpr::Lambda { param, body } => classify_lambda_capture(body, param, classes, params),
+        ValueExpr::Lambda { param, body } => {
+            classify_lambda_capture(body, param, classes, params, aliases)
+        }
         ValueExpr::Interp(parts) => {
             for part in parts {
                 if let IrInterpPart::Expr(value) = part {
-                    classify_consumed_value(value, classes, params);
+                    classify_consumed_value(value, classes, params, aliases);
                 }
             }
         }
         ValueExpr::BinOp { left, right, .. } => {
-            classify_consumed_value(left, classes, params);
-            classify_consumed_value(right, classes, params);
+            classify_consumed_value(left, classes, params, aliases);
+            classify_consumed_value(right, classes, params, aliases);
         }
-        ValueExpr::TupleProject { tuple, .. } => classify_consumed_value(tuple, classes, params),
+        ValueExpr::TupleProject { tuple, .. } => {
+            classify_consumed_value(tuple, classes, params, aliases)
+        }
         ValueExpr::ListGet { list, index } => {
-            classify_consumed_value(list, classes, params);
-            classify_consumed_value(index, classes, params);
+            classify_consumed_value(list, classes, params, aliases);
+            classify_consumed_value(index, classes, params, aliases);
         }
         ValueExpr::IntLit(_)
         | ValueExpr::BoolLit(_)
@@ -420,17 +653,29 @@ fn classify_lambda_capture(
     lambda_param: &str,
     classes: &mut HashMap<String, OwnershipClass>,
     params: &HashSet<String>,
+    aliases: &HashMap<String, String>,
 ) {
     let mut live = collect_live_vars(body);
     live.remove(lambda_param);
     for name in live {
-        demote_param(&name, classes, params);
+        demote_owner(&name, classes, params, aliases);
     }
 }
 
-fn classify_owned_result(comp: &CompExpr) -> OwnershipClass {
+fn classify_owned_result(
+    comp: &CompExpr,
+    classes: &HashMap<String, OwnershipClass>,
+    aliases: &HashMap<String, String>,
+) -> OwnershipClass {
     match comp {
         CompExpr::Value(value) if value_is_fresh_heap(value) => OwnershipClass::Owned,
+        CompExpr::Value(ValueExpr::Var(name)) => {
+            let owner = aliases.get(name).map_or(name, |root| root);
+            classes
+                .get(owner)
+                .copied()
+                .unwrap_or(OwnershipClass::Borrowed)
+        }
         _ => OwnershipClass::Borrowed,
     }
 }
@@ -458,6 +703,7 @@ fn drop_insert_module(
     module: &IrModule,
     ownership: &HashMap<String, HashMap<String, OwnershipClass>>,
 ) -> IrModule {
+    let drop_ownership = drop_instrumentation_ownership(module, ownership);
     let param_order: HashMap<String, Vec<String>> = module
         .decls
         .iter()
@@ -477,22 +723,21 @@ fn drop_insert_module(
             .decls
             .iter()
             .map(|decl| {
-                let decl_ownership = ownership
+                let decl_ownership = drop_ownership
                     .get(&decl.name)
                     .expect("ownership facts must exist");
 
                 let (body, next_tmp) =
-                    drop_insert_comp(&decl.body, decl_ownership, ownership, &param_order, 0);
+                    drop_insert_comp(&decl.body, decl_ownership, &drop_ownership, &param_order, 0);
 
-                // Insert Drops for owned parameters that are never referenced in the body.
-                // This is the conservative / safe slice of M4 parameter ownership: a param
-                // that never appears in the body (never consumed, never read) must be
-                // released at entry. We intentionally do NOT emit Dups or Drops for
-                // multiply-used or conditionally-consumed params — that requires borrow
-                // inference (M4.5) to be safe. Over-emitting Dup/Drop on params caused
-                // use-after-free and refcount leaks in real programs (see plan C1/C2).
-                let (body, _) =
-                    drop_insert_params_conservative(&decl.params, body, decl_ownership, next_tmp);
+                let (body, _) = drop_insert_params(
+                    &decl.params,
+                    body,
+                    decl_ownership,
+                    &drop_ownership,
+                    &param_order,
+                    next_tmp,
+                );
 
                 IrDecl {
                     name: decl.name.clone(),
@@ -506,57 +751,63 @@ fn drop_insert_module(
     }
 }
 
-/// Conservative parameter-Drop insertion: only emits `Drop` for Owned parameters
-/// that are *never* referenced inside the body. This covers the unambiguous
-/// "dead parameter" case without requiring borrow inference. Parameters that are
-/// used (even once) are left alone here.
-///
-/// The "consumed on one branch, dead on another" case (e.g. `grid` in an
-/// `if`/`case` where one arm calls `apply x` and the other reads nothing)
-/// is **not** balanced by M4. `drop_insert_comp` intentionally does not
-/// emit branch-level `Drop`s on non-pattern bindings because distinguishing
-/// consume from borrow at a `Var` occurrence requires borrow inference.
-/// That work is explicitly deferred to M4.5.
-fn drop_insert_params_conservative(
+fn drop_instrumentation_ownership(
+    module: &IrModule,
+    ownership: &HashMap<String, HashMap<String, OwnershipClass>>,
+) -> HashMap<String, HashMap<String, OwnershipClass>> {
+    let mut drop_ownership = ownership.clone();
+    for decl in &module.decls {
+        let Some(classes) = drop_ownership.get_mut(&decl.name) else {
+            continue;
+        };
+        for (param_name, ty) in &decl.params {
+            if !type_may_be_heap(ty) {
+                classes.insert(param_name.clone(), OwnershipClass::Borrowed);
+            }
+        }
+    }
+    drop_ownership
+}
+
+fn type_may_be_heap(ty: &crate::ir::IrType) -> bool {
+    match ty {
+        crate::ir::IrType::Int
+        | crate::ir::IrType::Bool
+        | crate::ir::IrType::Str
+        | crate::ir::IrType::Unit => false,
+        crate::ir::IrType::Opaque(name)
+            if matches!(name.as_str(), "Int" | "Bool" | "String" | "Unit") =>
+        {
+            false
+        }
+        crate::ir::IrType::Unknown | crate::ir::IrType::Opaque(_) => true,
+    }
+}
+
+fn drop_insert_params(
     params: &[(String, crate::ir::IrType)],
-    body: CompExpr,
+    mut body: CompExpr,
     ownership: &HashMap<String, OwnershipClass>,
+    module_ownership: &HashMap<String, HashMap<String, OwnershipClass>>,
+    param_order: &HashMap<String, Vec<String>>,
     next_tmp: usize,
 ) -> (CompExpr, usize) {
-    let mut drops: Vec<CompExpr> = params
+    let mut next_tmp = next_tmp;
+    let mut owned_params: Vec<&str> = params
         .iter()
-        .filter(|(n, _)| ownership.get(n) == Some(&OwnershipClass::Owned))
-        .filter(|(n, _)| count_var_uses(&body, n) == 0)
-        .map(|(n, _)| CompExpr::Drop {
-            value: Box::new(ValueExpr::Var(n.clone())),
-        })
+        .map(|(name, _)| name.as_str())
+        .filter(|name| ownership.get(*name) == Some(&OwnershipClass::Owned))
         .collect();
+    owned_params.sort_unstable();
 
-    if drops.is_empty() {
-        return (body, next_tmp);
+    for name in owned_params.into_iter().rev() {
+        let (body_out, new_next_tmp) =
+            insert_owned_binding_drop(name, body, module_ownership, param_order, next_tmp);
+        body = body_out;
+        next_tmp = new_next_tmp;
     }
-    drops.sort_by(|a, b| {
-        let CompExpr::Drop { value: va } = a else {
-            unreachable!()
-        };
-        let CompExpr::Drop { value: vb } = b else {
-            unreachable!()
-        };
-        let ValueExpr::Var(na) = va.as_ref() else {
-            unreachable!()
-        };
-        let ValueExpr::Var(nb) = vb.as_ref() else {
-            unreachable!()
-        };
-        na.cmp(nb)
-    });
-    (
-        CompExpr::Seq {
-            stmts: drops,
-            tail: Box::new(body),
-        },
-        next_tmp,
-    )
+
+    (body, next_tmp)
 }
 
 fn drop_insert_comp(
@@ -586,6 +837,13 @@ fn drop_insert_comp(
                 module_ownership,
                 param_order,
                 next_tmp,
+            );
+            let value_out = insert_live_across_let_value_dups(
+                value_out,
+                &body_with_drop,
+                ownership,
+                module_ownership,
+                param_order,
             );
             (
                 CompExpr::Let {
@@ -644,17 +902,20 @@ fn drop_insert_comp(
             )
         }
         CompExpr::If { cond, then_, else_ } => {
-            // M4 conservative slice: we do not branch-balance across `If` arms on
-            // general bindings. Real Goby programs mix consuming (Call) and borrowing
-            // (builtin intrinsics such as `length`) uses of the same binding, and a
-            // count-based liveness approximation cannot distinguish them — attempting
-            // to balance leads to use-after-free. Borrow inference (M4.5) will make
-            // this precise. Fresh-heap `let` bindings that are unused on a branch are
-            // still handled by `insert_owned_let_drop` at the enclosing Let site.
+            let branch_visible = collect_live_vars(comp);
             let (then_out, next_tmp) =
                 drop_insert_comp(then_, ownership, module_ownership, param_order, next_tmp);
             let (else_out, next_tmp) =
                 drop_insert_comp(else_, ownership, module_ownership, param_order, next_tmp);
+            let (then_out, else_out, next_tmp) = balance_if_branch_drops(
+                then_out,
+                else_out,
+                ownership,
+                module_ownership,
+                param_order,
+                &branch_visible,
+                next_tmp,
+            );
             (
                 CompExpr::If {
                     cond: cond.clone(),
@@ -664,13 +925,16 @@ fn drop_insert_comp(
                 next_tmp,
             )
         }
-        CompExpr::Call { callee, args } => (
-            CompExpr::Call {
+        CompExpr::Call { callee, args } => {
+            let call = CompExpr::Call {
                 callee: callee.clone(),
                 args: args.clone(),
-            },
-            next_tmp,
-        ),
+            };
+            (
+                insert_non_last_call_arg_dups(call, ownership, module_ownership, param_order),
+                next_tmp,
+            )
+        }
         CompExpr::Assign { name, value } => {
             let (value, next_tmp) =
                 drop_insert_comp(value, ownership, module_ownership, param_order, next_tmp);
@@ -695,11 +959,7 @@ fn drop_insert_comp(
             )
         }
         CompExpr::Case { scrutinee, arms } => {
-            // M4 conservative slice: no branch balancing on general bindings across
-            // Case arms (same reasoning as If). We still emit Drops for *pattern-bound*
-            // variables that are introduced by the arm's pattern but not referenced in
-            // the arm body — these are freshly owned slices of the scrutinee and are
-            // safe to release.
+            let branch_visible = collect_live_vars(comp);
             let mut next_tmp_mut = next_tmp;
             let arms = arms
                 .iter()
@@ -726,6 +986,14 @@ fn drop_insert_comp(
                     }
                 })
                 .collect();
+            let (arms, next_tmp_mut) = balance_case_branch_drops(
+                arms,
+                ownership,
+                module_ownership,
+                param_order,
+                &branch_visible,
+                next_tmp_mut,
+            );
             (
                 CompExpr::Case {
                     scrutinee: scrutinee.clone(),
@@ -904,6 +1172,303 @@ fn drop_unused_pattern_bindings(
     )
 }
 
+fn owned_binding_names(ownership: &HashMap<String, OwnershipClass>) -> Vec<&str> {
+    let mut names: Vec<&str> = ownership
+        .iter()
+        .filter_map(|(name, class)| (*class == OwnershipClass::Owned).then_some(name.as_str()))
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+fn insert_owned_binding_drop(
+    name: &str,
+    body: CompExpr,
+    module_ownership: &HashMap<String, HashMap<String, OwnershipClass>>,
+    param_order: &HashMap<String, Vec<String>>,
+    next_tmp: usize,
+) -> (CompExpr, usize) {
+    if count_var_uses(&body, name) == 0 {
+        return prepend_drop(name, body, next_tmp);
+    }
+
+    if !comp_consumes_name(&body, name, module_ownership, param_order) {
+        return append_drop_preserving_result(name, body, next_tmp);
+    }
+
+    (body, next_tmp)
+}
+
+fn prepend_drop(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr, usize) {
+    (
+        CompExpr::Seq {
+            stmts: vec![CompExpr::Drop {
+                value: Box::new(ValueExpr::Var(name.to_string())),
+            }],
+            tail: Box::new(body),
+        },
+        next_tmp,
+    )
+}
+
+fn append_drop_preserving_result(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr, usize) {
+    let tmp = format!("__perceus_drop_tmp_{next_tmp}");
+    (
+        CompExpr::Let {
+            name: tmp.clone(),
+            ty: crate::ir::IrType::Unknown,
+            value: Box::new(body),
+            body: Box::new(CompExpr::Seq {
+                stmts: vec![CompExpr::Drop {
+                    value: Box::new(ValueExpr::Var(name.to_string())),
+                }],
+                tail: Box::new(CompExpr::Value(ValueExpr::Var(tmp))),
+            }),
+        },
+        next_tmp + 1,
+    )
+}
+
+fn balance_if_branch_drops(
+    mut then_out: CompExpr,
+    mut else_out: CompExpr,
+    ownership: &HashMap<String, OwnershipClass>,
+    module_ownership: &HashMap<String, HashMap<String, OwnershipClass>>,
+    param_order: &HashMap<String, Vec<String>>,
+    branch_visible: &HashSet<String>,
+    next_tmp: usize,
+) -> (CompExpr, CompExpr, usize) {
+    let mut next_tmp = next_tmp;
+    for name in owned_binding_names(ownership).into_iter().rev() {
+        if !branch_visible.contains(name) {
+            continue;
+        }
+        let then_consumes = comp_consumes_name(&then_out, name, module_ownership, param_order);
+        let else_consumes = comp_consumes_name(&else_out, name, module_ownership, param_order);
+        match (then_consumes, else_consumes) {
+            (true, false) => {
+                let (balanced, new_next_tmp) = insert_owned_binding_drop(
+                    name,
+                    else_out,
+                    module_ownership,
+                    param_order,
+                    next_tmp,
+                );
+                else_out = balanced;
+                next_tmp = new_next_tmp;
+            }
+            (false, true) => {
+                let (balanced, new_next_tmp) = insert_owned_binding_drop(
+                    name,
+                    then_out,
+                    module_ownership,
+                    param_order,
+                    next_tmp,
+                );
+                then_out = balanced;
+                next_tmp = new_next_tmp;
+            }
+            _ => {}
+        }
+    }
+
+    (then_out, else_out, next_tmp)
+}
+
+fn balance_case_branch_drops(
+    mut arms: Vec<IrCaseArm>,
+    ownership: &HashMap<String, OwnershipClass>,
+    module_ownership: &HashMap<String, HashMap<String, OwnershipClass>>,
+    param_order: &HashMap<String, Vec<String>>,
+    branch_visible: &HashSet<String>,
+    next_tmp: usize,
+) -> (Vec<IrCaseArm>, usize) {
+    let mut next_tmp = next_tmp;
+    for name in owned_binding_names(ownership).into_iter().rev() {
+        if !branch_visible.contains(name) {
+            continue;
+        }
+        let arm_consumes: Vec<bool> = arms
+            .iter()
+            .map(|arm| comp_consumes_name(&arm.body, name, module_ownership, param_order))
+            .collect();
+        if !arm_consumes.iter().any(|consumes| *consumes) {
+            continue;
+        }
+        if arm_consumes.iter().all(|consumes| *consumes) {
+            continue;
+        }
+
+        for (arm, consumes) in arms.iter_mut().zip(arm_consumes) {
+            if consumes
+                || collect_pattern_bindings(&arm.pattern)
+                    .iter()
+                    .any(|bound| bound == name)
+            {
+                continue;
+            }
+            let body = std::mem::replace(&mut arm.body, CompExpr::Value(ValueExpr::Unit));
+            let (balanced, new_next_tmp) =
+                insert_owned_binding_drop(name, body, module_ownership, param_order, next_tmp);
+            arm.body = balanced;
+            next_tmp = new_next_tmp;
+        }
+    }
+
+    (arms, next_tmp)
+}
+
+fn insert_non_last_call_arg_dups(
+    call: CompExpr,
+    ownership: &HashMap<String, OwnershipClass>,
+    module_ownership: &HashMap<String, HashMap<String, OwnershipClass>>,
+    param_order: &HashMap<String, Vec<String>>,
+) -> CompExpr {
+    let CompExpr::Call { callee, args } = call else {
+        return call;
+    };
+
+    let mut consuming_counts: HashMap<String, usize> = HashMap::new();
+    for (idx, arg) in args.iter().enumerate() {
+        if callee_arg_is_borrowed(&callee, idx, module_ownership, param_order) {
+            continue;
+        }
+        collect_owned_var_mentions(arg, ownership, &mut consuming_counts);
+    }
+
+    let mut dups: Vec<CompExpr> = consuming_counts
+        .into_iter()
+        .flat_map(|(name, count)| {
+            (1..count).map(move |_| CompExpr::Dup {
+                value: Box::new(ValueExpr::Var(name.clone())),
+            })
+        })
+        .collect();
+
+    if dups.is_empty() {
+        return CompExpr::Call { callee, args };
+    }
+
+    dups.sort_by(|a, b| {
+        let CompExpr::Dup { value: va } = a else {
+            unreachable!()
+        };
+        let CompExpr::Dup { value: vb } = b else {
+            unreachable!()
+        };
+        let ValueExpr::Var(na) = va.as_ref() else {
+            unreachable!()
+        };
+        let ValueExpr::Var(nb) = vb.as_ref() else {
+            unreachable!()
+        };
+        na.cmp(nb)
+    });
+
+    CompExpr::Seq {
+        stmts: dups,
+        tail: Box::new(CompExpr::Call { callee, args }),
+    }
+}
+
+fn insert_live_across_let_value_dups(
+    value: CompExpr,
+    body: &CompExpr,
+    ownership: &HashMap<String, OwnershipClass>,
+    module_ownership: &HashMap<String, HashMap<String, OwnershipClass>>,
+    param_order: &HashMap<String, Vec<String>>,
+) -> CompExpr {
+    let body_live = collect_live_vars(body);
+    let mut dups: Vec<CompExpr> = owned_binding_names(ownership)
+        .into_iter()
+        .filter(|name| body_live.contains(*name))
+        .filter(|name| comp_consumes_name(&value, name, module_ownership, param_order))
+        .map(|name| CompExpr::Dup {
+            value: Box::new(ValueExpr::Var(name.to_string())),
+        })
+        .collect();
+
+    if dups.is_empty() {
+        return value;
+    }
+
+    dups.sort_by(|a, b| {
+        let CompExpr::Dup { value: va } = a else {
+            unreachable!()
+        };
+        let CompExpr::Dup { value: vb } = b else {
+            unreachable!()
+        };
+        let ValueExpr::Var(na) = va.as_ref() else {
+            unreachable!()
+        };
+        let ValueExpr::Var(nb) = vb.as_ref() else {
+            unreachable!()
+        };
+        na.cmp(nb)
+    });
+
+    CompExpr::Seq {
+        stmts: dups,
+        tail: Box::new(value),
+    }
+}
+
+fn collect_owned_var_mentions(
+    value: &ValueExpr,
+    ownership: &HashMap<String, OwnershipClass>,
+    out: &mut HashMap<String, usize>,
+) {
+    match value {
+        ValueExpr::Var(name) if ownership.get(name) == Some(&OwnershipClass::Owned) => {
+            *out.entry(name.clone()).or_insert(0) += 1;
+        }
+        ValueExpr::ListLit { elements, spread } => {
+            for element in elements {
+                collect_owned_var_mentions(element, ownership, out);
+            }
+            if let Some(spread) = spread {
+                collect_owned_var_mentions(spread, ownership, out);
+            }
+        }
+        ValueExpr::TupleLit(items) => {
+            for item in items {
+                collect_owned_var_mentions(item, ownership, out);
+            }
+        }
+        ValueExpr::RecordLit { fields, .. } => {
+            for (_, field) in fields {
+                collect_owned_var_mentions(field, ownership, out);
+            }
+        }
+        ValueExpr::Lambda { .. } => {}
+        ValueExpr::Interp(parts) => {
+            for part in parts {
+                if let IrInterpPart::Expr(value) = part {
+                    collect_owned_var_mentions(value, ownership, out);
+                }
+            }
+        }
+        ValueExpr::BinOp { left, right, .. } => {
+            collect_owned_var_mentions(left, ownership, out);
+            collect_owned_var_mentions(right, ownership, out);
+        }
+        ValueExpr::TupleProject { tuple, .. } => {
+            collect_owned_var_mentions(tuple, ownership, out);
+        }
+        ValueExpr::ListGet { list, index } => {
+            collect_owned_var_mentions(list, ownership, out);
+            collect_owned_var_mentions(index, ownership, out);
+        }
+        ValueExpr::IntLit(_)
+        | ValueExpr::BoolLit(_)
+        | ValueExpr::StrLit(_)
+        | ValueExpr::Var(_)
+        | ValueExpr::GlobalRef { .. }
+        | ValueExpr::Unit => {}
+    }
+}
+
 /// For a `Let { name }` binding that is Owned, decide whether to insert a Drop.
 ///
 /// M4.5 keeps the original `use_count == 0` entry-drop and additionally emits a
@@ -929,33 +1494,11 @@ fn insert_owned_let_drop(
     let use_count = count_var_uses(&body, name);
 
     if use_count == 0 {
-        return (
-            CompExpr::Seq {
-                stmts: vec![CompExpr::Drop {
-                    value: Box::new(ValueExpr::Var(name.to_string())),
-                }],
-                tail: Box::new(body),
-            },
-            next_tmp,
-        );
+        return prepend_drop(name, body, next_tmp);
     }
 
     if !comp_consumes_name(&body, name, module_ownership, param_order) {
-        let tmp = format!("__perceus_drop_tmp_{next_tmp}");
-        return (
-            CompExpr::Let {
-                name: tmp.clone(),
-                ty: crate::ir::IrType::Unknown,
-                value: Box::new(body),
-                body: Box::new(CompExpr::Seq {
-                    stmts: vec![CompExpr::Drop {
-                        value: Box::new(ValueExpr::Var(name.to_string())),
-                    }],
-                    tail: Box::new(CompExpr::Value(ValueExpr::Var(tmp))),
-                }),
-            },
-            next_tmp + 1,
-        );
+        return append_drop_preserving_result(name, body, next_tmp);
     }
 
     (body, next_tmp)
@@ -1061,7 +1604,7 @@ fn return_value_consumes_name(value: &ValueExpr, name: &str) -> bool {
         }
         ValueExpr::Interp(parts) => parts.iter().any(|part| match part {
             IrInterpPart::Text(_) => false,
-            IrInterpPart::Expr(_) => false,
+            IrInterpPart::Expr(value) => value_mentions_name(value, name),
         }),
         ValueExpr::BinOp { .. } | ValueExpr::TupleProject { .. } | ValueExpr::ListGet { .. } => {
             false
@@ -1922,6 +2465,325 @@ mod tests {
         assert!(
             !ir_str.contains("drop ys"),
             "unknown callee must remain conservative/consuming; got:\n{ir_str}"
+        );
+    }
+
+    #[test]
+    fn parameter_returned_through_let_alias_is_owned() {
+        let module = IrModule {
+            decls: vec![
+                IrDecl {
+                    name: "id_alias".to_string(),
+                    params: vec![("xs".to_string(), IrType::Unknown)],
+                    result_ty: IrType::Unknown,
+                    residual_effects: vec![],
+                    body: CompExpr::Let {
+                        name: "ys".to_string(),
+                        ty: IrType::Unknown,
+                        value: Box::new(CompExpr::Value(ValueExpr::Var("xs".to_string()))),
+                        body: Box::new(CompExpr::Value(ValueExpr::Var("ys".to_string()))),
+                    },
+                },
+                IrDecl {
+                    name: "main".to_string(),
+                    params: vec![],
+                    result_ty: IrType::Unknown,
+                    residual_effects: vec![],
+                    body: CompExpr::Let {
+                        name: "zs".to_string(),
+                        ty: IrType::Unknown,
+                        value: Box::new(CompExpr::Value(ValueExpr::ListLit {
+                            elements: vec![ValueExpr::IntLit(1)],
+                            spread: None,
+                        })),
+                        body: Box::new(CompExpr::Call {
+                            callee: Box::new(ValueExpr::GlobalRef {
+                                module: "".to_string(),
+                                name: "id_alias".to_string(),
+                            }),
+                            args: vec![ValueExpr::Var("zs".to_string())],
+                        }),
+                    },
+                },
+            ],
+        };
+
+        let rewritten = run_perceus_passes(&module);
+        let ir_str = fmt_ir(&rewritten);
+        assert!(
+            !ir_str.contains("drop zs"),
+            "alias-returning callee owns its param, so caller must transfer zs; got:\n{ir_str}"
+        );
+    }
+
+    #[test]
+    fn parameter_consumed_through_let_alias_is_owned() {
+        let module = IrModule {
+            decls: vec![
+                IrDecl {
+                    name: "sink_alias".to_string(),
+                    params: vec![("xs".to_string(), IrType::Unknown)],
+                    result_ty: IrType::Unknown,
+                    residual_effects: vec![],
+                    body: CompExpr::Let {
+                        name: "ys".to_string(),
+                        ty: IrType::Unknown,
+                        value: Box::new(CompExpr::Value(ValueExpr::Var("xs".to_string()))),
+                        body: Box::new(CompExpr::Call {
+                            callee: Box::new(ValueExpr::GlobalRef {
+                                module: "".to_string(),
+                                name: "external".to_string(),
+                            }),
+                            args: vec![ValueExpr::Var("ys".to_string())],
+                        }),
+                    },
+                },
+                IrDecl {
+                    name: "main".to_string(),
+                    params: vec![],
+                    result_ty: IrType::Unknown,
+                    residual_effects: vec![],
+                    body: CompExpr::Let {
+                        name: "zs".to_string(),
+                        ty: IrType::Unknown,
+                        value: Box::new(CompExpr::Value(ValueExpr::ListLit {
+                            elements: vec![ValueExpr::IntLit(1)],
+                            spread: None,
+                        })),
+                        body: Box::new(CompExpr::Call {
+                            callee: Box::new(ValueExpr::GlobalRef {
+                                module: "".to_string(),
+                                name: "sink_alias".to_string(),
+                            }),
+                            args: vec![ValueExpr::Var("zs".to_string())],
+                        }),
+                    },
+                },
+            ],
+        };
+
+        let rewritten = run_perceus_passes(&module);
+        let ir_str = fmt_ir(&rewritten);
+        assert!(
+            !ir_str.contains("drop zs"),
+            "alias-consuming callee owns its param, so caller must transfer zs; got:\n{ir_str}"
+        );
+    }
+
+    #[test]
+    fn if_arm_without_consuming_use_drops_owned_parameter() {
+        let module = IrModule {
+            decls: vec![
+                IrDecl {
+                    name: "id".to_string(),
+                    params: vec![("p".to_string(), IrType::Unknown)],
+                    result_ty: IrType::Unknown,
+                    residual_effects: vec![],
+                    body: CompExpr::Value(ValueExpr::Var("p".to_string())),
+                },
+                IrDecl {
+                    name: "main".to_string(),
+                    params: vec![
+                        ("xs".to_string(), IrType::Unknown),
+                        ("flag".to_string(), IrType::Bool),
+                    ],
+                    result_ty: IrType::Unknown,
+                    residual_effects: vec![],
+                    body: CompExpr::If {
+                        cond: Box::new(ValueExpr::Var("flag".to_string())),
+                        then_: Box::new(CompExpr::Call {
+                            callee: Box::new(ValueExpr::GlobalRef {
+                                module: "".to_string(),
+                                name: "id".to_string(),
+                            }),
+                            args: vec![ValueExpr::Var("xs".to_string())],
+                        }),
+                        else_: Box::new(CompExpr::Value(ValueExpr::IntLit(0))),
+                    },
+                },
+            ],
+        };
+
+        let rewritten = run_perceus_passes(&module);
+        let ir_str = fmt_ir(&rewritten);
+        assert!(
+            ir_str.contains("drop xs"),
+            "dead If arm should drop owned xs when the other arm consumes it; got:\n{ir_str}"
+        );
+    }
+
+    #[test]
+    fn if_list_get_arm_keeps_parameter_borrowed_without_balancing_drop() {
+        let module = IrModule {
+            decls: vec![
+                IrDecl {
+                    name: "id".to_string(),
+                    params: vec![("p".to_string(), IrType::Unknown)],
+                    result_ty: IrType::Unknown,
+                    residual_effects: vec![],
+                    body: CompExpr::Value(ValueExpr::Var("p".to_string())),
+                },
+                IrDecl {
+                    name: "main".to_string(),
+                    params: vec![
+                        ("xs".to_string(), IrType::Unknown),
+                        ("flag".to_string(), IrType::Bool),
+                    ],
+                    result_ty: IrType::Unknown,
+                    residual_effects: vec![],
+                    body: CompExpr::If {
+                        cond: Box::new(ValueExpr::Var("flag".to_string())),
+                        then_: Box::new(CompExpr::Value(ValueExpr::ListGet {
+                            list: Box::new(ValueExpr::Var("xs".to_string())),
+                            index: Box::new(ValueExpr::IntLit(0)),
+                        })),
+                        else_: Box::new(CompExpr::Call {
+                            callee: Box::new(ValueExpr::GlobalRef {
+                                module: "".to_string(),
+                                name: "id".to_string(),
+                            }),
+                            args: vec![ValueExpr::Var("xs".to_string())],
+                        }),
+                    },
+                },
+            ],
+        };
+
+        let rewritten = run_perceus_passes(&module);
+        let ir_str = fmt_ir(&rewritten);
+        assert!(
+            !ir_str.contains("drop xs"),
+            "ListGet evidence should keep xs borrowed and avoid early branch Drop; got:\n{ir_str}"
+        );
+    }
+
+    #[test]
+    fn repeated_owned_call_arg_gets_dup_before_call() {
+        let module = IrModule {
+            decls: vec![
+                IrDecl {
+                    name: "pair".to_string(),
+                    params: vec![
+                        ("left".to_string(), IrType::Unknown),
+                        ("right".to_string(), IrType::Unknown),
+                    ],
+                    result_ty: IrType::Unknown,
+                    residual_effects: vec![],
+                    body: CompExpr::Value(ValueExpr::TupleLit(vec![
+                        ValueExpr::Var("left".to_string()),
+                        ValueExpr::Var("right".to_string()),
+                    ])),
+                },
+                IrDecl {
+                    name: "main".to_string(),
+                    params: vec![],
+                    result_ty: IrType::Unknown,
+                    residual_effects: vec![],
+                    body: CompExpr::Let {
+                        name: "xs".to_string(),
+                        ty: IrType::Unknown,
+                        value: Box::new(CompExpr::Value(ValueExpr::ListLit {
+                            elements: vec![ValueExpr::IntLit(1)],
+                            spread: None,
+                        })),
+                        body: Box::new(CompExpr::Call {
+                            callee: Box::new(ValueExpr::GlobalRef {
+                                module: "".to_string(),
+                                name: "pair".to_string(),
+                            }),
+                            args: vec![
+                                ValueExpr::Var("xs".to_string()),
+                                ValueExpr::Var("xs".to_string()),
+                            ],
+                        }),
+                    },
+                },
+            ],
+        };
+
+        let rewritten = run_perceus_passes(&module);
+        let ir_str = fmt_ir(&rewritten);
+        assert!(
+            ir_str.contains("dup xs"),
+            "non-last consuming call arg should dup xs before the call; got:\n{ir_str}"
+        );
+    }
+
+    #[test]
+    fn recursive_scc_owned_parameter_demotes_across_call_edges() {
+        let module = IrModule {
+            decls: vec![
+                IrDecl {
+                    name: "left".to_string(),
+                    params: vec![
+                        ("xs".to_string(), IrType::Unknown),
+                        ("flag".to_string(), IrType::Bool),
+                    ],
+                    result_ty: IrType::Unknown,
+                    residual_effects: vec![],
+                    body: CompExpr::If {
+                        cond: Box::new(ValueExpr::Var("flag".to_string())),
+                        then_: Box::new(CompExpr::Call {
+                            callee: Box::new(ValueExpr::GlobalRef {
+                                module: "".to_string(),
+                                name: "right".to_string(),
+                            }),
+                            args: vec![
+                                ValueExpr::Var("xs".to_string()),
+                                ValueExpr::Var("flag".to_string()),
+                            ],
+                        }),
+                        else_: Box::new(CompExpr::Value(ValueExpr::Var("xs".to_string()))),
+                    },
+                },
+                IrDecl {
+                    name: "right".to_string(),
+                    params: vec![
+                        ("ys".to_string(), IrType::Unknown),
+                        ("flag".to_string(), IrType::Bool),
+                    ],
+                    result_ty: IrType::Unknown,
+                    residual_effects: vec![],
+                    body: CompExpr::Call {
+                        callee: Box::new(ValueExpr::GlobalRef {
+                            module: "".to_string(),
+                            name: "left".to_string(),
+                        }),
+                        args: vec![
+                            ValueExpr::Var("ys".to_string()),
+                            ValueExpr::Var("flag".to_string()),
+                        ],
+                    },
+                },
+                IrDecl {
+                    name: "main".to_string(),
+                    params: vec![],
+                    result_ty: IrType::Unknown,
+                    residual_effects: vec![],
+                    body: CompExpr::Let {
+                        name: "zs".to_string(),
+                        ty: IrType::Unknown,
+                        value: Box::new(CompExpr::Value(ValueExpr::ListLit {
+                            elements: vec![ValueExpr::IntLit(1)],
+                            spread: None,
+                        })),
+                        body: Box::new(CompExpr::Call {
+                            callee: Box::new(ValueExpr::GlobalRef {
+                                module: "".to_string(),
+                                name: "right".to_string(),
+                            }),
+                            args: vec![ValueExpr::Var("zs".to_string()), ValueExpr::BoolLit(true)],
+                        }),
+                    },
+                },
+            ],
+        };
+
+        let rewritten = run_perceus_passes(&module);
+        let ir_str = fmt_ir(&rewritten);
+        assert!(
+            !ir_str.contains("drop zs"),
+            "SCC propagation should make right.ys owned, so main transfers zs; got:\n{ir_str}"
         );
     }
 

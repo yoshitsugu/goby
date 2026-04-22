@@ -8,6 +8,7 @@ crate-type = ["rlib"]
 
 [features]
 default = []
+alloc_baseline_record = []
 typed-continuation-optimized = []
 wasmfx-experimental = []
 

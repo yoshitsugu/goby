@@ -149,6 +149,15 @@ pub(crate) fn run_wasm_bytes_with_config_and_options(
     Ok(captured.stdout)
 }
 
+pub(crate) fn run_wasm_bytes_with_config_and_options_captured(
+    wasm: &[u8],
+    stdin: Option<&str>,
+    memory_config: crate::memory_config::WasmMemoryConfig,
+) -> Result<(String, String), String> {
+    let captured = run_wasm_bytes_with_stdin_and_config_captured(wasm, stdin, memory_config)?;
+    Ok((captured.stdout, captured.stderr))
+}
+
 #[cfg(test)]
 pub(crate) fn run_wasm_bytes_with_stdin_for_tests(
     wasm: &[u8],
