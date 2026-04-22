@@ -237,6 +237,27 @@ fn rewrite_comp(
             k,
             names,
         ),
+        CompExpr::DropReuse { value, bind } => continue_with(
+            CompExpr::DropReuse {
+                value: Box::new(rewrite_value(value, names)?),
+                bind: bind.clone(),
+            },
+            k,
+            names,
+        ),
+        CompExpr::AllocReuse {
+            token,
+            size_class,
+            init,
+        } => continue_with(
+            CompExpr::AllocReuse {
+                token: token.clone(),
+                size_class: *size_class,
+                init: init.clone(),
+            },
+            k,
+            names,
+        ),
         CompExpr::PerformEffect { effect, op, args } => {
             if let Some(rewritten) = rewrite_handled_op_invocation(
                 Some(effect.as_str()),

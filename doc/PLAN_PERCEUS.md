@@ -1243,6 +1243,11 @@ acceptance test.
       `alloc` on the same block (§3.7) by identical `SizeClass`. No
       matching across block terminators. Public API:
       `insert_reuse(decl: IrDecl) -> IrDecl`.
+      - 2026-04-23 progress: shared IR `DropReuse` / `AllocReuse` /
+        `AllocInit` and the initial `perceus_reuse::insert_reuse` skeleton
+        are in tree with focused core tests. The pass is not yet wired into
+        `run_perceus_passes`; backend lowering/runtime support is the next
+        slice.
 - [ ] Tail-position cross-call rule (§3.7.1) implemented: a `Drop` in
       tail position immediately before a tail `Call` to a decl whose
       first allocation matches size class S produces a reuse token

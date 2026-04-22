@@ -1,0 +1,373 @@
+use crate::ir::{AllocInit, CompExpr, IrDecl, IrType, ValueExpr};
+use crate::size_class::SizeClass;
+
+pub fn insert_reuse(decl: IrDecl) -> IrDecl {
+    IrDecl {
+        name: decl.name,
+        params: decl.params,
+        result_ty: decl.result_ty,
+        residual_effects: decl.residual_effects,
+        body: insert_reuse_comp(decl.body, 0).0,
+    }
+}
+
+fn insert_reuse_comp(comp: CompExpr, next_token: usize) -> (CompExpr, usize) {
+    match comp {
+        CompExpr::Let {
+            name,
+            ty,
+            value,
+            body,
+        } => {
+            let (value, next_token) = insert_reuse_comp(*value, next_token);
+            let (body, next_token) = insert_reuse_comp(*body, next_token);
+            (
+                CompExpr::Let {
+                    name,
+                    ty,
+                    value: Box::new(value),
+                    body: Box::new(body),
+                },
+                next_token,
+            )
+        }
+        CompExpr::LetMut {
+            name,
+            ty,
+            value,
+            body,
+        } => {
+            let (value, next_token) = insert_reuse_comp(*value, next_token);
+            let (body, next_token) = insert_reuse_comp(*body, next_token);
+            (
+                CompExpr::LetMut {
+                    name,
+                    ty,
+                    value: Box::new(value),
+                    body: Box::new(body),
+                },
+                next_token,
+            )
+        }
+        CompExpr::Seq { stmts, tail } => insert_reuse_seq(stmts, *tail, next_token),
+        CompExpr::If { cond, then_, else_ } => {
+            let (then_, next_token) = insert_reuse_comp(*then_, next_token);
+            let (else_, next_token) = insert_reuse_comp(*else_, next_token);
+            (
+                CompExpr::If {
+                    cond,
+                    then_: Box::new(then_),
+                    else_: Box::new(else_),
+                },
+                next_token,
+            )
+        }
+        CompExpr::Assign { name, value } => {
+            let (value, next_token) = insert_reuse_comp(*value, next_token);
+            (
+                CompExpr::Assign {
+                    name,
+                    value: Box::new(value),
+                },
+                next_token,
+            )
+        }
+        CompExpr::AssignIndex { root, path, value } => {
+            let (value, next_token) = insert_reuse_comp(*value, next_token);
+            (
+                CompExpr::AssignIndex {
+                    root,
+                    path,
+                    value: Box::new(value),
+                },
+                next_token,
+            )
+        }
+        CompExpr::Case { scrutinee, arms } => {
+            let mut next = next_token;
+            let arms = arms
+                .into_iter()
+                .map(|arm| {
+                    let (body, updated) = insert_reuse_comp(arm.body, next);
+                    next = updated;
+                    crate::ir::IrCaseArm {
+                        pattern: arm.pattern,
+                        body,
+                    }
+                })
+                .collect();
+            (CompExpr::Case { scrutinee, arms }, next)
+        }
+        CompExpr::Handle { clauses } => {
+            let mut next = next_token;
+            let clauses = clauses
+                .into_iter()
+                .map(|clause| {
+                    let (body, updated) = insert_reuse_comp(clause.body, next);
+                    next = updated;
+                    crate::ir::IrHandlerClause {
+                        op_name: clause.op_name,
+                        params: clause.params,
+                        body,
+                    }
+                })
+                .collect();
+            (CompExpr::Handle { clauses }, next)
+        }
+        CompExpr::WithHandler { handler, body } => {
+            let (handler, next_token) = insert_reuse_comp(*handler, next_token);
+            let (body, next_token) = insert_reuse_comp(*body, next_token);
+            (
+                CompExpr::WithHandler {
+                    handler: Box::new(handler),
+                    body: Box::new(body),
+                },
+                next_token,
+            )
+        }
+        CompExpr::Value(_)
+        | CompExpr::Call { .. }
+        | CompExpr::Dup { .. }
+        | CompExpr::Drop { .. }
+        | CompExpr::DropReuse { .. }
+        | CompExpr::AllocReuse { .. }
+        | CompExpr::PerformEffect { .. }
+        | CompExpr::Resume { .. } => (comp, next_token),
+    }
+}
+
+fn insert_reuse_seq(stmts: Vec<CompExpr>, tail: CompExpr, next_token: usize) -> (CompExpr, usize) {
+    let mut next = next_token;
+    let mut rewritten = Vec::with_capacity(stmts.len());
+    let mut pending_drop: Option<(ValueExpr, String)> = None;
+
+    for stmt in stmts {
+        match stmt {
+            CompExpr::Drop { value } if pending_drop.is_none() => {
+                let token = format!("__perceus_reuse_token_{next}");
+                next += 1;
+                pending_drop = Some((*value, token));
+            }
+            other => {
+                if let Some((value, token)) = pending_drop.take() {
+                    let _ = token;
+                    rewritten.push(CompExpr::Drop {
+                        value: Box::new(value),
+                    });
+                }
+                let (other, updated) = insert_reuse_comp(other, next);
+                next = updated;
+                rewritten.push(other);
+            }
+        }
+    }
+
+    let (tail, next) = if let Some((value, token)) = pending_drop.take() {
+        if let Some((class, init, tail)) = rewrite_first_alloc(tail.clone(), &token) {
+            rewritten.push(CompExpr::DropReuse {
+                value: Box::new(value),
+                bind: token,
+            });
+            (tail_with_alloc_reuse(tail, class, init), next)
+        } else {
+            rewritten.push(CompExpr::Drop {
+                value: Box::new(value),
+            });
+            insert_reuse_comp(tail, next)
+        }
+    } else {
+        insert_reuse_comp(tail, next)
+    };
+
+    (
+        CompExpr::Seq {
+            stmts: rewritten,
+            tail: Box::new(tail),
+        },
+        next,
+    )
+}
+
+fn rewrite_first_alloc(
+    comp: CompExpr,
+    token: &str,
+) -> Option<(SizeClass, AllocInit, PendingAllocTail)> {
+    match comp {
+        CompExpr::Value(value) => allocation_init(value)
+            .map(|(class, init)| (class, init, PendingAllocTail::Value(token.to_string()))),
+        CompExpr::Let {
+            name,
+            ty,
+            value,
+            body,
+        } => {
+            let CompExpr::Value(value) = *value else {
+                return None;
+            };
+            allocation_init(value).map(|(class, init)| {
+                (
+                    class,
+                    init,
+                    PendingAllocTail::Let {
+                        token: token.to_string(),
+                        name,
+                        ty,
+                        body,
+                    },
+                )
+            })
+        }
+        _ => None,
+    }
+}
+
+enum PendingAllocTail {
+    Value(String),
+    Let {
+        token: String,
+        name: String,
+        ty: IrType,
+        body: Box<CompExpr>,
+    },
+}
+
+fn tail_with_alloc_reuse(
+    tail: PendingAllocTail,
+    size_class: SizeClass,
+    init: AllocInit,
+) -> CompExpr {
+    match tail {
+        PendingAllocTail::Value(token) => CompExpr::AllocReuse {
+            token,
+            size_class,
+            init,
+        },
+        PendingAllocTail::Let {
+            token,
+            name,
+            ty,
+            body,
+        } => CompExpr::Let {
+            name,
+            ty,
+            value: Box::new(CompExpr::AllocReuse {
+                token,
+                size_class,
+                init,
+            }),
+            body,
+        },
+    }
+}
+
+fn allocation_init(value: ValueExpr) -> Option<(SizeClass, AllocInit)> {
+    match value {
+        ValueExpr::TupleLit(items) => {
+            let class = SizeClass::for_tuple(items.len() as u32);
+            class
+                .is_reusable()
+                .then_some((class, AllocInit::TupleLit(items)))
+        }
+        ValueExpr::RecordLit {
+            constructor,
+            fields,
+        } => {
+            let class = SizeClass::for_record(fields.len() as u32);
+            class.is_reusable().then_some((
+                class,
+                AllocInit::RecordLit {
+                    constructor,
+                    fields,
+                },
+            ))
+        }
+        ValueExpr::ListLit { elements, spread } if spread.is_none() => {
+            let class = SizeClass::for_list_header(1);
+            class
+                .is_reusable()
+                .then_some((class, AllocInit::ListLit { elements, spread }))
+        }
+        ValueExpr::Interp(parts) => Some((SizeClass::String(512), AllocInit::Interp(parts))),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::insert_reuse;
+    use crate::ir::{CompExpr, IrDecl, IrModule, IrType, ValueExpr, fmt_ir, validate_ir};
+
+    #[test]
+    fn pairs_drop_with_following_tuple_allocation_in_same_seq_tail() {
+        let decl = IrDecl {
+            name: "main".to_string(),
+            params: vec![],
+            result_ty: IrType::Unknown,
+            residual_effects: vec![],
+            body: CompExpr::Seq {
+                stmts: vec![CompExpr::Drop {
+                    value: Box::new(ValueExpr::Var("old".to_string())),
+                }],
+                tail: Box::new(CompExpr::Let {
+                    name: "next".to_string(),
+                    ty: IrType::Unknown,
+                    value: Box::new(CompExpr::Value(ValueExpr::TupleLit(vec![
+                        ValueExpr::IntLit(1),
+                        ValueExpr::IntLit(2),
+                    ]))),
+                    body: Box::new(CompExpr::Value(ValueExpr::Var("next".to_string()))),
+                }),
+            },
+        };
+
+        let rewritten = insert_reuse(decl);
+        let module = IrModule {
+            decls: vec![rewritten],
+        };
+        validate_ir(&module).expect("reuse IR should validate");
+        assert_eq!(
+            fmt_ir(&module),
+            "decl main: ? =\n  seq\n    drop_reuse old as __perceus_reuse_token_0\n  =>\n    let next: ? =\n      alloc_reuse __perceus_reuse_token_0 Tuple(2) = (1, 2)\n    in\n      next\n\n"
+        );
+    }
+
+    #[test]
+    fn does_not_pair_across_effect_boundary_statement() {
+        let decl = IrDecl {
+            name: "main".to_string(),
+            params: vec![],
+            result_ty: IrType::Unknown,
+            residual_effects: vec![],
+            body: CompExpr::Seq {
+                stmts: vec![
+                    CompExpr::Drop {
+                        value: Box::new(ValueExpr::Var("old".to_string())),
+                    },
+                    CompExpr::PerformEffect {
+                        effect: "Print".to_string(),
+                        op: "println".to_string(),
+                        args: vec![ValueExpr::StrLit("x".to_string())],
+                    },
+                ],
+                tail: Box::new(CompExpr::Value(ValueExpr::TupleLit(vec![
+                    ValueExpr::IntLit(1),
+                ]))),
+            },
+        };
+
+        let rewritten = insert_reuse(decl);
+        let module = IrModule {
+            decls: vec![rewritten],
+        };
+        validate_ir(&module).expect("non-reuse IR should validate");
+        let ir = fmt_ir(&module);
+        assert!(
+            ir.contains("drop old"),
+            "drop should remain ordinary:\n{ir}"
+        );
+        assert!(
+            !ir.contains("alloc_reuse"),
+            "effect boundary must block reuse pairing:\n{ir}"
+        );
+    }
+}

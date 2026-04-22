@@ -409,9 +409,10 @@ fn comp_expr_mentions_var(comp: &CompExpr, target: &str) -> bool {
                     .iter()
                     .any(|arm| comp_expr_mentions_var(&arm.body, target))
         }
-        CompExpr::Dup { value } | CompExpr::Drop { value } => {
+        CompExpr::Dup { value } | CompExpr::Drop { value } | CompExpr::DropReuse { value, .. } => {
             value_expr_mentions_var(value, target)
         }
+        CompExpr::AllocReuse { .. } => false,
         CompExpr::PerformEffect { args, .. } => {
             args.iter().any(|arg| value_expr_mentions_var(arg, target))
         }
@@ -572,6 +573,19 @@ fn rename_comp_var(comp: &CompExpr, from: &str, to: &str) -> CompExpr {
         },
         CompExpr::Drop { value } => CompExpr::Drop {
             value: Box::new(rename_value_var(value, from, to)),
+        },
+        CompExpr::DropReuse { value, bind } => CompExpr::DropReuse {
+            value: Box::new(rename_value_var(value, from, to)),
+            bind: bind.clone(),
+        },
+        CompExpr::AllocReuse {
+            token,
+            size_class,
+            init,
+        } => CompExpr::AllocReuse {
+            token: token.clone(),
+            size_class: *size_class,
+            init: init.clone(),
         },
         CompExpr::PerformEffect { effect, op, args } => CompExpr::PerformEffect {
             effect: effect.clone(),
@@ -1771,7 +1785,10 @@ fn contains_self_decl_call(comp: &CompExpr, decl_name: &str) -> bool {
         CompExpr::Case { arms, .. } => arms
             .iter()
             .any(|arm| contains_self_decl_call(&arm.body, decl_name)),
-        CompExpr::Dup { .. } | CompExpr::Drop { .. } => false,
+        CompExpr::Dup { .. }
+        | CompExpr::Drop { .. }
+        | CompExpr::DropReuse { .. }
+        | CompExpr::AllocReuse { .. } => false,
         CompExpr::PerformEffect { .. } => false,
         CompExpr::Handle { clauses } => clauses
             .iter()

@@ -307,9 +307,10 @@ fn collect_comp_lambda_envs(
                 collect_comp_lambda_envs(&arm.body, &mut arm_bindings, known_decls, envs);
             }
         }
-        CompExpr::Dup { value } | CompExpr::Drop { value } => {
+        CompExpr::Dup { value } | CompExpr::Drop { value } | CompExpr::DropReuse { value, .. } => {
             collect_value_lambda_envs(value, bindings, known_decls, envs);
         }
+        CompExpr::AllocReuse { .. } => {}
         CompExpr::PerformEffect { args, .. } => {
             for arg in args {
                 collect_value_lambda_envs(arg, bindings, known_decls, envs);
@@ -466,9 +467,10 @@ fn analyze_comp(
                 analyze_comp(&arm.body, &arm_bindings, known_decls, captures);
             }
         }
-        CompExpr::Dup { value } | CompExpr::Drop { value } => {
+        CompExpr::Dup { value } | CompExpr::Drop { value } | CompExpr::DropReuse { value, .. } => {
             analyze_value(value, bindings, known_decls, captures);
         }
+        CompExpr::AllocReuse { .. } => {}
         CompExpr::PerformEffect { args, .. } => {
             for arg in args {
                 analyze_value(arg, bindings, known_decls, captures);

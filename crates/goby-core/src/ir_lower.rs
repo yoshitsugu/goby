@@ -2221,7 +2221,10 @@ choose n =
             }
             CompExpr::Call { .. } => 0,
             CompExpr::Assign { value, .. } => count_perform(value, effect, op),
-            CompExpr::Dup { .. } | CompExpr::Drop { .. } => 0,
+            CompExpr::Dup { .. }
+            | CompExpr::Drop { .. }
+            | CompExpr::DropReuse { .. }
+            | CompExpr::AllocReuse { .. } => 0,
             CompExpr::Case { arms, .. } => arms
                 .iter()
                 .map(|arm| count_perform(&arm.body, effect, op))

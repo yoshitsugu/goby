@@ -13,6 +13,8 @@
 //! boundary. `With`/`Handler`/`Resume` from the AST lower into these
 //! nodes. Full `PerformEffect` lowering from qualified calls is still deferred.
 
+use crate::size_class::SizeClass;
+
 /// A type annotation carried by IR nodes.
 ///
 /// `IrType` does not mirror the private typechecker `Ty` enum. It carries
@@ -106,6 +108,21 @@ pub enum IrInterpPart {
     Expr(ValueExpr),
 }
 
+/// Heap allocation initializer carried by a reuse-aware allocation node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AllocInit {
+    ListLit {
+        elements: Vec<ValueExpr>,
+        spread: Option<Box<ValueExpr>>,
+    },
+    TupleLit(Vec<ValueExpr>),
+    RecordLit {
+        constructor: String,
+        fields: Vec<(String, ValueExpr)>,
+    },
+    Interp(Vec<IrInterpPart>),
+}
+
 /// A computation expression that may sequence effects or control flow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompExpr {
@@ -165,6 +182,16 @@ pub enum CompExpr {
     ///
     /// Produces `Unit`.
     Drop { value: Box<ValueExpr> },
+    /// Convert a drop into a reuse token for a following allocation.
+    ///
+    /// Produces `Unit` and binds the token to `bind`.
+    DropReuse { value: Box<ValueExpr>, bind: String },
+    /// Allocate using a reuse token when present, otherwise allocate normally.
+    AllocReuse {
+        token: String,
+        size_class: SizeClass,
+        init: AllocInit,
+    },
     /// Effect operation invocation.
     ///
     /// This node is constructable and printable. Lowering from
@@ -579,6 +606,28 @@ fn fmt_comp(out: &mut String, c: &CompExpr, depth: usize) {
             fmt_value(out, value);
             out.push('\n');
         }
+        CompExpr::DropReuse { value, bind } => {
+            indent(out, depth);
+            out.push_str("drop_reuse ");
+            fmt_value(out, value);
+            out.push_str(" as ");
+            out.push_str(bind);
+            out.push('\n');
+        }
+        CompExpr::AllocReuse {
+            token,
+            size_class,
+            init,
+        } => {
+            indent(out, depth);
+            out.push_str("alloc_reuse ");
+            out.push_str(token);
+            out.push_str(" ");
+            out.push_str(&format!("{size_class:?}"));
+            out.push_str(" = ");
+            fmt_alloc_init(out, init);
+            out.push('\n');
+        }
         CompExpr::PerformEffect { effect, op, args } => {
             indent(out, depth);
             out.push_str("perform ");
@@ -623,6 +672,32 @@ fn fmt_comp(out: &mut String, c: &CompExpr, depth: usize) {
             fmt_value(out, value);
             out.push('\n');
         }
+    }
+}
+
+fn fmt_alloc_init(out: &mut String, init: &AllocInit) {
+    match init {
+        AllocInit::ListLit { elements, spread } => {
+            fmt_value(
+                out,
+                &ValueExpr::ListLit {
+                    elements: elements.clone(),
+                    spread: spread.clone(),
+                },
+            );
+        }
+        AllocInit::TupleLit(items) => fmt_value(out, &ValueExpr::TupleLit(items.clone())),
+        AllocInit::RecordLit {
+            constructor,
+            fields,
+        } => fmt_value(
+            out,
+            &ValueExpr::RecordLit {
+                constructor: constructor.clone(),
+                fields: fields.clone(),
+            },
+        ),
+        AllocInit::Interp(parts) => fmt_value(out, &ValueExpr::Interp(parts.clone())),
     }
 }
 
@@ -745,6 +820,38 @@ fn validate_comp(c: &CompExpr, decl_name: &str) -> Result<(), IrValidateError> {
             validate_comp(value, decl_name)
         }
         CompExpr::Dup { value } | CompExpr::Drop { value } => validate_value(value, decl_name),
+        CompExpr::DropReuse { value, bind } => {
+            if bind.is_empty() {
+                Err(IrValidateError {
+                    message: format!("in decl `{}`: DropReuse bind must not be empty", decl_name),
+                })
+            } else {
+                validate_value(value, decl_name)
+            }
+        }
+        CompExpr::AllocReuse {
+            token,
+            size_class,
+            init,
+        } => {
+            if token.is_empty() {
+                return Err(IrValidateError {
+                    message: format!(
+                        "in decl `{}`: AllocReuse token must not be empty",
+                        decl_name
+                    ),
+                });
+            }
+            if !size_class.is_reusable() {
+                return Err(IrValidateError {
+                    message: format!(
+                        "in decl `{}`: AllocReuse size class must be reusable",
+                        decl_name
+                    ),
+                });
+            }
+            validate_alloc_init(init, decl_name)
+        }
         CompExpr::Case { scrutinee, arms } => {
             if arms.is_empty() {
                 return Err(IrValidateError {
@@ -786,6 +893,40 @@ fn validate_comp(c: &CompExpr, decl_name: &str) -> Result<(), IrValidateError> {
             validate_comp(body, decl_name)
         }
         CompExpr::Resume { value } => validate_value(value, decl_name),
+    }
+}
+
+fn validate_alloc_init(init: &AllocInit, decl_name: &str) -> Result<(), IrValidateError> {
+    match init {
+        AllocInit::ListLit { elements, spread } => {
+            for element in elements {
+                validate_value(element, decl_name)?;
+            }
+            if let Some(tail) = spread {
+                validate_value(tail, decl_name)?;
+            }
+            Ok(())
+        }
+        AllocInit::TupleLit(items) => {
+            for item in items {
+                validate_value(item, decl_name)?;
+            }
+            Ok(())
+        }
+        AllocInit::RecordLit { fields, .. } => {
+            for (_, value) in fields {
+                validate_value(value, decl_name)?;
+            }
+            Ok(())
+        }
+        AllocInit::Interp(parts) => {
+            for part in parts {
+                if let IrInterpPart::Expr(expr) = part {
+                    validate_value(expr, decl_name)?;
+                }
+            }
+            Ok(())
+        }
     }
 }
 

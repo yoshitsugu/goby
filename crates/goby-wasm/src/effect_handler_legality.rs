@@ -143,9 +143,10 @@ fn collect_comp_legality(
             }
         }
         CompExpr::Assign { value, .. } => collect_comp_legality(decl_name, value, env, summary),
-        CompExpr::Dup { value } | CompExpr::Drop { value } => {
+        CompExpr::Dup { value } | CompExpr::Drop { value } | CompExpr::DropReuse { value, .. } => {
             collect_value_legality(decl_name, value, env, summary);
         }
+        CompExpr::AllocReuse { .. } => {}
         CompExpr::Case { scrutinee, arms } => {
             collect_value_legality(decl_name, scrutinee, env, summary);
             for arm in arms {

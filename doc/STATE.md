@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-22 (Perceus M4.5 complete)
+Last updated: 2026-04-23 (Perceus M5 IR scaffold started)
 
 ## Current Focus
 
@@ -119,9 +119,18 @@ of what the slice does and does not do, and why.
     it is excluded until it can emit debug alloc stats.
   - focused Perceus tests grew from 18 to 22.
 
-Next: **Perceus M5** — begin reuse pairing (`DropReuse` / `AllocReuse`) and
-tail-recursive reuse-token plumbing. Keep `list_case.gb` alloc-stats coverage
-on the follow-up list once it moves to the GeneralLowered path.
+Next: **Perceus M5** — continue reuse pairing and tail-recursive reuse-token
+plumbing. Keep `list_case.gb` alloc-stats coverage on the follow-up list once
+it moves to the GeneralLowered path.
+
+- M5 IR scaffold started on 2026-04-23:
+  - shared IR now has `AllocInit`, `CompExpr::DropReuse`, and
+    `CompExpr::AllocReuse`, with formatting/validation support.
+  - `crates/goby-core/src/perceus_reuse.rs` adds the first `insert_reuse`
+    pass skeleton and focused tests for same-block drop-to-allocation pairing
+    and effect-boundary non-pairing.
+  - The pass is intentionally not wired into `run_perceus_passes` yet; Wasm
+    lowering/runtime support for the new nodes remains the next M5 slice.
 
 ---
 

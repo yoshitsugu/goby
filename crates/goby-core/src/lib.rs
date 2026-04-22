@@ -21,6 +21,7 @@ mod parser_top;
 mod parser_util;
 mod path_util;
 pub mod perceus;
+pub mod perceus_reuse;
 pub mod resolved;
 pub mod size_class;
 pub mod span;

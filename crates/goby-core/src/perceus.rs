@@ -161,9 +161,11 @@ fn collect_scalar_param_evidence_comp(
                 collect_scalar_param_evidence_comp(&arm.body, params, scalar);
             }
         }
-        CompExpr::Dup { value } | CompExpr::Drop { value } | CompExpr::Resume { value } => {
-            collect_scalar_param_evidence_value(value, params, scalar);
-        }
+        CompExpr::Dup { value }
+        | CompExpr::Drop { value }
+        | CompExpr::DropReuse { value, .. }
+        | CompExpr::Resume { value } => collect_scalar_param_evidence_value(value, params, scalar),
+        CompExpr::AllocReuse { .. } => {}
         CompExpr::PerformEffect { args, .. } => {
             for arg in args {
                 collect_scalar_param_evidence_value(arg, params, scalar);
@@ -318,9 +320,10 @@ fn classify_comp(
         CompExpr::Dup { value } | CompExpr::Resume { value } => {
             classify_borrowed_value(value, classes, params, aliases)
         }
-        CompExpr::Drop { value } => {
+        CompExpr::Drop { value } | CompExpr::DropReuse { value, .. } => {
             classify_consumed_value(value, classes, params, aliases);
         }
+        CompExpr::AllocReuse { .. } => {}
         CompExpr::PerformEffect { args, .. } => {
             for arg in args {
                 classify_consumed_value(arg, classes, params, aliases);
@@ -1014,6 +1017,25 @@ fn drop_insert_comp(
             },
             next_tmp,
         ),
+        CompExpr::DropReuse { value, bind } => (
+            CompExpr::DropReuse {
+                value: value.clone(),
+                bind: bind.clone(),
+            },
+            next_tmp,
+        ),
+        CompExpr::AllocReuse {
+            token,
+            size_class,
+            init,
+        } => (
+            CompExpr::AllocReuse {
+                token: token.clone(),
+                size_class: *size_class,
+                init: init.clone(),
+            },
+            next_tmp,
+        ),
         CompExpr::PerformEffect { effect, op, args } => (
             CompExpr::PerformEffect {
                 effect: effect.clone(),
@@ -1550,8 +1572,10 @@ fn comp_consumes_name(
         CompExpr::Case { arms, .. } => arms
             .iter()
             .any(|arm| comp_consumes_name(&arm.body, name, module_ownership, param_order)),
-        CompExpr::Dup { .. } | CompExpr::Resume { .. } => false,
-        CompExpr::Drop { value } => value_mentions_name(value, name),
+        CompExpr::Dup { .. } | CompExpr::Resume { .. } | CompExpr::AllocReuse { .. } => false,
+        CompExpr::Drop { value } | CompExpr::DropReuse { value, .. } => {
+            value_mentions_name(value, name)
+        }
         CompExpr::PerformEffect { args, .. } => {
             args.iter().any(|arg| value_mentions_name(arg, name))
         }
@@ -1676,9 +1700,11 @@ fn collect_live_comp(comp: &CompExpr, live: &mut HashSet<String>) {
                 live.extend(arm_live);
             }
         }
-        CompExpr::Dup { value } | CompExpr::Drop { value } | CompExpr::Resume { value } => {
-            collect_live_value(value, live)
-        }
+        CompExpr::Dup { value }
+        | CompExpr::Drop { value }
+        | CompExpr::DropReuse { value, .. }
+        | CompExpr::Resume { value } => collect_live_value(value, live),
+        CompExpr::AllocReuse { .. } => {}
         CompExpr::PerformEffect { args, .. } => {
             for arg in args {
                 collect_live_value(arg, live);
@@ -1810,9 +1836,11 @@ fn count_var_uses(comp: &CompExpr, name: &str) -> usize {
                     .max()
                     .unwrap_or(0)
         }
-        CompExpr::Dup { value } | CompExpr::Drop { value } | CompExpr::Resume { value } => {
-            count_var_uses_value(value, name)
-        }
+        CompExpr::Dup { value }
+        | CompExpr::Drop { value }
+        | CompExpr::DropReuse { value, .. }
+        | CompExpr::Resume { value } => count_var_uses_value(value, name),
+        CompExpr::AllocReuse { .. } => 0,
         CompExpr::PerformEffect { args, .. } => {
             args.iter().map(|a| count_var_uses_value(a, name)).sum()
         }
