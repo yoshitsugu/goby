@@ -10,11 +10,11 @@ use goby_core::closure_capture::{
     BindingRepr, CallableEnv, CallableEnvSlotKind, ClosureBindingEnv,
     analyze_lambda_callable_env_for_params, binding_repr_for_let_mut, has_mutable_write_capture_of,
 };
-use goby_core::ir::{CompExpr, IrBinOp, IrInterpPart, ValueExpr};
+use goby_core::ir::{AllocInit, CompExpr, IrBinOp, IrInterpPart, ValueExpr};
 
 use crate::gen_lower::backend_ir::{
-    BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp, StaticHeapValue,
-    WasmBackendInstr,
+    BackendAllocInit, BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp,
+    StaticHeapValue, WasmBackendInstr,
 };
 use crate::gen_lower::value::{ValueError, encode_bool, encode_int, encode_unit};
 
@@ -2332,10 +2332,71 @@ fn lower_comp_inner(
             instrs.push(WasmBackendInstr::I64Const(encode_unit()));
             Ok(instrs)
         }
+        CompExpr::DropReuse { value, bind } => {
+            let mut instrs = vec![WasmBackendInstr::DeclareLocal { name: bind.clone() }];
+            instrs.extend(lower_value_ctx(value, aliases, bindings, known_decls)?);
+            instrs.push(WasmBackendInstr::RefCountDropReuse {
+                token_local: bind.clone(),
+            });
+            instrs.push(WasmBackendInstr::I64Const(encode_unit()));
+            Ok(instrs)
+        }
+        CompExpr::AllocReuse {
+            token,
+            size_class,
+            init,
+        } => Ok(vec![WasmBackendInstr::AllocReuse {
+            token_local: token.clone(),
+            size_class: (*size_class).into(),
+            init: lower_alloc_init(init, aliases, bindings, known_decls)?,
+        }]),
 
         other => Err(LowerError::UnsupportedForm {
             node: format!("{:?}", other),
         }),
+    }
+}
+
+fn lower_alloc_init(
+    init: &AllocInit,
+    aliases: &HashMap<String, AliasValue>,
+    bindings: &ClosureBindingEnv,
+    known_decls: &HashSet<String>,
+) -> Result<BackendAllocInit, LowerError> {
+    match init {
+        AllocInit::ListLit { elements, spread } => {
+            if spread.is_some() {
+                return Err(LowerError::UnsupportedForm {
+                    node: "AllocReuse list spread initializer".to_string(),
+                });
+            }
+            let mut element_instrs = Vec::with_capacity(elements.len());
+            for elem in elements {
+                element_instrs.push(lower_value_ctx(elem, aliases, bindings, known_decls)?);
+            }
+            Ok(BackendAllocInit::ListLit { element_instrs })
+        }
+        AllocInit::TupleLit(items) => {
+            let mut element_instrs = Vec::with_capacity(items.len());
+            for item in items {
+                element_instrs.push(lower_value_ctx(item, aliases, bindings, known_decls)?);
+            }
+            Ok(BackendAllocInit::TupleLit { element_instrs })
+        }
+        AllocInit::RecordLit {
+            constructor,
+            fields,
+        } => {
+            let mut field_instrs = Vec::with_capacity(fields.len());
+            for (_, value) in fields {
+                field_instrs.push(lower_value_ctx(value, aliases, bindings, known_decls)?);
+            }
+            Ok(BackendAllocInit::RecordLit {
+                constructor: constructor.clone(),
+                field_instrs,
+            })
+        }
+        AllocInit::Interp(parts) => Ok(BackendAllocInit::Interp(parts.clone())),
     }
 }
 
@@ -5417,6 +5478,50 @@ build n =
                 WasmBackendInstr::RefCountDrop,
                 WasmBackendInstr::I64Const(encode_unit()),
             ]
+        );
+    }
+
+    #[test]
+    fn lower_drop_reuse_and_alloc_reuse_emit_backend_ops() {
+        let drop_reuse = lower_comp(&CompExpr::DropReuse {
+            value: Box::new(ValueExpr::Var("old".to_string())),
+            bind: "__token".to_string(),
+        })
+        .expect("drop_reuse should lower");
+        assert_eq!(
+            drop_reuse,
+            vec![
+                WasmBackendInstr::DeclareLocal {
+                    name: "__token".to_string()
+                },
+                WasmBackendInstr::LoadLocal {
+                    name: "old".to_string()
+                },
+                WasmBackendInstr::RefCountDropReuse {
+                    token_local: "__token".to_string()
+                },
+                WasmBackendInstr::I64Const(encode_unit()),
+            ]
+        );
+
+        let alloc_reuse = lower_comp(&CompExpr::AllocReuse {
+            token: "__token".to_string(),
+            size_class: goby_core::size_class::SizeClass::Tuple(2),
+            init: AllocInit::TupleLit(vec![ValueExpr::IntLit(1), ValueExpr::IntLit(2)]),
+        })
+        .expect("alloc_reuse should lower");
+        assert_eq!(
+            alloc_reuse,
+            vec![WasmBackendInstr::AllocReuse {
+                token_local: "__token".to_string(),
+                size_class: crate::size_class::SizeClass::Tuple(2),
+                init: BackendAllocInit::TupleLit {
+                    element_instrs: vec![
+                        vec![WasmBackendInstr::I64Const(encode_int(1).unwrap())],
+                        vec![WasmBackendInstr::I64Const(encode_int(2).unwrap())],
+                    ]
+                },
+            }]
         );
     }
 }

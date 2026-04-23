@@ -13,8 +13,8 @@ use wasm_encoder::{
 
 use crate::CodegenError;
 use crate::gen_lower::backend_ir::{
-    BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp, SplitIndexOperand,
-    StaticHeapValue, WasmBackendInstr,
+    BackendAllocInit, BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp,
+    SplitIndexOperand, StaticHeapValue, WasmBackendInstr,
 };
 use crate::gen_lower::ptr::{
     PtrWidth, ptr_add, ptr_and, ptr_const, ptr_div_u, ptr_eq, ptr_eqz, ptr_extend_to_i64, ptr_ge_u,
@@ -847,6 +847,20 @@ pub(crate) fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBacken
                     result.extend(collect_all_instrs(field));
                 }
             }
+            WasmBackendInstr::AllocReuse { init, .. } => match init {
+                BackendAllocInit::ListLit { element_instrs }
+                | BackendAllocInit::TupleLit { element_instrs } => {
+                    for elem in element_instrs {
+                        result.extend(collect_all_instrs(elem));
+                    }
+                }
+                BackendAllocInit::RecordLit { field_instrs, .. } => {
+                    for field in field_instrs {
+                        result.extend(collect_all_instrs(field));
+                    }
+                }
+                BackendAllocInit::Interp(_) => {}
+            },
             WasmBackendInstr::ListReverseFoldPrepend {
                 list_instrs,
                 prefix_element_instrs,
@@ -894,6 +908,7 @@ pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                 | WasmBackendInstr::ListBuilderFinish { .. }
                 | WasmBackendInstr::TupleLit { .. }
                 | WasmBackendInstr::RecordLit { .. }
+                | WasmBackendInstr::AllocReuse { .. }
                 | WasmBackendInstr::ListReverseFoldPrepend { .. }
                 | WasmBackendInstr::CreateClosure { .. }
                 | WasmBackendInstr::AllocMutableCell { .. }
@@ -966,6 +981,20 @@ pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                             return true;
                         }
                     }
+                    WasmBackendInstr::AllocReuse { init, .. } => match init {
+                        BackendAllocInit::ListLit { element_instrs }
+                        | BackendAllocInit::TupleLit { element_instrs } => {
+                            if element_instrs.iter().any(|e| has_heap_pattern(e)) {
+                                return true;
+                            }
+                        }
+                        BackendAllocInit::RecordLit { field_instrs, .. } => {
+                            if field_instrs.iter().any(|e| has_heap_pattern(e)) {
+                                return true;
+                            }
+                        }
+                        BackendAllocInit::Interp(_) => {}
+                    },
                     WasmBackendInstr::CreateClosure {
                         func_handle_instrs,
                         slot_instrs,
@@ -1009,6 +1038,7 @@ fn needs_scratch_state(instrs: &[WasmBackendInstr]) -> bool {
 
     collect_all_instrs(instrs).iter().any(|instr| match instr {
         WasmBackendInstr::BinOp { op } => matches!(op, IrBinOp::Eq),
+        WasmBackendInstr::RefCountDropReuse { .. } => true,
         WasmBackendInstr::Intrinsic {
             intrinsic:
                 BackendIntrinsic::ListGet
@@ -1108,6 +1138,24 @@ fn required_heap_base_spill_count_instr(instr: &WasmBackendInstr) -> u32 {
                 .max()
                 .unwrap_or(0)
         }
+        WasmBackendInstr::AllocReuse { init, .. } => match init {
+            BackendAllocInit::ListLit { element_instrs }
+            | BackendAllocInit::TupleLit { element_instrs } => {
+                1 + element_instrs
+                    .iter()
+                    .map(|child| required_heap_base_spill_count(child))
+                    .max()
+                    .unwrap_or(0)
+            }
+            BackendAllocInit::RecordLit { field_instrs, .. } => {
+                1 + field_instrs
+                    .iter()
+                    .map(|child| required_heap_base_spill_count(child))
+                    .max()
+                    .unwrap_or(0)
+            }
+            BackendAllocInit::Interp(_) => 0,
+        },
         WasmBackendInstr::ListReverseFoldPrepend {
             list_instrs,
             prefix_element_instrs,
@@ -1144,6 +1192,7 @@ fn required_i64_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
     let all = collect_all_instrs(instrs);
     let needs_scratch = all.iter().any(|i| match i {
         WasmBackendInstr::Intrinsic { .. }
+        | WasmBackendInstr::RefCountDropReuse { .. }
         | WasmBackendInstr::ListReverseFoldPrepend { .. }
         | WasmBackendInstr::ListBuilderPush { .. }
         | WasmBackendInstr::IndirectCall { .. } => true,
@@ -2171,6 +2220,39 @@ fn emit_instrs_with_heap_depth(
 
             WasmBackendInstr::RefCountDrop => {
                 function.instruction(&Instruction::Call(ctx.goby_drop_func_idx));
+            }
+
+            WasmBackendInstr::RefCountDropReuse { token_local } => {
+                let scratch = require_scratch_state(scratch_state, "RefCountDropReuse")?;
+                let token_idx = ctx.get(token_local)?;
+                emit_ref_count_drop_reuse(function, token_idx, scratch.i64_base, ctx, pw);
+            }
+
+            WasmBackendInstr::AllocReuse {
+                token_local,
+                size_class,
+                init,
+            } => {
+                let hs = require_heap_state(helper_state, "AllocReuse")?;
+                let token_idx = ctx.get(token_local)?;
+                emit_alloc_reuse(
+                    function,
+                    ctx,
+                    token_idx,
+                    *size_class,
+                    init,
+                    &hs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                    static_heap,
+                    options,
+                    function_returns_i64,
+                    heap_base_depth,
+                    self_tail_loop_depth,
+                )?;
             }
 
             WasmBackendInstr::Drop => {
@@ -4806,6 +4888,343 @@ fn emit_push_tagged_ptr(function: &mut Function, ptr_local: u32, tag: u8, pw: Pt
     function.instruction(&Instruction::I64Or);
 }
 
+fn emit_store_i64_payload_to_ptr_local(
+    function: &mut Function,
+    payload_local: u32,
+    ptr_local: u32,
+    pw: PtrWidth,
+) {
+    function.instruction(&Instruction::LocalGet(payload_local));
+    if let Some(wrap) = ptr_wrap_from_i64(pw) {
+        function.instruction(&wrap);
+    }
+    function.instruction(&Instruction::LocalSet(ptr_local));
+}
+
+fn emit_ref_count_drop_reuse(
+    function: &mut Function,
+    token_local: u32,
+    scratch_i64_base: u32,
+    ctx: &EmitContext,
+    pw: PtrWidth,
+) {
+    let tagged_local = scratch_i64_base;
+    let tag_local = scratch_i64_base + 1;
+    let refcount_local = scratch_i64_base + 2;
+
+    const PAYLOAD_MASK: i64 = 0x0FFF_FFFF_FFFF_FFFFu64 as i64;
+
+    function.instruction(&Instruction::LocalSet(tagged_local));
+    function.instruction(&Instruction::I64Const(0));
+    function.instruction(&Instruction::LocalSet(token_local));
+
+    function.instruction(&Instruction::LocalGet(tagged_local));
+    function.instruction(&Instruction::I64Eqz);
+    function.instruction(&Instruction::I32Eqz);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+
+    function.instruction(&Instruction::LocalGet(tagged_local));
+    function.instruction(&Instruction::I64Const(60));
+    function.instruction(&Instruction::I64ShrU);
+    function.instruction(&Instruction::I64Const(0xF));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::LocalSet(tag_local));
+
+    function.instruction(&Instruction::LocalGet(tag_local));
+    function.instruction(&Instruction::I64Const(TAG_STRING as i64));
+    function.instruction(&Instruction::I64Eq);
+    for tag in [
+        TAG_LIST,
+        TAG_TUPLE,
+        TAG_RECORD,
+        TAG_CLOSURE,
+        TAG_CELL,
+        TAG_CHUNK,
+    ] {
+        function.instruction(&Instruction::LocalGet(tag_local));
+        function.instruction(&Instruction::I64Const(tag as i64));
+        function.instruction(&Instruction::I64Eq);
+        function.instruction(&Instruction::I32Or);
+    }
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+
+    function.instruction(&Instruction::LocalGet(tagged_local));
+    function.instruction(&Instruction::I64Const(PAYLOAD_MASK));
+    function.instruction(&Instruction::I64And);
+    function.instruction(&Instruction::LocalTee(token_local));
+    function.instruction(&Instruction::I64Const(-(REFCOUNT_WORD_BYTES as i64)));
+    function.instruction(&Instruction::I64Add);
+    if let Some(wrap) = ptr_wrap_from_i64(pw) {
+        function.instruction(&wrap);
+    }
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(refcount_local));
+
+    function.instruction(&Instruction::LocalGet(refcount_local));
+    function.instruction(&Instruction::I64Const(-1i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::I64Const(0));
+    function.instruction(&Instruction::LocalSet(token_local));
+    function.instruction(&Instruction::Else);
+    function.instruction(&Instruction::LocalGet(refcount_local));
+    function.instruction(&Instruction::I64Const(1));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::I32Eqz);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&Instruction::LocalGet(tagged_local));
+    function.instruction(&Instruction::Call(ctx.goby_drop_func_idx));
+    function.instruction(&Instruction::I64Const(0));
+    function.instruction(&Instruction::LocalSet(token_local));
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::End);
+
+    function.instruction(&Instruction::End);
+    function.instruction(&Instruction::End);
+}
+
+fn emit_alloc_reuse_payload(
+    function: &mut Function,
+    token_local: u32,
+    result_ptr_local: u32,
+    sc: SizeClass,
+    hs: &HeapEmitState,
+) -> Result<(), CodegenError> {
+    let pw = hs.pw();
+    let s_alloc_size = hs.scratch.i32_base + HS_ALLOC_SIZE;
+    let hit_flag = hs.scratch.i32_base + HS_ITER;
+    let payload_bytes = sc.payload_bytes(pw).ok_or_else(|| CodegenError {
+        message: format!("gen_lower/emit: AllocReuse requires fixed payload size, got {sc:?}"),
+    })?;
+
+    function.instruction(&Instruction::LocalGet(token_local));
+    function.instruction(&Instruction::I64Eqz);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    function.instruction(&ptr_const(pw, payload_bytes as u64));
+    function.instruction(&Instruction::LocalSet(s_alloc_size));
+    emit_alloc_with_flag(sc, function, hs, s_alloc_size, result_ptr_local, hit_flag);
+    function.instruction(&Instruction::Else);
+    emit_store_i64_payload_to_ptr_local(function, token_local, result_ptr_local, pw);
+    function.instruction(&Instruction::LocalGet(result_ptr_local));
+    function.instruction(&ptr_const(pw, REFCOUNT_WORD_BYTES as u64));
+    function.instruction(&ptr_sub(pw));
+    function.instruction(&Instruction::I64Const(1));
+    function.instruction(&Instruction::I64Store(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::End);
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_alloc_reuse(
+    function: &mut Function,
+    ctx: &mut EmitContext,
+    token_local: u32,
+    sc: SizeClass,
+    init: &BackendAllocInit,
+    hs: &HeapEmitState,
+    layout: &MemoryLayout,
+    named_i64_count: u32,
+    helper_i64_scratch_count: u32,
+    i32_base: u32,
+    static_strings: &StaticStringPool,
+    static_heap: &StaticHeapPool,
+    options: EmitOptions,
+    function_returns_i64: bool,
+    heap_base_depth: u32,
+    self_tail_loop_depth: u32,
+) -> Result<(), CodegenError> {
+    let pw = hs.pw();
+    let object_ptr = hs.scratch.i32_base + HELPER_SCRATCH_I32 + heap_base_depth;
+
+    match init {
+        BackendAllocInit::TupleLit { element_instrs } => {
+            emit_alloc_reuse_payload(function, token_local, object_ptr, sc, hs)?;
+            let n = element_instrs.len() as u64;
+            function.instruction(&Instruction::LocalGet(object_ptr));
+            function.instruction(&ptr_const(pw, n));
+            function.instruction(&ptr_store(
+                pw,
+                MemArg {
+                    offset: 0,
+                    align: 2,
+                    memory_index: 0,
+                },
+            ));
+            for (i, elem_instrs) in element_instrs.iter().enumerate() {
+                function.instruction(&Instruction::LocalGet(object_ptr));
+                function.instruction(&ptr_const(pw, meta_slot_bytes(pw) as u64 + 8 * i as u64));
+                function.instruction(&ptr_add(pw));
+                emit_instrs_with_heap_depth(
+                    function,
+                    ctx,
+                    elem_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                    static_heap,
+                    options,
+                    function_returns_i64,
+                    heap_base_depth + 1,
+                    self_tail_loop_depth,
+                )?;
+                function.instruction(&Instruction::I64Store(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+            }
+            emit_push_tagged_ptr(function, object_ptr, TAG_TUPLE, pw);
+        }
+        BackendAllocInit::RecordLit {
+            constructor,
+            field_instrs,
+        } => {
+            emit_alloc_reuse_payload(function, token_local, object_ptr, sc, hs)?;
+            let ctor_tag = ctx.record_ctor_tag(constructor)? as i64;
+            function.instruction(&Instruction::LocalGet(object_ptr));
+            function.instruction(&Instruction::I64Const(ctor_tag));
+            function.instruction(&Instruction::I64Store(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+            for (i, field_instrs) in field_instrs.iter().enumerate() {
+                function.instruction(&Instruction::LocalGet(object_ptr));
+                function.instruction(&ptr_const(pw, 8 + 8 * i as u64));
+                function.instruction(&ptr_add(pw));
+                emit_instrs_with_heap_depth(
+                    function,
+                    ctx,
+                    field_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                    static_heap,
+                    options,
+                    function_returns_i64,
+                    heap_base_depth + 1,
+                    self_tail_loop_depth,
+                )?;
+                function.instruction(&Instruction::I64Store(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+            }
+            emit_push_tagged_ptr(function, object_ptr, TAG_RECORD, pw);
+        }
+        BackendAllocInit::ListLit { element_instrs } => {
+            let n = element_instrs.len() as u32;
+            let n_chunks = n.div_ceil(CHUNK_SIZE);
+            if n_chunks > 1 {
+                return Err(CodegenError {
+                    message: format!(
+                        "gen_lower/emit: AllocReuse list initializer supports at most one chunk, got {n_chunks}"
+                    ),
+                });
+            }
+            emit_alloc_reuse_payload(function, token_local, object_ptr, sc, hs)?;
+            let s_chunk_ptr = hs.scratch.i32_base + HS_AUX_PTR;
+            let s_alloc_size = hs.scratch.i32_base + HS_ALLOC_SIZE;
+
+            function.instruction(&Instruction::LocalGet(object_ptr));
+            function.instruction(&ptr_const(pw, n as u64));
+            function.instruction(&ptr_store(
+                pw,
+                MemArg {
+                    offset: header_total_len_offset() as u64,
+                    align: 2,
+                    memory_index: 0,
+                },
+            ));
+            function.instruction(&Instruction::LocalGet(object_ptr));
+            function.instruction(&ptr_const(pw, n_chunks as u64));
+            function.instruction(&ptr_store(
+                pw,
+                MemArg {
+                    offset: header_n_chunks_offset_pw(pw) as u64,
+                    align: 2,
+                    memory_index: 0,
+                },
+            ));
+
+            if n_chunks == 1 {
+                function.instruction(&ptr_const(pw, chunk_alloc_size_pw(pw) as u64));
+                function.instruction(&Instruction::LocalSet(s_alloc_size));
+                emit_alloc_from_top(function, hs, s_alloc_size, s_chunk_ptr);
+                function.instruction(&Instruction::LocalGet(object_ptr));
+                function.instruction(&Instruction::LocalGet(s_chunk_ptr));
+                function.instruction(&ptr_store(
+                    pw,
+                    MemArg {
+                        offset: header_chunk_ptr_offset_pw(pw, 0) as u64,
+                        align: 2,
+                        memory_index: 0,
+                    },
+                ));
+                function.instruction(&Instruction::LocalGet(s_chunk_ptr));
+                function.instruction(&ptr_const(pw, n as u64));
+                function.instruction(&ptr_store(
+                    pw,
+                    MemArg {
+                        offset: 0,
+                        align: 2,
+                        memory_index: 0,
+                    },
+                ));
+                for (i, elem_instrs) in element_instrs.iter().enumerate() {
+                    function.instruction(&Instruction::LocalGet(s_chunk_ptr));
+                    function.instruction(&ptr_const(pw, chunk_item_offset_pw(pw, i as u32) as u64));
+                    function.instruction(&ptr_add(pw));
+                    emit_instrs_with_heap_depth(
+                        function,
+                        ctx,
+                        elem_instrs,
+                        layout,
+                        named_i64_count,
+                        helper_i64_scratch_count,
+                        i32_base,
+                        static_strings,
+                        static_heap,
+                        options,
+                        function_returns_i64,
+                        heap_base_depth + 1,
+                        self_tail_loop_depth,
+                    )?;
+                    function.instruction(&Instruction::I64Store(MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                }
+            }
+
+            emit_push_tagged_ptr(function, object_ptr, TAG_LIST, pw);
+        }
+        BackendAllocInit::Interp(_) => {
+            return Err(CodegenError {
+                message:
+                    "gen_lower/emit: AllocReuse interpolation initializer is not supported yet"
+                        .to_string(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 // Every heap object is preceded by an 8-byte refcount word (§3.1 of PLAN_PERCEUS.md).
 // Goby is memory64-only, so the header is always 8 bytes regardless of PtrWidth.
 const REFCOUNT_WORD_BYTES: u64 = 8;
@@ -5068,7 +5487,7 @@ fn emit_alloc_with_flag(
     match sc.free_list_head_offset() {
         None => {
             // Large: always bump.
-            function.instruction(&Instruction::I32Const(0));
+            function.instruction(&ptr_const(helper_state.pw(), 0));
             function.instruction(&Instruction::LocalSet(hit_flag_local));
             emit_alloc_from_top(function, helper_state, size_local, result_local);
         }
@@ -5084,61 +5503,34 @@ fn emit_alloc_with_flag(
             function.instruction(&Instruction::I64Eqz);
             function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
             // miss
-            function.instruction(&Instruction::I32Const(0));
+            function.instruction(&ptr_const(helper_state.pw(), 0));
             function.instruction(&Instruction::LocalSet(hit_flag_local));
             emit_alloc_from_top(function, helper_state, size_local, result_local);
             function.instruction(&Instruction::Else);
             // hit — result_local already has the payload ptr (old head).
-            function.instruction(&Instruction::I32Const(1));
+            function.instruction(&ptr_const(helper_state.pw(), 1));
             function.instruction(&Instruction::LocalSet(hit_flag_local));
-            // Read next-pointer from the header word (was overwritten by push).
+            // Read next-pointer from the header word (was overwritten by push)
+            // into `size_local`, which is scratch on this path.
             function.instruction(&Instruction::LocalGet(result_local));
-            function.instruction(&Instruction::I64Const(-(REFCOUNT_WORD_BYTES as i64)));
-            function.instruction(&Instruction::I64Add);
+            function.instruction(&ptr_const(helper_state.pw(), REFCOUNT_WORD_BYTES));
+            function.instruction(&ptr_sub(helper_state.pw()));
             function.instruction(&Instruction::I64Load(MemArg {
                 offset: 0,
                 align: 3,
                 memory_index: 0,
             }));
+            if helper_state.pw() == PtrWidth::W32 {
+                function.instruction(&Instruction::I32WrapI64);
+            }
+            function.instruction(&Instruction::LocalSet(size_local));
+
             // Write new head.
             function.instruction(&Instruction::I64Const(head_offset as i64));
-            // stack: [next_ptr, head_offset_addr] — need [addr, val] for store.
-            // Use result_local as temp to avoid an extra local.
-            // Actually wasm stack is not named; push addr then val:
-            // We have: ... [next_ptr] on stack, need [addr, next_ptr].
-            // Workaround: use LocalTee on a scratch location.
-            // Simplest: store next_ptr to result_local temporarily, push addr, reload.
-            // But result_local is in use!  Use hit_flag as a signaling detour is wrong.
-            // Better: just compute in a fixed order.
-            // Pop next_ptr off stack into a temporary via I64Const trick is not possible.
-            // Use the i32 size_local (which is unused at this point on the hit path)
-            // as an i64 temporary via two stores isn't type-safe.
-            //
-            // The clean solution is to keep next_ptr on the value stack (don't save it)
-            // and emit the store immediately:
-            // stack before: [next_ptr]
-            // we need:  I64Const(head_offset), [next_ptr], I64Store
-            // But I64Store pops [addr, val] = [head_offset, next_ptr].
-            // We have [next_ptr] on stack; we need to push addr BEFORE the val.
-            //
-            // Solution: save next_ptr to a caller-provided temp local, then:
-            // This requires a dedicated i64 temp.  We will use the 3rd i64 scratch
-            // slot from the stats scratch area, but that is not available here.
-            //
-            // Pragmatic approach: use an inline I64Load of result_local - 8 again,
-            // which re-reads the same memory.  Memory is not changing between the two
-            // reads (single-threaded Wasm), so this is correct.
-            function.instruction(&Instruction::Drop); // drop the head_offset_addr we pushed
-            function.instruction(&Instruction::I64Const(head_offset as i64));
-            // Re-read next_ptr.
-            function.instruction(&Instruction::LocalGet(result_local));
-            function.instruction(&Instruction::I64Const(-(REFCOUNT_WORD_BYTES as i64)));
-            function.instruction(&Instruction::I64Add);
-            function.instruction(&Instruction::I64Load(MemArg {
-                offset: 0,
-                align: 3,
-                memory_index: 0,
-            }));
+            function.instruction(&Instruction::LocalGet(size_local));
+            if helper_state.pw() == PtrWidth::W32 {
+                function.instruction(&Instruction::I64ExtendI32U);
+            }
             function.instruction(&Instruction::I64Store(MemArg {
                 offset: 0,
                 align: 3,
@@ -5146,8 +5538,8 @@ fn emit_alloc_with_flag(
             }));
             // Restore refcount = 1 in the header word.
             function.instruction(&Instruction::LocalGet(result_local));
-            function.instruction(&Instruction::I64Const(-(REFCOUNT_WORD_BYTES as i64)));
-            function.instruction(&Instruction::I64Add);
+            function.instruction(&ptr_const(helper_state.pw(), REFCOUNT_WORD_BYTES));
+            function.instruction(&ptr_sub(helper_state.pw()));
             function.instruction(&Instruction::I64Const(1));
             function.instruction(&Instruction::I64Store(MemArg {
                 offset: 0,
@@ -5158,6 +5550,10 @@ fn emit_alloc_with_flag(
 
             // Update GLOBAL_FREE_LIST_HITS if hit.
             function.instruction(&Instruction::LocalGet(hit_flag_local));
+            if helper_state.pw() == PtrWidth::W64 {
+                function.instruction(&Instruction::I64Eqz);
+                function.instruction(&Instruction::I32Eqz);
+            }
             function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
             function.instruction(&Instruction::I64Const(GLOBAL_FREE_LIST_HITS_OFFSET as i64));
             function.instruction(&Instruction::I64Const(GLOBAL_FREE_LIST_HITS_OFFSET as i64));
@@ -5178,31 +5574,6 @@ fn emit_alloc_with_flag(
     }
 
     // Update peak_bytes: peak = max(total_bytes - freed_bytes, peak).
-    // Compute live = total - freed.
-    function.instruction(&Instruction::I64Const(
-        GLOBAL_ALLOC_BYTES_TOTAL_OFFSET as i64,
-    ));
-    function.instruction(&Instruction::I64Load(MemArg {
-        offset: 0,
-        align: 3,
-        memory_index: 0,
-    }));
-    function.instruction(&Instruction::I64Const(GLOBAL_FREED_BYTES_OFFSET as i64));
-    function.instruction(&Instruction::I64Load(MemArg {
-        offset: 0,
-        align: 3,
-        memory_index: 0,
-    }));
-    function.instruction(&Instruction::I64Sub);
-    // stack: [live_bytes]
-    function.instruction(&Instruction::I64Const(GLOBAL_PEAK_BYTES_OFFSET as i64));
-    function.instruction(&Instruction::I64Load(MemArg {
-        offset: 0,
-        align: 3,
-        memory_index: 0,
-    }));
-    // stack: [live_bytes, current_peak]
-    // if live > peak: peak = live
     function.instruction(&Instruction::I64Const(GLOBAL_PEAK_BYTES_OFFSET as i64));
     function.instruction(&Instruction::I64Load(MemArg {
         offset: 0,
@@ -10527,7 +10898,8 @@ fn emit_test_drop_ptr(code: &mut CodeSection, goby_drop_func_idx: u32) {
 mod tests {
     use super::*;
     use crate::gen_lower::backend_ir::{
-        BackendEffectOp, BackendPrintOp, BackendReadOp, SplitIndexOperand, WasmBackendInstr as I,
+        BackendAllocInit, BackendEffectOp, BackendPrintOp, BackendReadOp, SplitIndexOperand,
+        WasmBackendInstr as I,
     };
     use wasmparser::Validator;
 
@@ -10688,6 +11060,41 @@ mod tests {
         ];
         let wasm = emit_general_module(&instrs, &default_layout())
             .expect("emit refcount helper ops should succeed");
+        assert_valid_wasm(&wasm);
+    }
+
+    #[test]
+    fn emit_refcount_reuse_ops_produce_valid_wasm() {
+        let instrs = vec![
+            I::DeclareLocal {
+                name: "old".to_string(),
+            },
+            I::DeclareLocal {
+                name: "token".to_string(),
+            },
+            I::TupleLit {
+                element_instrs: vec![vec![I::I64Const(encode_int(9).unwrap())]],
+            },
+            I::StoreLocal {
+                name: "old".to_string(),
+            },
+            I::LoadLocal {
+                name: "old".to_string(),
+            },
+            I::RefCountDropReuse {
+                token_local: "token".to_string(),
+            },
+            I::AllocReuse {
+                token_local: "token".to_string(),
+                size_class: SizeClass::Tuple(1),
+                init: BackendAllocInit::TupleLit {
+                    element_instrs: vec![vec![I::I64Const(encode_int(1).unwrap())]],
+                },
+            },
+            I::Drop,
+        ];
+        let wasm = emit_general_module(&instrs, &default_layout())
+            .expect("emit refcount reuse ops should succeed");
         assert_valid_wasm(&wasm);
     }
 

@@ -7,9 +7,10 @@
 //! The design rationale and the Goby IR mapping are documented in this module
 //! and in `gen_lower/mod.rs`.
 
-use goby_core::ir::IrBinOp;
+use goby_core::ir::{IrBinOp, IrInterpPart};
 
 use crate::host_runtime::IntrinsicExecutionBoundary;
+use crate::size_class::SizeClass;
 
 // ---------------------------------------------------------------------------
 // Case pattern types
@@ -59,6 +60,21 @@ pub(crate) enum BackendCasePattern {
 pub(crate) struct CaseArmInstr {
     pub(crate) pattern: BackendCasePattern,
     pub(crate) body_instrs: Vec<WasmBackendInstr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BackendAllocInit {
+    ListLit {
+        element_instrs: Vec<Vec<WasmBackendInstr>>,
+    },
+    TupleLit {
+        element_instrs: Vec<Vec<WasmBackendInstr>>,
+    },
+    RecordLit {
+        constructor: String,
+        field_instrs: Vec<Vec<WasmBackendInstr>>,
+    },
+    Interp(Vec<IrInterpPart>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -295,6 +311,14 @@ pub(crate) enum WasmBackendInstr {
     RefCountDup,
     /// Decrement the refcount of a tagged heap value and run runtime child-drop on zero.
     RefCountDrop,
+    /// Run drop-reuse on a tagged heap value and store the raw reuse token.
+    RefCountDropReuse { token_local: String },
+    /// Allocate through a reuse token, falling back to the size-class allocator.
+    AllocReuse {
+        token_local: String,
+        size_class: SizeClass,
+        init: BackendAllocInit,
+    },
     /// Discard the top-of-stack value.
     Drop,
     /// Conditional expression.

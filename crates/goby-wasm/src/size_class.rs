@@ -172,6 +172,21 @@ impl SizeClass {
     }
 }
 
+impl From<goby_core::size_class::SizeClass> for SizeClass {
+    fn from(sc: goby_core::size_class::SizeClass) -> Self {
+        match sc {
+            goby_core::size_class::SizeClass::Chunk => SizeClass::Chunk,
+            goby_core::size_class::SizeClass::Header(n) => SizeClass::Header(n),
+            goby_core::size_class::SizeClass::Tuple(a) => SizeClass::Tuple(a),
+            goby_core::size_class::SizeClass::Record(a) => SizeClass::Record(a),
+            goby_core::size_class::SizeClass::Closure(s) => SizeClass::Closure(s),
+            goby_core::size_class::SizeClass::Cell => SizeClass::Cell,
+            goby_core::size_class::SizeClass::String(b) => SizeClass::String(b),
+            goby_core::size_class::SizeClass::Large => SizeClass::Large,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

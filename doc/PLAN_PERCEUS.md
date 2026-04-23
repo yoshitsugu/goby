@@ -1251,6 +1251,10 @@ acceptance test.
       - 2026-04-23 follow-up: same-block pairing is now gated on a known
         dropped-value `SizeClass` matching the following allocation's
         `SizeClass`; mismatched or unknown drops are left as ordinary `Drop`.
+      - 2026-04-23 backend progress: `goby-wasm` backend IR/lowering/emission
+        now carries `DropReuse` / `AllocReuse`; emission implements dynamic
+        uniqueness token creation and token-first allocation for tuple,
+        record, and single-chunk-list initializers with size-class fallback.
 - [ ] Tail-position cross-call rule (§3.7.1) implemented: a `Drop` in
       tail position immediately before a tail `Call` to a decl whose
       first allocation matches size class S produces a reuse token

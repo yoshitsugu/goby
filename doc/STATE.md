@@ -133,8 +133,16 @@ it moves to the GeneralLowered path.
     fires when the dropped value has a known reusable `SizeClass` and the
     following allocation has the identical class; mismatched/unknown drops
     remain ordinary `Drop`.
-  - The pass is intentionally not wired into `run_perceus_passes` yet; Wasm
-    lowering/runtime support for the new nodes remains the next M5 slice.
+  - Wasm backend lowering/emission now accepts the reuse IR:
+    `DropReuse` lowers to a backend drop-reuse op that returns a raw payload
+    token only for dynamically unique heap values, and `AllocReuse` lowers to
+    token-first allocation for tuple/record/single-chunk-list initializers
+    with free-list fallback by static `SizeClass`.
+  - The new emitter smoke test validates a hand-built reuse backend-IR module
+    with `wasmparser`; this also fixed the previously-dormant
+    `emit_alloc_with_flag` memory64 stack discipline before pass wiring.
+  - The pass is intentionally not wired into `run_perceus_passes` yet; runtime
+    execution coverage and pass wiring remain the next M5 slice.
 
 ---
 
@@ -224,6 +232,18 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 - `cargo test -p goby-wasm alloc_baseline` — pass.
 - devflow step gate (`cargo fmt --all --check`; `cargo check`; `cargo test --workspace`) — pass
   (existing `goby-wasm::size_class` dead-code warnings).
+
+## Verification snapshot (2026-04-23, M5 backend reuse lowering slice)
+
+- `cargo fmt --all --check` — pass.
+- `cargo check` — pass (existing `goby-wasm::size_class` dead-code warnings).
+- `cargo test -p goby-wasm gen_lower::lower::tests::lower_drop_reuse_and_alloc_reuse_emit_backend_ops`
+  — pass.
+- `cargo test -p goby-wasm gen_lower::emit::tests::emit_refcount_reuse_ops_produce_valid_wasm`
+  — pass.
+- `cargo test -p goby-wasm` — pass.
+- devflow step gate (`cargo fmt --all --check`; `cargo check`; `cargo test --workspace`) — pass
+  (existing `goby-wasm::size_class` / `run_wasm_bytes_capturing_stderr` dead-code warnings).
 
 ## Verification snapshot (2026-04-20, M4 first insertion slice)
 
