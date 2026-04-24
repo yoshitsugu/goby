@@ -4,17 +4,14 @@ Last updated: 2026-04-24 (Perceus M5 Step 8: tail-call cross-call reuse IR pass)
 
 ## Current Focus
 
-**Perceus M3 complete. M4 landed as a conservative slice. M4.5 is now
-complete.** All M3 deliverables remain in tree; M4 adds ownership
-classification + a partial §3.10 drop-insertion pass that only fires in
-cases where the consume-vs-borrow distinction is unambiguous. M4.5 now has
-the first borrow-classifier slice: parameter ownership is inferred by a
-module fixpoint that starts parameters as `Borrowed` and demotes them to
-`Owned` on returned/stored/consuming/unknown flow, including simple
-`let alias = param` forwarding.
+**Perceus M3–M4.5 complete. M5 in progress — Step 8 (tail-call cross-call
+reuse IR) landed.** Intra-block `DropReuse`/`AllocReuse` pairing and the
+tail-call reuse-token IR transformation are both wired into
+`run_perceus_passes`. Backend lowering still uses the no-op fallback path
+(Step 9 connects the wasm ABI so `reuse_hits` begins firing).
 
-See `doc/PLAN_PERCEUS.md` §M4 "As-shipped scope note" for the full list
-of what the slice does and does not do, and why.
+See `doc/PLAN_PERCEUS.md` §M4 "As-shipped scope note" for the full M4 scope,
+and the M5 section for the current step-by-step progress.
 
 - Free-list head table in linear memory (`HEAP_BASE` 56 → 408), `SizeClass` enum,
   `emit_alloc_with_flag` (free-list pop + bump fallback), `emit_free_list_push`.
@@ -119,9 +116,10 @@ of what the slice does and does not do, and why.
     it is excluded until it can emit debug alloc stats.
   - focused Perceus tests grew from 18 to 22.
 
-Next: **Perceus M5** — continue reuse pairing and tail-recursive reuse-token
-plumbing. Keep `list_case.gb` alloc-stats coverage on the follow-up list once
-it moves to the GeneralLowered path.
+**Perceus M5** — intra-block pairing + tail-call reuse IR complete (Step 8).
+Next: Step 9 — wasm ABI wiring so `reuse_hits` begins firing in the
+`refcount_reuse_loop` benchmark. Keep `list_case.gb` alloc-stats coverage on
+the follow-up list once it moves to the GeneralLowered path.
 
 - M5 IR scaffold started on 2026-04-23:
   - shared IR now has `AllocInit`, `CompExpr::DropReuse`, and

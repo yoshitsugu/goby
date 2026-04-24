@@ -1238,7 +1238,7 @@ acceptance test.
 
 ### M5 — Reuse analysis
 
-- [ ] `reuse_pair` pass (new file
+- [x] `reuse_pair` pass (new file
       `crates/goby-core/src/perceus_reuse.rs`) matches `Drop` →
       `alloc` on the same block (§3.7) by identical `SizeClass`. No
       matching across block terminators. Public API:
