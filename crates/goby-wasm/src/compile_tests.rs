@@ -2686,3 +2686,153 @@ main =
         "expected free_list_hits > 0 after drop+realloc of 1-chunk list; got {hits}"
     );
 }
+
+/// M5 Step 7: `__test_drop_reuse_ptr` on a unique (refcount==1) allocation must
+/// return a non-zero token and increment `GLOBAL_REUSE_HITS_OFFSET` by 1.
+#[test]
+fn drop_reuse_unique_increments_reuse_hits() {
+    use wasmtime::{Config, Engine, Linker, Module as WasmModule, Store};
+    use wasmtime_wasi::WasiCtxBuilder;
+    use wasmtime_wasi::p1::{self, WasiP1Ctx};
+    use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
+
+    let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  println "ok"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let emit_options = crate::gen_lower::emit::EmitOptions {
+        debug_alloc_stats: false,
+        expose_perceus_test_exports: true,
+        ..crate::gen_lower::emit::EmitOptions::default()
+    };
+    let wasm = crate::gen_lower::try_general_lower_module_with_options(&module, emit_options)
+        .expect("lowering should not error")
+        .expect("module should use general lowering path");
+    assert_valid_wasm_module(&wasm);
+
+    let mut config = Config::new();
+    config.wasm_memory64(true);
+    let engine = Engine::new(&config).expect("engine");
+    let wasm_module = WasmModule::from_binary(&engine, &wasm).expect("parse wasm");
+
+    let wasi_ctx = WasiCtxBuilder::new()
+        .stdin(MemoryInputPipe::new("\n".to_owned()))
+        .stdout(MemoryOutputPipe::new(4096))
+        .build_p1();
+    let mut store = Store::new(&engine, wasi_ctx);
+    let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
+    p1::add_to_linker_sync(&mut linker, |t| t).expect("wasi linker");
+
+    let module_name = crate::host_runtime::HostIntrinsicImport::MODULE;
+    for name in [
+        "__goby_value_to_string",
+        "__goby_string_each_grapheme_count",
+        "__goby_string_graphemes_list",
+        "__goby_string_split_lines",
+    ] {
+        linker
+            .func_wrap(module_name, name, |_: i64| -> i64 { 0 })
+            .ok();
+    }
+    linker
+        .func_wrap(
+            module_name,
+            "__goby_string_each_grapheme_state",
+            |_: i64, _: i64| -> i64 { 0 },
+        )
+        .ok();
+    linker
+        .func_wrap(
+            module_name,
+            "__goby_string_concat",
+            |_: i64, _: i64| -> i64 { 0 },
+        )
+        .ok();
+    linker
+        .func_wrap(
+            module_name,
+            "__goby_list_join_string",
+            |_: i64, _: i64| -> i64 { 0 },
+        )
+        .ok();
+
+    let instance = linker
+        .instantiate(&mut store, &wasm_module)
+        .expect("instantiate");
+    let memory = instance
+        .get_memory(&mut store, "memory")
+        .expect("memory export");
+
+    // Initialize global slots (same pattern as the M3 acceptance test).
+    let mc = &crate::memory_config::RUNTIME_MEMORY_CONFIG;
+    let initial_cursor = mc.initial_linear_memory_bytes() - mc.host_bump_reserved_bytes;
+    let host_bump = mc.host_bump_start();
+    memory
+        .write(
+            &mut store,
+            crate::layout::GLOBAL_HEAP_CURSOR_OFFSET as usize,
+            &initial_cursor.to_le_bytes(),
+        )
+        .expect("init cursor");
+    memory
+        .write(
+            &mut store,
+            crate::layout::GLOBAL_HEAP_FLOOR_OFFSET as usize,
+            &(crate::layout::HEAP_BASE).to_le_bytes(),
+        )
+        .expect("init floor");
+    memory
+        .write(
+            &mut store,
+            crate::layout::GLOBAL_HOST_BUMP_CURSOR_OFFSET as usize,
+            &host_bump.to_le_bytes(),
+        )
+        .expect("init host bump");
+    for offset in [
+        crate::layout::GLOBAL_FREE_LIST_HITS_OFFSET,
+        crate::layout::GLOBAL_ALLOC_BYTES_TOTAL_OFFSET,
+        crate::layout::GLOBAL_FREED_BYTES_OFFSET,
+        crate::layout::GLOBAL_REUSE_HITS_OFFSET,
+    ] {
+        memory
+            .write(&mut store, offset as usize, &0u64.to_le_bytes())
+            .expect("init slot");
+    }
+
+    // Allocate a unique list (refcount=1).
+    let alloc_fn = instance
+        .get_typed_func::<(), i64>(&mut store, "__test_alloc_list_1chunk")
+        .expect("__test_alloc_list_1chunk export");
+    let tagged_header = alloc_fn.call(&mut store, ()).expect("alloc call");
+    assert_ne!(tagged_header, 0, "alloc returned null");
+
+    // Call drop_reuse on the unique allocation — should return non-zero token.
+    let drop_reuse_fn = instance
+        .get_typed_func::<i64, i64>(&mut store, "__test_drop_reuse_ptr")
+        .expect("__test_drop_reuse_ptr export");
+    let token = drop_reuse_fn
+        .call(&mut store, tagged_header)
+        .expect("drop_reuse call");
+    assert_ne!(
+        token, 0,
+        "expected non-zero reuse token for unique allocation"
+    );
+
+    // Read GLOBAL_REUSE_HITS_OFFSET — should be 1.
+    let mut hits_bytes = [0u8; 8];
+    memory
+        .read(
+            &store,
+            crate::layout::GLOBAL_REUSE_HITS_OFFSET as usize,
+            &mut hits_bytes,
+        )
+        .expect("read reuse_hits");
+    let hits = u64::from_le_bytes(hits_bytes);
+    assert_eq!(
+        hits, 1,
+        "expected reuse_hits == 1 after drop_reuse on unique allocation; got {hits}"
+    );
+}

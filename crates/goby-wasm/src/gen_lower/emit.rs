@@ -35,7 +35,7 @@ use crate::host_runtime::{
 use crate::layout::{
     GLOBAL_ALLOC_BYTES_TOTAL_OFFSET, GLOBAL_FREE_LIST_HITS_OFFSET, GLOBAL_FREED_BYTES_OFFSET,
     GLOBAL_HEAP_CURSOR_OFFSET, GLOBAL_HEAP_FLOOR_OFFSET, GLOBAL_HOST_BUMP_CURSOR_OFFSET,
-    GLOBAL_PEAK_BYTES_OFFSET, GLOBAL_RUNTIME_ERROR_OFFSET, MemoryLayout,
+    GLOBAL_PEAK_BYTES_OFFSET, GLOBAL_REUSE_HITS_OFFSET, GLOBAL_RUNTIME_ERROR_OFFSET, MemoryLayout,
     RUNTIME_ERROR_MEMORY_EXHAUSTION,
 };
 #[cfg(test)]
@@ -1413,11 +1413,12 @@ fn initialize_helper_state_locals(
         function.instruction(&ptr_const(pw, GLOBAL_HEAP_FLOOR_OFFSET as u64));
         function.instruction(&Instruction::I32Const(initial_floor));
         function.instruction(&Instruction::I32Store(global_mem_arg));
-        // Zero-initialize the three i64 allocation-stats slots.
+        // Zero-initialize the i64 allocation-stats slots.
         for offset in [
             GLOBAL_ALLOC_BYTES_TOTAL_OFFSET,
             GLOBAL_PEAK_BYTES_OFFSET,
             GLOBAL_FREE_LIST_HITS_OFFSET,
+            GLOBAL_REUSE_HITS_OFFSET,
         ] {
             function.instruction(&ptr_const(pw, offset as u64));
             function.instruction(&Instruction::I64Const(0));
@@ -1707,10 +1708,18 @@ pub(crate) fn emit_general_module_with_aux_and_options(
     let goby_rc_type_idx = types.len();
     types.ty().function([ValType::I64], []);
 
-    // type for __test_alloc_list_1chunk: () -> i64  (returns tagged header ptr)
+    // type for __test_alloc_list_1chunk / __test_reuse_hits: () -> i64
     let test_alloc_type_idx = if options.expose_perceus_test_exports {
         let idx = types.len();
         types.ty().function([], [ValType::I64]);
+        idx
+    } else {
+        0 // unused
+    };
+    // type for __test_drop_reuse_ptr: (i64) -> i64  (tagged_ptr -> reuse token)
+    let test_drop_reuse_type_idx = if options.expose_perceus_test_exports {
+        let idx = types.len();
+        types.ty().function([ValType::I64], [ValType::I64]);
         idx
     } else {
         0 // unused
@@ -1765,12 +1774,17 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         functions.function(goby_rc_type_idx);
         functions.function(goby_rc_type_idx);
     }
-    // Test-only functions: __test_alloc_list_1chunk and __test_drop_ptr
+    // Test-only functions: __test_alloc_list_1chunk, __test_drop_ptr,
+    //                       __test_drop_reuse_ptr, __test_reuse_hits
     let test_alloc_func_idx = goby_drop_func_idx + 1;
     let test_drop_func_idx = goby_drop_func_idx + 2;
+    let test_drop_reuse_func_idx = goby_drop_func_idx + 3;
+    let test_reuse_hits_func_idx = goby_drop_func_idx + 4;
     if options.expose_perceus_test_exports {
         functions.function(test_alloc_type_idx); // () -> i64
         functions.function(goby_rc_type_idx); // (i64) -> ()
+        functions.function(test_drop_reuse_type_idx); // (i64) -> i64
+        functions.function(test_alloc_type_idx); // () -> i64
     }
     module.section(&functions);
 
@@ -1839,6 +1853,16 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             test_alloc_func_idx,
         );
         exports.export("__test_drop_ptr", ExportKind::Func, test_drop_func_idx);
+        exports.export(
+            "__test_drop_reuse_ptr",
+            ExportKind::Func,
+            test_drop_reuse_func_idx,
+        );
+        exports.export(
+            "__test_reuse_hits",
+            ExportKind::Func,
+            test_reuse_hits_func_idx,
+        );
         exports.export("__goby_drop", ExportKind::Func, goby_drop_func_idx);
     }
     module.section(&exports);
@@ -2029,6 +2053,8 @@ pub(crate) fn emit_general_module_with_aux_and_options(
     if options.expose_perceus_test_exports {
         emit_test_alloc_list_1chunk(&mut code, layout, pw);
         emit_test_drop_ptr(&mut code, goby_drop_func_idx);
+        emit_test_drop_reuse_ptr(&mut code, goby_drop_func_idx, pw);
+        emit_test_reuse_hits(&mut code, pw);
     }
     module.section(&code);
 
@@ -2050,6 +2076,8 @@ pub(crate) fn emit_general_module_with_aux_and_options(
     if options.expose_perceus_test_exports {
         function_names.append(test_alloc_func_idx, "__test_alloc_list_1chunk");
         function_names.append(test_drop_func_idx, "__test_drop_ptr");
+        function_names.append(test_drop_reuse_func_idx, "__test_drop_reuse_ptr");
+        function_names.append(test_reuse_hits_func_idx, "__test_reuse_hits");
     }
     names.functions(&function_names);
     module.section(&names);
@@ -4244,6 +4272,31 @@ fn emit_alloc_stats_line(
     function.instruction(&Instruction::LocalSet(s_val));
     emit_i64_to_decimal(function, s_val, s_ptr, s_tmp);
 
+    // " reuse_hits="
+    for &b in b" reuse_hits=" {
+        function.instruction(&Instruction::LocalGet(s_ptr));
+        function.instruction(&Instruction::I64Const(b as i64));
+        function.instruction(&Instruction::I64Store8(MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::LocalGet(s_ptr));
+        function.instruction(&Instruction::I64Const(1));
+        function.instruction(&Instruction::I64Add);
+        function.instruction(&Instruction::LocalSet(s_ptr));
+    }
+
+    // Load reuse_hits into s_val and convert
+    function.instruction(&ptr_const(pw, GLOBAL_REUSE_HITS_OFFSET as u64));
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::LocalSet(s_val));
+    emit_i64_to_decimal(function, s_val, s_ptr, s_tmp);
+
     // '\n'
     function.instruction(&Instruction::LocalGet(s_ptr));
     function.instruction(&Instruction::I64Const(b'\n' as i64));
@@ -4980,6 +5033,22 @@ fn emit_ref_count_drop_reuse(
     function.instruction(&Instruction::Call(ctx.goby_drop_func_idx));
     function.instruction(&Instruction::I64Const(0));
     function.instruction(&Instruction::LocalSet(token_local));
+    function.instruction(&Instruction::Else);
+    // refcount == 1: token is retained (reuse hit). Increment reuse_hits counter.
+    function.instruction(&Instruction::I64Const(GLOBAL_REUSE_HITS_OFFSET as i64));
+    function.instruction(&Instruction::I64Const(GLOBAL_REUSE_HITS_OFFSET as i64));
+    function.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    function.instruction(&Instruction::I64Const(1));
+    function.instruction(&Instruction::I64Add);
+    function.instruction(&Instruction::I64Store(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
     function.instruction(&Instruction::End);
     function.instruction(&Instruction::End);
 
@@ -10884,12 +10953,62 @@ fn emit_test_alloc_list_1chunk(code: &mut CodeSection, layout: &MemoryLayout, pw
     code.function(&f);
 }
 
+/// Emit `__test_drop_reuse_ptr(tagged_ptr: i64) -> i64`: runs `drop_reuse` on the
+/// given tagged pointer and returns the resulting reuse token (payload ptr or 0).
+/// Only emitted when `expose_perceus_test_exports` is set.
+fn emit_test_drop_reuse_ptr(code: &mut CodeSection, goby_drop_func_idx: u32, pw: PtrWidth) {
+    // param 0: tagged_ptr (i64)
+    // locals: 1=token (i64), 2=scratch0 (i64), 3=scratch1 (i64), 4=scratch2 (i64)
+    let token_local: u32 = 1;
+    let scratch_base: u32 = 2;
+    let mut f = Function::new(vec![(4, ValType::I64)]);
+
+    let ctx = EmitContext {
+        locals: Default::default(),
+        next_local: 0,
+        decl_func_indices: Default::default(),
+        decl_returns_wasm_heap: Default::default(),
+        decl_uses_heap: Default::default(),
+        decl_table_slots: Default::default(),
+        goby_dup_func_idx: 0,
+        goby_drop_func_idx,
+        indirect_call_type_idx_1: None,
+        indirect_call_type_idx_2: None,
+        indirect_call_type_idx_3: None,
+        record_ctor_tags: Default::default(),
+        tail_call_mode: None,
+    };
+
+    // Push param 0 (tagged_ptr) onto the stack, then call emit_ref_count_drop_reuse.
+    f.instruction(&Instruction::LocalGet(0));
+    emit_ref_count_drop_reuse(&mut f, token_local, scratch_base, &ctx, pw);
+
+    // Return the token.
+    f.instruction(&Instruction::LocalGet(token_local));
+    f.instruction(&Instruction::End);
+    code.function(&f);
+}
+
 /// Emit `__test_drop_ptr`: calls `__goby_drop(tagged_ptr)` — thin wrapper for testing.
 fn emit_test_drop_ptr(code: &mut CodeSection, goby_drop_func_idx: u32) {
     // param 0: tagged_ptr (i64)
     let mut f = Function::new(vec![]); // no extra locals
     f.instruction(&Instruction::LocalGet(0));
     f.instruction(&Instruction::Call(goby_drop_func_idx));
+    f.instruction(&Instruction::End);
+    code.function(&f);
+}
+
+/// Emit `__test_reuse_hits`: returns the current value of `GLOBAL_REUSE_HITS_OFFSET`.
+/// Only emitted when `expose_perceus_test_exports` is set.
+fn emit_test_reuse_hits(code: &mut CodeSection, pw: PtrWidth) {
+    let mut f = Function::new(vec![]); // no params, no extra locals; returns i64
+    f.instruction(&ptr_const(pw, GLOBAL_REUSE_HITS_OFFSET as u64));
+    f.instruction(&Instruction::I64Load(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
     f.instruction(&Instruction::End);
     code.function(&f);
 }

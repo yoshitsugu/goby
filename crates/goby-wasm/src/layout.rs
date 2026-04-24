@@ -33,6 +33,10 @@ pub(crate) const GLOBAL_FREE_LIST_HITS_OFFSET: u32 = 48;
 /// Used to compute peak live bytes: peak = max(total_bytes - freed_bytes, peak).
 /// Layout: bytes [56..64).
 pub(crate) const GLOBAL_FREED_BYTES_OFFSET: u32 = 56;
+/// Reuse-hit counter: incremented each time drop_reuse retains a unique token
+/// (refcount == 1 path). Distinct from free_list_hits (which counts alloc-side
+/// free-list pops). Layout: bytes [64..72).
+pub(crate) const GLOBAL_REUSE_HITS_OFFSET: u32 = 64;
 
 // ---------------------------------------------------------------------------
 // Free-list head pointer table (M3).
@@ -44,55 +48,55 @@ pub(crate) const GLOBAL_FREED_BYTES_OFFSET: u32 = 56;
 // Size-class layout (§3.2 of PLAN_PERCEUS.md):
 //
 //   Slot  Offset  Class
-//   0     64      chunk            (one fixed size per CHUNK_SIZE)
-//   1     72      header[1]
-//   2     80      header[2]
-//   3     88      header[4]
-//   4     96      header[8]
-//   5     104     header[16]
-//   6     112     header[32]
-//   7     120     header[64]
-//   8     128     header[128]
-//   9     136     tuple[1]
-//   10    144     tuple[2]
-//   11    152     tuple[3]
-//   12    160     tuple[4]
-//   13    168     tuple[5]
-//   14    176     tuple[6]
-//   15    184     tuple[7]
-//   16    192     tuple[8]
-//   17    200     record[1]
-//   18    208     record[2]
-//   19    216     record[3]
-//   20    224     record[4]
-//   21    232     record[5]
-//   22    240     record[6]
-//   23    248     record[7]
-//   24    256     record[8]
-//   25    264     closure[0]
-//   26    272     closure[1]
-//   27    280     closure[2]
-//   28    288     closure[3]
-//   29    296     closure[4]
-//   30    304     closure[5]
-//   31    312     closure[6]
-//   32    320     closure[7]
-//   33    328     closure[8]
-//   34    336     cell
-//   35    344     string[8]
-//   36    352     string[16]
-//   37    360     string[32]
-//   38    368     string[64]
-//   39    376     string[128]
-//   40    384     string[256]
-//   41    392     string[512]
-//   42    400     string[large]    (exact-size overflow; not recycled cross-class)
+//   0     72      chunk            (one fixed size per CHUNK_SIZE)
+//   1     80      header[1]
+//   2     88      header[2]
+//   3     96      header[4]
+//   4     104     header[8]
+//   5     112     header[16]
+//   6     120     header[32]
+//   7     128     header[64]
+//   8     136     header[128]
+//   9     144     tuple[1]
+//   10    152     tuple[2]
+//   11    160     tuple[3]
+//   12    168     tuple[4]
+//   13    176     tuple[5]
+//   14    184     tuple[6]
+//   15    192     tuple[7]
+//   16    200     tuple[8]
+//   17    208     record[1]
+//   18    216     record[2]
+//   19    224     record[3]
+//   20    232     record[4]
+//   21    240     record[5]
+//   22    248     record[6]
+//   23    256     record[7]
+//   24    264     record[8]
+//   25    272     closure[0]
+//   26    280     closure[1]
+//   27    288     closure[2]
+//   28    296     closure[3]
+//   29    304     closure[4]
+//   30    312     closure[5]
+//   31    320     closure[6]
+//   32    328     closure[7]
+//   33    336     closure[8]
+//   34    344     cell
+//   35    352     string[8]
+//   36    360     string[16]
+//   37    368     string[32]
+//   38    376     string[64]
+//   39    384     string[128]
+//   40    392     string[256]
+//   41    400     string[512]
+//   42    408     string[large]    (exact-size overflow; not recycled cross-class)
 //   (no slot 43; large allocs not freed to a list in M3)
 //
-// Total: 43 slots × 8 bytes = 344 bytes, occupying bytes [64..408).
+// Total: 43 slots × 8 bytes = 344 bytes, occupying bytes [72..416).
 // ---------------------------------------------------------------------------
 
-pub(crate) const FREE_LIST_TABLE_BASE: u32 = 64;
+pub(crate) const FREE_LIST_TABLE_BASE: u32 = 72;
 pub(crate) const FREE_LIST_SLOT_CHUNK: u32 = FREE_LIST_TABLE_BASE; // slot 0
 
 // header[k] slots: k ∈ {1,2,4,8,16,32,64,128} → slots 1..=8
