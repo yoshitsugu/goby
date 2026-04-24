@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::{CompExpr, IrCaseArm, IrDecl, IrHandlerClause, IrInterpPart, IrModule, ValueExpr};
+use crate::perceus_reuse::insert_reuse;
 
 const EXPECTED_PIPELINE: [&str; 5] = [
     "ir::from_resolved",
@@ -26,7 +27,10 @@ pub fn assert_perceus_pipeline_order(pass_names: &[&'static str]) {
 
 pub fn run_perceus_passes(module: &IrModule) -> IrModule {
     let ownership = ownership_classify_module(module);
-    drop_insert_module(module, &ownership)
+    let dropped = drop_insert_module(module, &ownership);
+    IrModule {
+        decls: dropped.decls.into_iter().map(insert_reuse).collect(),
+    }
 }
 
 fn ownership_classify_module(

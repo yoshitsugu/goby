@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-23 (Perceus M5 IR scaffold started)
+Last updated: 2026-04-24 (Perceus M5 reuse pass wired into run_perceus_passes)
 
 ## Current Focus
 
@@ -143,6 +143,16 @@ it moves to the GeneralLowered path.
     `emit_alloc_with_flag` memory64 stack discipline before pass wiring.
   - The pass is intentionally not wired into `run_perceus_passes` yet; runtime
     execution coverage and pass wiring remain the next M5 slice.
+- M5 pass wiring landed on 2026-04-24:
+  - `run_perceus_passes` now invokes `perceus_reuse::insert_reuse` as its final
+    per-decl pass, matching the §3.8 `ownership_classify → drop_insert →
+    reuse_pair` ordering already asserted by `assert_perceus_pipeline_order`.
+  - Runtime behavior is unchanged because the Wasm backend still lowers
+    `DropReuse` / `AllocReuse` via the fallback (ordinary drop / ordinary alloc)
+    path; existing workspace tests remain green without baseline updates.
+  - The pass now runs on every module that reaches the Perceus pipeline, so the
+    next M5 slice can focus on backend reuse semantics (`__goby_drop_reuse` /
+    `__goby_alloc_reuse`) and the `refcount_reuse_loop` allocation budget.
 
 ---
 
@@ -198,8 +208,9 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 
 ## Immediate Next Actions
 
-1. **Perceus M5:** implement reuse pairing (`DropReuse` / `AllocReuse`) and
-   tail-call reuse-token plumbing for the normative refcount reuse loop.
+1. **Perceus M5:** measure `examples/refcount_reuse_loop.gb` allocation under the
+   now-wired fallback reuse pass (Step 6.5), then implement the `__goby_drop_reuse`
+   / `__goby_alloc_reuse` runtime helpers and the tail-call reuse-token plumbing.
 2. Extend `tooling/` syntax highlight definitions to cover `^` (tracked as a
    TODO under `doc/PLAN.md` §4.2.1).
 
@@ -232,6 +243,16 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 - `cargo test -p goby-wasm alloc_baseline` — pass.
 - devflow step gate (`cargo fmt --all --check`; `cargo check`; `cargo test --workspace`) — pass
   (existing `goby-wasm::size_class` dead-code warnings).
+
+## Verification snapshot (2026-04-24, M5 reuse pass wiring)
+
+- `cargo fmt --all --check` — pass.
+- `cargo test -p goby-core --lib perceus` — pass (25 passed, includes the
+  existing `perceus_reuse` focused tests now reached through the module
+  pipeline).
+- `cargo test --workspace` — pass (goby-core 738, goby-wasm 688, goby-cli 54,
+  all green; existing `goby-wasm::size_class` /
+  `run_wasm_bytes_capturing_stderr` dead-code warnings remain).
 
 ## Verification snapshot (2026-04-23, M5 backend reuse lowering slice)
 

@@ -1255,6 +1255,12 @@ acceptance test.
         now carries `DropReuse` / `AllocReuse`; emission implements dynamic
         uniqueness token creation and token-first allocation for tuple,
         record, and single-chunk-list initializers with size-class fallback.
+      - 2026-04-24 pipeline wiring: `run_perceus_passes` now invokes
+        `insert_reuse` as the final per-decl pass so every module going through
+        the Perceus pipeline gets intra-block `Drop → alloc` pairing where the
+        dropped value and the next allocation share a known `SizeClass`.
+        Runtime behavior is unchanged under the fallback lowering introduced in
+        the earlier backend slice.
 - [ ] Tail-position cross-call rule (§3.7.1) implemented: a `Drop` in
       tail position immediately before a tail `Call` to a decl whose
       first allocation matches size class S produces a reuse token
