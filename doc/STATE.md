@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-24 (Perceus M5 reuse pass wired into run_perceus_passes)
+Last updated: 2026-04-24 (Perceus M5 Step 8: tail-call cross-call reuse IR pass)
 
 ## Current Focus
 
@@ -153,6 +153,23 @@ it moves to the GeneralLowered path.
   - The pass now runs on every module that reaches the Perceus pipeline, so the
     next M5 slice can focus on backend reuse semantics (`__goby_drop_reuse` /
     `__goby_alloc_reuse`) and the `refcount_reuse_loop` allocation budget.
+- M5 Step 8 (tail-call cross-call reuse IR pass) landed on 2026-04-24:
+  - `ir.rs` now carries `Call.reuse_token: Option<String>` and
+    `IrDecl.reuse_param: Option<String>` with validation.
+  - `perceus_reuse.rs` adds `first_alloc_class`, `rewrite_callee_first_alloc`,
+    and `insert_tail_reuse_module`: detects `Drop x` immediately before a tail
+    `Call f` where size classes match, rewrites to `DropReuse x as tok`,
+    threads `reuse_token = Some(tok)` into the `Call`, and marks the callee
+    decl with `reuse_param = Some(tok)`, rewriting its first reachable alloc
+    to `AllocReuse`.
+  - `run_perceus_passes` wired: `insert_tail_reuse_module` now runs after
+    intra-block `insert_reuse`.
+  - Backend fallback lowering: `reuse_token` on `Call` is ignored (standard
+    call ABI); `reuse_param` decl emits a `i64.const 0` local for the hidden
+    token so `AllocReuse` falls through to the normal alloc path. No behavior
+    change; `reuse_hits` counter stays 0 until Step 9 ABI wiring.
+  - 11 unit tests in `perceus_reuse::tests` all green; full workspace suite
+    green (goby-core 746, goby-wasm 689, goby-cli 67).
 
 ---
 

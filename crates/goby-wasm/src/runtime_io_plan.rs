@@ -630,7 +630,7 @@ fn ir_plan_static_output(comp: &CompExpr) -> Option<String> {
 fn ir_collect_static_prints(comp: &CompExpr, out: &mut String, print_count: &mut usize) -> bool {
     match comp {
         CompExpr::Value(ValueExpr::Unit) => true,
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             if args.len() != 1 {
                 return false;
             }
@@ -2347,6 +2347,7 @@ main =
                     result_ty: IrType::Unit,
                     residual_effects: vec!["Read".into(), "Print".into()],
                     body,
+                    reuse_param: None,
                 }],
             }
         }
@@ -2432,6 +2433,7 @@ main =
             let body = CompExpr::Call {
                 callee: Box::new(ValueExpr::Var("print".into())),
                 args: vec![ValueExpr::StrLit("hello".into())],
+                reuse_token: None,
             };
             let ir = ir_module_with_main(body);
             assert_eq!(
@@ -2445,6 +2447,7 @@ main =
             let body = CompExpr::Call {
                 callee: Box::new(ValueExpr::Var("println".into())),
                 args: vec![ValueExpr::StrLit("hi".into())],
+                reuse_token: None,
             };
             let ir = ir_module_with_main(body);
             assert_eq!(
@@ -2474,10 +2477,12 @@ main =
                 stmts: vec![CompExpr::Call {
                     callee: Box::new(ValueExpr::Var("print".into())),
                     args: vec![ValueExpr::StrLit("a".into())],
+                    reuse_token: None,
                 }],
                 tail: Box::new(CompExpr::Call {
                     callee: Box::new(ValueExpr::Var("println".into())),
                     args: vec![ValueExpr::StrLit("b".into())],
+                    reuse_token: None,
                 }),
             };
             let ir = ir_module_with_main(body);
@@ -2533,6 +2538,7 @@ main =
             let body = CompExpr::Call {
                 callee: Box::new(ValueExpr::Var("print".into())),
                 args: vec![ValueExpr::Var("x".into())],
+                reuse_token: None,
             };
             let ir = ir_module_with_main(body);
             assert_eq!(
@@ -2547,6 +2553,7 @@ main =
             let body = CompExpr::Call {
                 callee: Box::new(ValueExpr::Var("print".into())),
                 args: vec![ValueExpr::StrLit("".into())],
+                reuse_token: None,
             };
             let ir = ir_module_with_main(body);
             assert_eq!(

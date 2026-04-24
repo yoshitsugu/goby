@@ -157,6 +157,9 @@ pub enum CompExpr {
     Call {
         callee: Box<ValueExpr>,
         args: Vec<ValueExpr>,
+        /// Hidden reuse token forwarded to the callee (Step 8+). `None` until tail-call
+        /// reuse pairing has been applied; the wasm backend ignores this until Step 9.
+        reuse_token: Option<String>,
     },
     /// Assignment to a mutable local. Produces `Unit`.
     Assign { name: String, value: Box<CompExpr> },
@@ -278,6 +281,9 @@ pub struct IrDecl {
     /// Empty if no `can` clause is present or no annotation is available.
     pub residual_effects: Vec<String>,
     pub body: CompExpr,
+    /// Hidden reuse-token parameter injected by Perceus tail-call reuse (Step 8+).
+    /// `None` until the pass runs; the wasm backend initialises it to 0 until Step 9.
+    pub reuse_param: Option<String>,
 }
 
 /// A compiled module in the IR.
@@ -327,6 +333,10 @@ fn fmt_decl(out: &mut String, decl: &IrDecl, depth: usize) {
     if !decl.residual_effects.is_empty() {
         out.push_str(" can ");
         out.push_str(&decl.residual_effects.join(", "));
+    }
+    if let Some(tok) = &decl.reuse_param {
+        out.push_str(" reuse_param=");
+        out.push_str(tok);
     }
     out.push_str(" =\n");
     fmt_comp(out, &decl.body, depth + 1);
@@ -550,7 +560,11 @@ fn fmt_comp(out: &mut String, c: &CompExpr, depth: usize) {
             out.push_str("else\n");
             fmt_comp(out, else_, depth + 1);
         }
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call {
+            callee,
+            args,
+            reuse_token,
+        } => {
             indent(out, depth);
             out.push_str("call ");
             fmt_value(out, callee);
@@ -561,7 +575,12 @@ fn fmt_comp(out: &mut String, c: &CompExpr, depth: usize) {
                 }
                 fmt_value(out, a);
             }
-            out.push_str(")\n");
+            out.push(')');
+            if let Some(tok) = reuse_token {
+                out.push_str(" reuse=");
+                out.push_str(tok);
+            }
+            out.push('\n');
         }
         CompExpr::Assign { name, value } => {
             indent(out, depth);
@@ -773,6 +792,16 @@ impl std::error::Error for IrValidateError {}
 /// Undefined-variable-reference checking is deferred.
 pub fn validate_ir(module: &IrModule) -> Result<(), IrValidateError> {
     for decl in &module.decls {
+        if let Some(p) = &decl.reuse_param {
+            if p.is_empty() {
+                return Err(IrValidateError {
+                    message: format!(
+                        "in decl `{}`: reuse_param must not be empty",
+                        decl.name
+                    ),
+                });
+            }
+        }
         validate_comp(&decl.body, &decl.name)?;
     }
     Ok(())
@@ -796,21 +825,34 @@ fn validate_comp(c: &CompExpr, decl_name: &str) -> Result<(), IrValidateError> {
             validate_value(cond, decl_name)?;
             validate_comp(else_, decl_name)
         }
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call {
+            callee,
+            args,
+            reuse_token,
+        } => {
             if args.is_empty() {
-                Err(IrValidateError {
+                return Err(IrValidateError {
                     message: format!(
                         "in decl `{}`: Call node must have at least one argument",
                         decl_name
                     ),
-                })
-            } else {
-                validate_value(callee, decl_name)?;
-                for arg in args {
-                    validate_value(arg, decl_name)?;
-                }
-                Ok(())
+                });
             }
+            if let Some(tok) = reuse_token {
+                if tok.is_empty() {
+                    return Err(IrValidateError {
+                        message: format!(
+                            "in decl `{}`: Call reuse_token must not be empty",
+                            decl_name
+                        ),
+                    });
+                }
+            }
+            validate_value(callee, decl_name)?;
+            for arg in args {
+                validate_value(arg, decl_name)?;
+            }
+            Ok(())
         }
         CompExpr::Assign { value, .. } => validate_comp(value, decl_name),
         CompExpr::AssignIndex { path, value, .. } => {
@@ -1029,6 +1071,7 @@ mod tests {
             result_ty,
             residual_effects: vec![],
             body,
+            reuse_param: None,
         }
     }
 
@@ -1045,6 +1088,7 @@ mod tests {
             result_ty,
             residual_effects: vec![],
             body,
+            reuse_param: None,
         }
     }
 
@@ -1161,6 +1205,7 @@ mod tests {
                     name: "print".into(),
                 }),
                 args: vec![ValueExpr::StrLit("hi".into())],
+                reuse_token: None,
             },
         )]);
         insta::assert_snapshot!(fmt_ir(&m));
@@ -1247,6 +1292,7 @@ mod tests {
                         name: "print".into(),
                     }),
                     args: vec![ValueExpr::StrLit("a".into())],
+                    reuse_token: None,
                 }],
                 tail: Box::new(val(ValueExpr::Unit)),
             },
@@ -1262,6 +1308,7 @@ mod tests {
             CompExpr::Call {
                 callee: Box::new(ValueExpr::Var("f".into())),
                 args: vec![ValueExpr::IntLit(1), ValueExpr::IntLit(2)],
+                reuse_token: None,
             },
         )]);
         insta::assert_snapshot!(fmt_ir(&m));
@@ -1352,6 +1399,7 @@ mod tests {
                         name: "print".into(),
                     }),
                     args: vec![ValueExpr::StrLit("hello".into())],
+                    reuse_token: None,
                 }),
             },
         )]);
@@ -1366,6 +1414,7 @@ mod tests {
             result_ty: IrType::Unit,
             residual_effects: vec!["Read".into(), "Print".into()],
             body: val(ValueExpr::Unit),
+            reuse_param: None,
         }]);
         insta::assert_snapshot!(fmt_ir(&m));
     }
@@ -1480,6 +1529,7 @@ mod tests {
             CompExpr::Call {
                 callee: Box::new(ValueExpr::Var("f".into())),
                 args: vec![],
+                reuse_token: None,
             },
         )]);
         let err = validate_ir(&m).unwrap_err();

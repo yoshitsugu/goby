@@ -71,7 +71,7 @@ fn collect_closed_literals_in_comp(comp: &crate::ir::CompExpr, out: &mut Vec<Val
             collect_closed_literals_in_comp(then_, out);
             collect_closed_literals_in_comp(else_, out);
         }
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             collect_closed_literals_in_value(callee, out);
             for arg in args {
                 collect_closed_literals_in_value(arg, out);
@@ -216,6 +216,7 @@ mod tests {
                         spread: None,
                     },
                 ])),
+                reuse_param: None,
             }],
         };
 

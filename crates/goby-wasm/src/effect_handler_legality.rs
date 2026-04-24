@@ -136,7 +136,7 @@ fn collect_comp_legality(
             collect_comp_legality(decl_name, then_, env, summary);
             collect_comp_legality(decl_name, else_, env, summary);
         }
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             collect_value_legality(decl_name, callee, env, summary);
             for arg in args {
                 collect_value_legality(decl_name, arg, env, summary);

@@ -62,7 +62,7 @@ pub fn collect_direct_tail_calls(comp: &CompExpr, config: TailWalkConfig) -> Vec
         if !tail_position.is_tail() {
             return;
         }
-        if let CompExpr::Call { callee, args } = node {
+        if let CompExpr::Call { callee, args, .. } = node {
             let callee = match callee.as_ref() {
                 ValueExpr::Var(name) => DirectTailCallee::Var(name.clone()),
                 ValueExpr::GlobalRef { module, name } => DirectTailCallee::GlobalRef {
@@ -106,7 +106,7 @@ fn walk_comp_inner<F>(
             walk_comp_inner(then_, tail_position, config, visit);
             walk_comp_inner(else_, tail_position, config, visit);
         }
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             walk_value(callee, config, visit);
             for arg in args {
                 walk_value(arg, config, visit);
@@ -228,6 +228,7 @@ mod tests {
         CompExpr::Call {
             callee: Box::new(ValueExpr::Var(name.to_string())),
             args: vec![],
+            reuse_token: None,
         }
     }
 

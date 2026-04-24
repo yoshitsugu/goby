@@ -284,7 +284,7 @@ fn collect_comp_lambda_envs(
             collect_comp_lambda_envs(then_, bindings, known_decls, envs);
             collect_comp_lambda_envs(else_, bindings, known_decls, envs);
         }
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             collect_value_lambda_envs(callee, bindings, known_decls, envs);
             for arg in args {
                 collect_value_lambda_envs(arg, bindings, known_decls, envs);
@@ -442,7 +442,7 @@ fn analyze_comp(
             analyze_comp(then_, bindings, known_decls, captures);
             analyze_comp(else_, bindings, known_decls, captures);
         }
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             analyze_value(callee, bindings, known_decls, captures);
             for arg in args {
                 analyze_value(arg, bindings, known_decls, captures);
@@ -932,6 +932,7 @@ mod tests {
                     })),
                 },
             ],
+            reuse_token: None,
         };
         let envs: Vec<CallableEnv> = [
             collect_lambda_callable_envs(&make_adder, &["base".to_string()], &HashSet::new()),

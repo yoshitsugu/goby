@@ -246,7 +246,7 @@ pub(crate) fn lower_supported_self_recursive_list_spread_builder(
     else {
         return Ok(None);
     };
-    let CompExpr::Call { callee, args } = value.as_ref() else {
+    let CompExpr::Call { callee, args, .. } = value.as_ref() else {
         return Ok(None);
     };
     if !is_self_decl_callee(callee, decl_name) || args.len() != decl_params.len() {
@@ -389,7 +389,7 @@ fn comp_expr_mentions_var(comp: &CompExpr, target: &str) -> bool {
                 || comp_expr_mentions_var(then_, target)
                 || comp_expr_mentions_var(else_, target)
         }
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             value_expr_mentions_var(callee, target)
                 || args.iter().any(|arg| value_expr_mentions_var(arg, target))
         }
@@ -539,12 +539,13 @@ fn rename_comp_var(comp: &CompExpr, from: &str, to: &str) -> CompExpr {
             then_: Box::new(rename_comp_var(then_, from, to)),
             else_: Box::new(rename_comp_var(else_, from, to)),
         },
-        CompExpr::Call { callee, args } => CompExpr::Call {
+        CompExpr::Call { callee, args, reuse_token } => CompExpr::Call {
             callee: Box::new(rename_value_var(callee, from, to)),
             args: args
                 .iter()
                 .map(|arg| rename_value_var(arg, from, to))
                 .collect(),
+            reuse_token: reuse_token.clone(),
         },
         CompExpr::Assign { name, value } => CompExpr::Assign {
             name: name.clone(),
@@ -750,6 +751,7 @@ fn lower_supported_inline_list_fold_mutating_each(
     let CompExpr::Call {
         callee,
         args: call_args,
+        ..
     } = inner_body.as_ref()
     else {
         return Ok(None);
@@ -1505,7 +1507,7 @@ fn lower_self_recursive_int_scan_case(
             instrs.extend(tail_instrs);
             Ok(Some(instrs))
         }
-        CompExpr::Call { callee, args } if is_self_decl_callee(callee, decl_name) => {
+        CompExpr::Call { callee, args, .. } if is_self_decl_callee(callee, decl_name) => {
             lower_self_recursive_int_scan_continue(
                 decl_params,
                 args,
@@ -1551,7 +1553,7 @@ fn try_lower_self_recursive_int_scan_recur(
     decls: &mut HashSet<String>,
     recur_temp_counter: &mut usize,
 ) -> Result<Option<Vec<WasmBackendInstr>>, LowerError> {
-    let CompExpr::Call { callee, args } = value else {
+    let CompExpr::Call { callee, args, .. } = value else {
         return Ok(None);
     };
     if !is_self_decl_callee(callee, decl_name) {
@@ -1932,7 +1934,7 @@ fn lower_comp_inner(
             Ok(instrs)
         }
 
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             if let Some(op) = resolve_effect_call_target(callee, aliases) {
                 let mut instrs = Vec::new();
                 for arg in args {
@@ -3679,6 +3681,7 @@ build n =
             body: Box::new(CompExpr::Call {
                 callee: Box::new(ValueExpr::Var("printer".to_string())),
                 args: vec![ValueExpr::Var("text".to_string())],
+            reuse_token: None,
             }),
         };
         let instrs = lower_comp(&comp).expect("local print alias call should lower");
@@ -3722,6 +3725,7 @@ build n =
                 name: "length".to_string(),
             }),
             args: vec![ValueExpr::StrLit("hello".to_string())],
+            reuse_token: None,
         };
         let instrs = lower_comp(&comp).expect("string.length should lower");
         assert_eq!(
@@ -3742,6 +3746,7 @@ build n =
         let comp = CompExpr::Call {
             callee: Box::new(ValueExpr::Var("__goby_string_each_grapheme".to_string())),
             args: vec![ValueExpr::Var("text".to_string())],
+            reuse_token: None,
         };
         let instrs = lower_comp(&comp).expect("runtime intrinsic should lower");
         assert_eq!(
@@ -3765,6 +3770,7 @@ build n =
                 ValueExpr::Var("text".to_string()),
                 ValueExpr::Var("state".to_string()),
             ],
+            reuse_token: None,
         };
         let instrs = lower_comp(&comp).expect("runtime intrinsic state mode should lower");
         assert_eq!(
@@ -3797,6 +3803,7 @@ build n =
                     ValueExpr::Var("text".to_string()),
                     ValueExpr::StrLit("\n".to_string()),
                 ],
+            reuse_token: None,
             }),
             body: Box::new(CompExpr::Call {
                 callee: Box::new(ValueExpr::Var("each".to_string())),
@@ -3807,6 +3814,7 @@ build n =
                         name: "println".to_string(),
                     },
                 ],
+            reuse_token: None,
             }),
         };
         let known_decls: HashSet<String> = ["each".to_string()].into();
@@ -3845,6 +3853,7 @@ build n =
                     ValueExpr::Var("text".to_string()),
                     ValueExpr::StrLit("\n".to_string()),
                 ],
+            reuse_token: None,
             }),
             body: Box::new(CompExpr::Let {
                 name: "line".to_string(),
@@ -3855,6 +3864,7 @@ build n =
                         name: "get".to_string(),
                     }),
                     args: vec![ValueExpr::Var("lines".to_string()), ValueExpr::IntLit(1)],
+            reuse_token: None,
                 }),
                 body: Box::new(CompExpr::PerformEffect {
                     effect: "Print".to_string(),
@@ -4041,6 +4051,7 @@ build n =
                 name: "add".to_string(),
             }),
             args: vec![ValueExpr::IntLit(2), ValueExpr::IntLit(3)],
+            reuse_token: None,
         };
         let instrs = lower_comp(&comp).expect("GlobalRef decl call should lower");
         assert!(
@@ -4058,6 +4069,7 @@ build n =
         let comp = CompExpr::Call {
             callee: Box::new(ValueExpr::Var("f".to_string())),
             args: vec![ValueExpr::IntLit(1)],
+            reuse_token: None,
         };
         let instrs = lower_comp(&comp).expect("Var callee IndirectCall should lower OK");
         // Expected: [I64Const(encode_int(1)), LoadLocal("f"), IndirectCall]
@@ -4085,6 +4097,7 @@ build n =
         let comp = CompExpr::Call {
             callee: Box::new(ValueExpr::Var("helper".to_string())),
             args: vec![ValueExpr::IntLit(2)],
+            reuse_token: None,
         };
         let known_decls: HashSet<String> = ["helper".to_string()].into();
         let bindings = ClosureBindingEnv::default();
@@ -4111,6 +4124,7 @@ build n =
             stmts: vec![CompExpr::Call {
                 callee: Box::new(ValueExpr::Var("helper".to_string())),
                 args: vec![ValueExpr::IntLit(1)],
+            reuse_token: None,
             }],
             tail: Box::new(CompExpr::Value(ValueExpr::Unit)),
         };
@@ -4142,6 +4156,7 @@ build n =
         let comp = CompExpr::Call {
             callee: Box::new(ValueExpr::Var("f".to_string())),
             args: vec![ValueExpr::Var("add_one".to_string())],
+            reuse_token: None,
         };
         let known_decls: HashSet<String> = ["add_one".to_string()].into();
         let bindings = ClosureBindingEnv::default();
@@ -4423,6 +4438,7 @@ build n =
                     body: CompExpr::Call {
                         callee: Box::new(ValueExpr::Var("helper".to_string())),
                         args: vec![ValueExpr::Var("x".to_string())],
+            reuse_token: None,
                     },
                 },
                 IrCaseArm {
@@ -4540,6 +4556,7 @@ build n =
                     })),
                 },
             ],
+            reuse_token: None,
         };
         let mut lambda_decls = Vec::new();
         let result = lower_comp_collecting_lambdas(&comp, &known_decls, &mut lambda_decls);
@@ -4621,6 +4638,7 @@ build n =
                     })),
                 },
             ],
+            reuse_token: None,
         };
         let mut lambda_decls = Vec::new();
         let result = lower_comp_collecting_lambdas(&comp, &known_decls, &mut lambda_decls);
@@ -4698,6 +4716,7 @@ build n =
                 body: Box::new(CompExpr::Call {
                     callee: Box::new(ValueExpr::Var("add10".to_string())),
                     args: vec![ValueExpr::IntLit(5)],
+            reuse_token: None,
                 }),
             }),
         };
@@ -4807,6 +4826,7 @@ build n =
                 name: "graphemes".to_string(),
             }),
             args: vec![ValueExpr::Var("text".to_string())],
+            reuse_token: None,
         };
         let instrs =
             lower_comp(&comp).expect("string.graphemes GlobalRef should lower to intrinsic");
@@ -4831,6 +4851,7 @@ build n =
         let comp = CompExpr::Call {
             callee: Box::new(ValueExpr::Var("graphemes".to_string())),
             args: vec![ValueExpr::Var("text".to_string())],
+            reuse_token: None,
         };
         let aliases = HashMap::from([(
             "graphemes".to_string(),
@@ -4874,6 +4895,7 @@ build n =
                 ValueExpr::Var("text".to_string()),
                 ValueExpr::StrLit(String::new()),
             ],
+            reuse_token: None,
         };
         let instrs = lower_comp(&comp).expect("string.split with empty delimiter should lower");
         assert!(
@@ -4947,6 +4969,7 @@ build n =
                 ValueExpr::Var("acc".to_string()),
                 ValueExpr::Var("x".to_string()),
             ],
+            reuse_token: None,
         };
         let instrs = lower_comp(&comp).expect("2-arg local callback call must lower without error");
         // Expected: push acc, push x, load f, IndirectCall { arity: 2 } — in that order.
@@ -4978,6 +5001,7 @@ build n =
                 ValueExpr::Var("acc".to_string()),
                 ValueExpr::Var("x".to_string()),
             ],
+            reuse_token: None,
         };
         let known: HashSet<String> = ["add".to_string()].into();
         let instrs = lower_comp_with_decls(&comp, &known)
@@ -5316,6 +5340,7 @@ build n =
         let inner_body = CompExpr::Call {
             callee: Box::new(user_lambda),
             args: vec![ValueExpr::Var("__x".to_string())],
+            reuse_token: None,
         };
         let outer_callback = ValueExpr::Lambda {
             param: "__acc".to_string(),
@@ -5334,6 +5359,7 @@ build n =
                 ValueExpr::Unit,
                 outer_callback,
             ],
+            reuse_token: None,
         }
     }
 

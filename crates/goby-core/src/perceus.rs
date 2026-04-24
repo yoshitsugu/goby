@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ir::{CompExpr, IrCaseArm, IrDecl, IrHandlerClause, IrInterpPart, IrModule, ValueExpr};
-use crate::perceus_reuse::insert_reuse;
+use crate::perceus_reuse::{insert_reuse, insert_tail_reuse_module};
 
 const EXPECTED_PIPELINE: [&str; 5] = [
     "ir::from_resolved",
@@ -28,9 +28,12 @@ pub fn assert_perceus_pipeline_order(pass_names: &[&'static str]) {
 pub fn run_perceus_passes(module: &IrModule) -> IrModule {
     let ownership = ownership_classify_module(module);
     let dropped = drop_insert_module(module, &ownership);
-    IrModule {
+    // reuse_pair label covers both intra-block and tail-call cross-call reuse
+    let intra = IrModule {
         decls: dropped.decls.into_iter().map(insert_reuse).collect(),
-    }
+    };
+    let mut next_id: usize = 0;
+    insert_tail_reuse_module(intra, &mut next_id)
 }
 
 fn ownership_classify_module(
@@ -144,7 +147,7 @@ fn collect_scalar_param_evidence_comp(
             collect_scalar_param_evidence_comp(then_, params, scalar);
             collect_scalar_param_evidence_comp(else_, params, scalar);
         }
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             collect_scalar_param_evidence_value(callee, params, scalar);
             for arg in args {
                 collect_scalar_param_evidence_value(arg, params, scalar);
@@ -297,7 +300,7 @@ fn classify_comp(
             classify_comp(then_, classes, params, module_params, aliases);
             classify_comp(else_, classes, params, module_params, aliases);
         }
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             classify_borrowed_value(callee, classes, params, aliases);
             classify_call_args(callee, args, classes, params, module_params, aliases);
         }
@@ -752,6 +755,7 @@ fn drop_insert_module(
                     result_ty: decl.result_ty.clone(),
                     residual_effects: decl.residual_effects.clone(),
                     body,
+                    reuse_param: decl.reuse_param.clone(),
                 }
             })
             .collect(),
@@ -932,10 +936,15 @@ fn drop_insert_comp(
                 next_tmp,
             )
         }
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call {
+            callee,
+            args,
+            reuse_token,
+        } => {
             let call = CompExpr::Call {
                 callee: callee.clone(),
                 args: args.clone(),
+                reuse_token: reuse_token.clone(),
             };
             (
                 insert_non_last_call_arg_dups(call, ownership, module_ownership, param_order),
@@ -1350,7 +1359,12 @@ fn insert_non_last_call_arg_dups(
     module_ownership: &HashMap<String, HashMap<String, OwnershipClass>>,
     param_order: &HashMap<String, Vec<String>>,
 ) -> CompExpr {
-    let CompExpr::Call { callee, args } = call else {
+    let CompExpr::Call {
+        callee,
+        args,
+        reuse_token,
+    } = call
+    else {
         return call;
     };
 
@@ -1372,7 +1386,11 @@ fn insert_non_last_call_arg_dups(
         .collect();
 
     if dups.is_empty() {
-        return CompExpr::Call { callee, args };
+        return CompExpr::Call {
+            callee,
+            args,
+            reuse_token,
+        };
     }
 
     dups.sort_by(|a, b| {
@@ -1393,7 +1411,11 @@ fn insert_non_last_call_arg_dups(
 
     CompExpr::Seq {
         stmts: dups,
-        tail: Box::new(CompExpr::Call { callee, args }),
+        tail: Box::new(CompExpr::Call {
+            callee,
+            args,
+            reuse_token,
+        }),
     }
 }
 
@@ -1563,7 +1585,7 @@ fn comp_consumes_name(
             comp_consumes_name(then_, name, module_ownership, param_order)
                 || comp_consumes_name(else_, name, module_ownership, param_order)
         }
-        CompExpr::Call { callee, args } => args.iter().enumerate().any(|(idx, arg)| {
+        CompExpr::Call { callee, args, .. } => args.iter().enumerate().any(|(idx, arg)| {
             value_mentions_name(arg, name)
                 && !callee_arg_is_borrowed(callee, idx, module_ownership, param_order)
         }),
@@ -1680,7 +1702,7 @@ fn collect_live_comp(comp: &CompExpr, live: &mut HashSet<String>) {
             collect_live_comp(then_, live);
             collect_live_comp(else_, live);
         }
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             collect_live_value(callee, live);
             for arg in args {
                 collect_live_value(arg, live);
@@ -1817,7 +1839,7 @@ fn count_var_uses(comp: &CompExpr, name: &str) -> usize {
             count_var_uses_value(cond, name)
                 + count_var_uses(then_, name).max(count_var_uses(else_, name))
         }
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             count_var_uses_value(callee, name)
                 + args
                     .iter()
@@ -1937,6 +1959,7 @@ mod tests {
                 params: vec![],
                 result_ty: IrType::Unknown,
                 residual_effects: vec![],
+                reuse_param: None,
                 body: CompExpr::Let {
                     name: "xs".to_string(),
                     ty: IrType::Unknown,
@@ -1964,6 +1987,7 @@ mod tests {
                 params: vec![],
                 result_ty: IrType::Unknown,
                 residual_effects: vec![],
+                reuse_param: None,
                 body: CompExpr::Let {
                     name: "xs".to_string(),
                     ty: IrType::Unknown,
@@ -1997,6 +2021,7 @@ mod tests {
                     params: vec![("xs".to_string(), IrType::Unknown)],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Value(ValueExpr::Var("xs".to_string())),
                 },
                 IrDecl {
@@ -2004,6 +2029,7 @@ mod tests {
                     params: vec![],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Let {
                         name: "ys".to_string(),
                         ty: IrType::Unknown,
@@ -2017,6 +2043,7 @@ mod tests {
                                 name: "process".to_string(),
                             }),
                             args: vec![ValueExpr::Var("ys".to_string())],
+                        reuse_token: None,
                         }),
                     },
                 },
@@ -2052,6 +2079,7 @@ mod tests {
                     params: vec![("p".to_string(), IrType::Unknown)],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Value(ValueExpr::Var("p".to_string())),
                 },
                 IrDecl {
@@ -2059,6 +2087,7 @@ mod tests {
                     params: vec![],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Let {
                         name: "xs".to_string(),
                         ty: IrType::Unknown,
@@ -2075,6 +2104,7 @@ mod tests {
                                     name: "process".to_string(),
                                 }),
                                 args: vec![ValueExpr::Var("xs".to_string())],
+                            reuse_token: None,
                             }),
                             body: Box::new(CompExpr::Value(ValueExpr::Var("y".to_string()))),
                         }),
@@ -2103,6 +2133,7 @@ mod tests {
                     params: vec![("p".to_string(), IrType::Unknown)],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Value(ValueExpr::Var("p".to_string())),
                 },
                 IrDecl {
@@ -2110,6 +2141,7 @@ mod tests {
                     params: vec![],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Let {
                         name: "xs".to_string(),
                         ty: IrType::Unknown,
@@ -2124,6 +2156,7 @@ mod tests {
                                     name: "process".to_string(),
                                 }),
                                 args: vec![ValueExpr::Var("xs".to_string())],
+                            reuse_token: None,
                             }],
                             tail: Box::new(CompExpr::Value(ValueExpr::IntLit(0))),
                         }),
@@ -2161,6 +2194,7 @@ mod tests {
                 params: vec![],
                 result_ty: IrType::Unknown,
                 residual_effects: vec![],
+                reuse_param: None,
                 body: CompExpr::Let {
                     name: "xs".to_string(),
                     ty: IrType::Unknown,
@@ -2207,6 +2241,7 @@ mod tests {
                 params: vec![],
                 result_ty: IrType::Unknown,
                 residual_effects: vec![],
+                reuse_param: None,
                 body: CompExpr::Let {
                     name: "xs".to_string(),
                     ty: IrType::Unknown,
@@ -2224,6 +2259,7 @@ mod tests {
                         body: Box::new(CompExpr::Call {
                             callee: Box::new(ValueExpr::Var("f".to_string())),
                             args: vec![ValueExpr::Unit],
+                        reuse_token: None,
                         }),
                     }),
                 },
@@ -2257,6 +2293,7 @@ mod tests {
                 params: vec![("xs".to_string(), IrType::Unknown)],
                 result_ty: IrType::Unknown,
                 residual_effects: vec![],
+                reuse_param: None,
                 body: CompExpr::Case {
                     scrutinee: Box::new(ValueExpr::Var("xs".to_string())),
                     arms: vec![
@@ -2308,6 +2345,7 @@ mod tests {
                 params: vec![],
                 result_ty: IrType::Unknown,
                 residual_effects: vec![],
+                reuse_param: None,
                 body: CompExpr::Let {
                     name: "xs".to_string(),
                     ty: IrType::Unknown,
@@ -2335,6 +2373,7 @@ mod tests {
                                 name: "some_fn".to_string(),
                             }),
                             args: vec![ValueExpr::Var("xs".to_string())],
+                        reuse_token: None,
                         }),
                     }),
                 },
@@ -2358,6 +2397,7 @@ mod tests {
                 params: vec![("xs".to_string(), IrType::Unknown)],
                 result_ty: IrType::Unknown,
                 residual_effects: vec![],
+                reuse_param: None,
                 body: CompExpr::Value(ValueExpr::ListGet {
                     list: Box::new(ValueExpr::Var("xs".to_string())),
                     index: Box::new(ValueExpr::IntLit(0)),
@@ -2382,6 +2422,7 @@ mod tests {
                     params: vec![("xs".to_string(), IrType::Unknown)],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Value(ValueExpr::ListGet {
                         list: Box::new(ValueExpr::Var("xs".to_string())),
                         index: Box::new(ValueExpr::IntLit(0)),
@@ -2392,6 +2433,7 @@ mod tests {
                     params: vec![],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Let {
                         name: "ys".to_string(),
                         ty: IrType::Unknown,
@@ -2405,6 +2447,7 @@ mod tests {
                                 name: "head".to_string(),
                             }),
                             args: vec![ValueExpr::Var("ys".to_string())],
+                        reuse_token: None,
                         }),
                     },
                 },
@@ -2432,6 +2475,7 @@ mod tests {
                     params: vec![("xs".to_string(), IrType::Unknown)],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Value(ValueExpr::Var("xs".to_string())),
                 },
                 IrDecl {
@@ -2439,6 +2483,7 @@ mod tests {
                     params: vec![],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Let {
                         name: "ys".to_string(),
                         ty: IrType::Unknown,
@@ -2452,6 +2497,7 @@ mod tests {
                                 name: "id".to_string(),
                             }),
                             args: vec![ValueExpr::Var("ys".to_string())],
+                        reuse_token: None,
                         }),
                     },
                 },
@@ -2474,6 +2520,7 @@ mod tests {
                 params: vec![],
                 result_ty: IrType::Unknown,
                 residual_effects: vec![],
+                reuse_param: None,
                 body: CompExpr::Let {
                     name: "ys".to_string(),
                     ty: IrType::Unknown,
@@ -2487,6 +2534,7 @@ mod tests {
                             name: "external".to_string(),
                         }),
                         args: vec![ValueExpr::Var("ys".to_string())],
+                    reuse_token: None,
                     }),
                 },
             }],
@@ -2509,6 +2557,7 @@ mod tests {
                     params: vec![("xs".to_string(), IrType::Unknown)],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Let {
                         name: "ys".to_string(),
                         ty: IrType::Unknown,
@@ -2521,6 +2570,7 @@ mod tests {
                     params: vec![],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Let {
                         name: "zs".to_string(),
                         ty: IrType::Unknown,
@@ -2534,6 +2584,7 @@ mod tests {
                                 name: "id_alias".to_string(),
                             }),
                             args: vec![ValueExpr::Var("zs".to_string())],
+                        reuse_token: None,
                         }),
                     },
                 },
@@ -2557,6 +2608,7 @@ mod tests {
                     params: vec![("xs".to_string(), IrType::Unknown)],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Let {
                         name: "ys".to_string(),
                         ty: IrType::Unknown,
@@ -2567,6 +2619,7 @@ mod tests {
                                 name: "external".to_string(),
                             }),
                             args: vec![ValueExpr::Var("ys".to_string())],
+                        reuse_token: None,
                         }),
                     },
                 },
@@ -2575,6 +2628,7 @@ mod tests {
                     params: vec![],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Let {
                         name: "zs".to_string(),
                         ty: IrType::Unknown,
@@ -2588,6 +2642,7 @@ mod tests {
                                 name: "sink_alias".to_string(),
                             }),
                             args: vec![ValueExpr::Var("zs".to_string())],
+                        reuse_token: None,
                         }),
                     },
                 },
@@ -2611,6 +2666,7 @@ mod tests {
                     params: vec![("p".to_string(), IrType::Unknown)],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Value(ValueExpr::Var("p".to_string())),
                 },
                 IrDecl {
@@ -2621,6 +2677,7 @@ mod tests {
                     ],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::If {
                         cond: Box::new(ValueExpr::Var("flag".to_string())),
                         then_: Box::new(CompExpr::Call {
@@ -2629,6 +2686,7 @@ mod tests {
                                 name: "id".to_string(),
                             }),
                             args: vec![ValueExpr::Var("xs".to_string())],
+                        reuse_token: None,
                         }),
                         else_: Box::new(CompExpr::Value(ValueExpr::IntLit(0))),
                     },
@@ -2653,6 +2711,7 @@ mod tests {
                     params: vec![("p".to_string(), IrType::Unknown)],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Value(ValueExpr::Var("p".to_string())),
                 },
                 IrDecl {
@@ -2663,6 +2722,7 @@ mod tests {
                     ],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::If {
                         cond: Box::new(ValueExpr::Var("flag".to_string())),
                         then_: Box::new(CompExpr::Value(ValueExpr::ListGet {
@@ -2675,6 +2735,7 @@ mod tests {
                                 name: "id".to_string(),
                             }),
                             args: vec![ValueExpr::Var("xs".to_string())],
+                        reuse_token: None,
                         }),
                     },
                 },
@@ -2701,6 +2762,7 @@ mod tests {
                     ],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Value(ValueExpr::TupleLit(vec![
                         ValueExpr::Var("left".to_string()),
                         ValueExpr::Var("right".to_string()),
@@ -2711,6 +2773,7 @@ mod tests {
                     params: vec![],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Let {
                         name: "xs".to_string(),
                         ty: IrType::Unknown,
@@ -2727,6 +2790,7 @@ mod tests {
                                 ValueExpr::Var("xs".to_string()),
                                 ValueExpr::Var("xs".to_string()),
                             ],
+                        reuse_token: None,
                         }),
                     },
                 },
@@ -2753,6 +2817,7 @@ mod tests {
                     ],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::If {
                         cond: Box::new(ValueExpr::Var("flag".to_string())),
                         then_: Box::new(CompExpr::Call {
@@ -2764,6 +2829,7 @@ mod tests {
                                 ValueExpr::Var("xs".to_string()),
                                 ValueExpr::Var("flag".to_string()),
                             ],
+                        reuse_token: None,
                         }),
                         else_: Box::new(CompExpr::Value(ValueExpr::Var("xs".to_string()))),
                     },
@@ -2776,6 +2842,7 @@ mod tests {
                     ],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Call {
                         callee: Box::new(ValueExpr::GlobalRef {
                             module: "".to_string(),
@@ -2785,6 +2852,7 @@ mod tests {
                             ValueExpr::Var("ys".to_string()),
                             ValueExpr::Var("flag".to_string()),
                         ],
+                    reuse_token: None,
                     },
                 },
                 IrDecl {
@@ -2792,6 +2860,7 @@ mod tests {
                     params: vec![],
                     result_ty: IrType::Unknown,
                     residual_effects: vec![],
+                    reuse_param: None,
                     body: CompExpr::Let {
                         name: "zs".to_string(),
                         ty: IrType::Unknown,
@@ -2805,6 +2874,7 @@ mod tests {
                                 name: "right".to_string(),
                             }),
                             args: vec![ValueExpr::Var("zs".to_string()), ValueExpr::BoolLit(true)],
+                        reuse_token: None,
                         }),
                     },
                 },
@@ -2829,6 +2899,7 @@ mod tests {
                 params: vec![("xs".to_string(), IrType::Unknown)],
                 result_ty: IrType::Unknown,
                 residual_effects: vec![],
+                reuse_param: None,
                 body: CompExpr::WithHandler {
                     handler: Box::new(CompExpr::Handle {
                         clauses: vec![IrHandlerClause {

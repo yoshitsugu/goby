@@ -397,7 +397,7 @@ fn inspect_ir_comp(
             inspect_ir_comp(then_, out, declaration_names, qualified_operation_index);
             inspect_ir_comp(else_, out, declaration_names, qualified_operation_index);
         }
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             inspect_ir_value(callee, out, declaration_names, qualified_operation_index);
             if let ValueExpr::Var(name) = callee.as_ref()
                 && declaration_names.contains(name)

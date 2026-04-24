@@ -343,7 +343,7 @@ fn eval_comp(
                 eval_comp(else_, bindings, env, depth + 1, outputs)
             }
         }
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             if matches!(callee.as_ref(), ValueExpr::Var(name) if name == "print") && args.len() == 1
             {
                 let value = eval_value(&args[0], bindings, env, depth + 1)?;

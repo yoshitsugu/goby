@@ -1261,10 +1261,14 @@ acceptance test.
         dropped value and the next allocation share a known `SizeClass`.
         Runtime behavior is unchanged under the fallback lowering introduced in
         the earlier backend slice.
-- [ ] Tail-position cross-call rule (§3.7.1) implemented: a `Drop` in
+- [x] Tail-position cross-call rule (§3.7.1) implemented: a `Drop` in
       tail position immediately before a tail `Call` to a decl whose
       first allocation matches size class S produces a reuse token
       passed as a hidden trailing argument.
+      - 2026-04-24: `ir.rs` `Call.reuse_token` + `IrDecl.reuse_param`,
+        `perceus_reuse::insert_tail_reuse_module` wired into
+        `run_perceus_passes`. Backend fallback lowering is no-op (Step 9
+        connects the ABI).
 - [ ] Emit `__goby_alloc_reuse` and `__goby_drop_reuse` runtime
       helpers per §3.3. `peak_bytes` accounting stays correct on the
       reuse path.

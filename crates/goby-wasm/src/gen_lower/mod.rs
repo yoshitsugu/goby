@@ -138,7 +138,7 @@ fn comp_mentions_name(comp: &CompExpr, target: &str) -> bool {
                 || comp_mentions_name(then_, target)
                 || comp_mentions_name(else_, target)
         }
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             value_mentions_name(callee, target)
                 || args.iter().any(|arg| value_mentions_name(arg, target))
         }
@@ -440,7 +440,7 @@ fn rewrite_comp_fold_prepend_callbacks(
                 aliases,
             )),
         },
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             let rewritten_callee =
                 rewrite_value_fold_prepend_callbacks(callee, callback_shapes, aliases);
             let mut rewritten_args: Vec<ValueExpr> = args
@@ -462,6 +462,7 @@ fn rewrite_comp_fold_prepend_callbacks(
             CompExpr::Call {
                 callee: Box::new(rewritten_callee),
                 args: rewritten_args,
+                reuse_token: None,
             }
         }
         CompExpr::Assign { name, value } => CompExpr::Assign {
@@ -1063,7 +1064,7 @@ fn has_lambda_in_comp(comp: &CompExpr) -> bool {
             stmts.iter().any(has_lambda_in_comp) || has_lambda_in_comp(tail)
         }
         CompExpr::PerformEffect { args, .. } => args.iter().any(has_lambda_in_value),
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             has_lambda_in_value(callee) || args.iter().any(has_lambda_in_value)
         }
         CompExpr::If { cond, then_, else_ } => {
@@ -1120,7 +1121,7 @@ fn has_tuple_project_in_comp(comp: &CompExpr) -> bool {
             stmts.iter().any(has_tuple_project_in_comp) || has_tuple_project_in_comp(tail)
         }
         CompExpr::PerformEffect { args, .. } => args.iter().any(has_tuple_project_in_value),
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             has_tuple_project_in_value(callee) || args.iter().any(has_tuple_project_in_value)
         }
         CompExpr::If { cond, then_, else_ } => {

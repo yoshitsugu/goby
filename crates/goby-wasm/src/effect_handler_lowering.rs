@@ -159,7 +159,7 @@ fn rewrite_comp(
                 names,
             )?),
         }),
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             if let ValueExpr::Var(op_name) = callee.as_ref()
                 && let Some(rewritten) = rewrite_handled_op_invocation(
                     None,
@@ -177,6 +177,7 @@ fn rewrite_comp(
                 CompExpr::Call {
                     callee: Box::new(rewrite_value(callee, names)?),
                     args: rewrite_values(args, names)?,
+                    reuse_token: None,
                 },
                 k,
                 names,
@@ -577,6 +578,7 @@ mod tests {
                 result_ty: IrType::Unit,
                 residual_effects: Vec::new(),
                 body: lowered.clone(),
+                reuse_param: None,
             }],
         });
         assert!(

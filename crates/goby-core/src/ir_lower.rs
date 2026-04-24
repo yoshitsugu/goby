@@ -88,6 +88,7 @@ pub fn lower_resolved_declaration(decl: &ResolvedDeclaration) -> Result<IrDecl, 
         result_ty: IrType::Unknown,
         residual_effects,
         body,
+        reuse_param: None,
     })
 }
 
@@ -836,6 +837,7 @@ fn lower_ordinary_call(
     let mut body = CompExpr::Call {
         callee: Box::new(callee),
         args,
+        reuse_token: None,
     };
     for (name, value) in pending.into_iter().rev() {
         body = CompExpr::Let {
@@ -2354,7 +2356,7 @@ main lines =
         assert!(
             matches!(
                 &main_decl.body,
-                CompExpr::Call { callee, args }
+                CompExpr::Call { callee, args, .. }
                     if matches!(
                         callee.as_ref(),
                         ValueExpr::GlobalRef { module, name }
@@ -2614,7 +2616,7 @@ main =
                         },
                     ) => match (inline_rolls_body.as_ref(), explicit_rolls_body.as_ref()) {
                         (
-                            CompExpr::Call { callee, args },
+                            CompExpr::Call { callee, args, .. },
                             CompExpr::Let {
                                 value: explicit_value,
                                 body: explicit_each_body,
@@ -2641,7 +2643,7 @@ main =
                             assert!(
                                 matches!(
                                     explicit_each_body.as_ref(),
-                                    CompExpr::Call { callee, args }
+                                    CompExpr::Call { callee, args, .. }
                                         if matches!(
                                             callee.as_ref(),
                                             ValueExpr::GlobalRef { module, name }

@@ -119,7 +119,7 @@ fn comp_to_expr(comp: &CompExpr) -> Option<Expr> {
             then_expr: Box::new(comp_to_expr(then_)?),
             else_expr: Box::new(comp_to_expr(else_)?),
         }),
-        CompExpr::Call { callee, args } => {
+        CompExpr::Call { callee, args, .. } => {
             let mut expr = value_to_expr(callee)?;
             let args = if args.is_empty() {
                 vec![Expr::unit_value()]
