@@ -1238,107 +1238,158 @@ acceptance test.
 
 ### M5 — Reuse analysis
 
-- [x] `reuse_pair` pass (new file
-      `crates/goby-core/src/perceus_reuse.rs`) matches `Drop` →
-      `alloc` on the same block (§3.7) by identical `SizeClass`. No
-      matching across block terminators. Public API:
-      `insert_reuse(decl: IrDecl) -> IrDecl`.
-      - 2026-04-23 progress: shared IR `DropReuse` / `AllocReuse` /
-        `AllocInit` and the initial `perceus_reuse::insert_reuse` skeleton
-        are in tree with focused core tests. The pass is not yet wired into
-        `run_perceus_passes`; backend lowering/runtime support is the next
-        slice.
-      - 2026-04-23 follow-up: same-block pairing is now gated on a known
-        dropped-value `SizeClass` matching the following allocation's
-        `SizeClass`; mismatched or unknown drops are left as ordinary `Drop`.
-      - 2026-04-23 backend progress: `goby-wasm` backend IR/lowering/emission
-        now carries `DropReuse` / `AllocReuse`; emission implements dynamic
-        uniqueness token creation and token-first allocation for tuple,
-        record, and single-chunk-list initializers with size-class fallback.
-      - 2026-04-24 pipeline wiring: `run_perceus_passes` now invokes
-        `insert_reuse` as the final per-decl pass so every module going through
-        the Perceus pipeline gets intra-block `Drop → alloc` pairing where the
-        dropped value and the next allocation share a known `SizeClass`.
-        Runtime behavior is unchanged under the fallback lowering introduced in
-        the earlier backend slice.
-- [x] Tail-position cross-call rule (§3.7.1) implemented: a `Drop` in
-      tail position immediately before a tail `Call` to a decl whose
-      first allocation matches size class S produces a reuse token
-      passed as a hidden trailing argument.
-      - 2026-04-24: `ir.rs` `Call.reuse_token` + `IrDecl.reuse_param`,
-        `perceus_reuse::insert_tail_reuse_module` wired into
-        `run_perceus_passes`. Backend fallback lowering is no-op (Step 9
-        connects the ABI).
-      - 2026-04-25 (Step 9 complete, commit `50cc7bf8`): wasm ABI wiring landed.
-        Callees with `reuse_param = Some(_)` carry a hidden trailing `i64`
-        parameter; callers push `LoadLocal(tok)` or `i64.const 0` as the
-        matching trailing actual via `emit_reuse_trailing_actual`.
-        `emit_alloc_reuse` performs payload-only reuse when `token != 0`
-        (writes `refcount = 1`, returns `token` unchanged) and falls through
-        to `emit_alloc_with_flag` when `token == 0`. New runtime compile test
-        `cross_call_reuse_hidden_param_increments_reuse_hits` observes
-        `reuse_hits >= 2` across direct tail calls. The normative
-        `refcount_reuse_loop.gb` does not yet trigger the path
-        (`step` starts with `if`, so `first_alloc_class = None`); full M5
-        budget convergence is gated on Step 10 (runtime helpers) and M6
-        (`mut` lowering via reuse).
-- [x] `__goby_alloc_reuse` and `__goby_drop_reuse` semantics per §3.3
-      are emitted inline (Step 7/9) rather than as separate runtime
-      helper functions; `peak_bytes` accounting stays correct because
-      the reuse fast path skips `emit_alloc_from_top` entirely. Helper
-      function extraction is deferred to M7 (no budget impact).
-- [x] Correctness tests (2026-04-25, Step 10):
-      `reuse_fires_on_unique_list_update`,
-      `reuse_falls_through_when_shared`,
-      `reuse_not_across_perform_effect`,
-      `reuse_not_across_with_handler`,
-      `tail_call_reuse_passes_token`.
-      - `reuse_fires_on_unique_list_update` and
-        `reuse_falls_through_when_shared` exercise `Tuple(2)` reuse
-        rather than list (the M5 list AllocReuse still bumps a fresh
-        chunk per §7.0, which would confound the peak/total invariant).
-        Together they show `reuse_hits == 1 && peak == total` on the
-        unique path and `reuse_hits == 0 && peak == total` (with both
-        allocs live concurrently) on the shared fall-through.
-      - `tail_call_reuse_passes_token` is the §3.7.1 cross-call ABI
-        check; it lives next to the original
-        `cross_call_reuse_hidden_param_increments_reuse_hits` (kept
-        verbatim for git history).
-      - The two `reuse_not_across_*` tests live in
-        `crates/goby-core/src/perceus_reuse.rs` and assert the IR
-        shape after `insert_reuse` (no `alloc_reuse` synthesized
-        across the boundary).
+M5 code work is complete (intra-block `reuse_pair`, tail-position
+cross-call ABI, inline `__goby_alloc_reuse` / `__goby_drop_reuse`,
+correctness tests). Two items remain and ride alongside M6:
+
 - [ ] Un-ignore the M1 integration test for
       `examples/refcount_reuse_loop.gb` and add an assertion that
-      `total_bytes < 200 * 1024`.
+      `total_bytes < 200 * 1024`. With M5 alone the example still
+      allocates ~149 MiB because chunk reuse and `xs[i] := v`-driven
+      reuse are M6 territory.
 - [ ] **Acceptance:** the M1 test passes under `goby run
       --max-memory-mb 16` with `total_bytes < 200 KiB` and the
-      recorded checksum.
-      - Deferred to ride alongside M6 (`mut` via reuse). With M5 alone
-        `examples/refcount_reuse_loop.gb` still allocates ~149 MiB
-        because chunk reuse and `xs[i] := v`-driven reuse are M6
-        territory (PLAN_PERCEUS §M6). Step 10 closes the M5 code-ready
-        portion of the checklist; the acceptance number ships with M6.
+      recorded checksum. Closed by M6 Step 7.
+
+Notes carried into M6:
+
+- M5 list `AllocReuse` currently bumps a fresh chunk on every
+  allocation (`emit_alloc_reuse` payload-only reuse only covers the
+  header / single-chunk path). The `refcount_reuse_loop.gb` budget
+  cannot converge until chunk-level reuse lands, so M6 Step 7
+  reserves a sub-step for it.
+- `BackendIntrinsic::ListSetInPlace` already exists with a strict
+  aliasing contract (`gen_lower/backend_ir.rs:120-128`) gated by
+  `lower_supported_inline_list_fold_mutating_each`. M6 reuses this
+  primitive but must extend the gate, not bypass it.
 
 ### M6 — `mut` lowering through reuse primitives (no semantics change)
 
-- [ ] Backend lowering of `CompExpr::AssignIndex` on a `mut xs`
-      binding emits the equivalent of a `DropReuse` on `xs` followed
-      by an element store and a rebind to the reused token (or the
-      new allocation on fall-through). Behavior observably unchanged
-      for captured and non-captured `mut` bindings (§3.4).
-- [ ] Nested `xs[i][j] := v` lowers to a chain of reuses without
-      redundant refcount bumps on the outer list.
-- [ ] `stdlib/goby/list.gb`'s `set` body rewritten as the immutable
-      update form that benefits from reuse automatically. The
-      `__goby_list_set` backend intrinsic may be removed or
-      repointed; either is acceptable if example outputs are
-      unchanged.
-- [ ] `examples/mut_list.gb`, `closure_mut.gb`, `closure_mut_list.gb`,
-      `closure_mut_nested_list.gb` produce byte-identical output.
-- [ ] **Acceptance:** `cargo test -p goby-wasm` green; the four
-      example outputs are unchanged;
-      `examples/refcount_reuse_loop.gb` remains within its M5 budget.
+M6 routes the backend lowering of `xs[i] := v` through the same reuse
+primitives as immutable update. It does **not** change `mut` semantics:
+captured `mut` (cell-promoted, refcount > 1 by construction per §3.4)
+must keep observing path-copy behavior; non-captured `mut` switches to
+the reuse fast path when statically proven unique.
+
+#### Step 1 — Reuse-eligibility for `AssignIndex` in `perceus_reuse`
+
+- [ ] In `crates/goby-core/src/perceus_reuse.rs`, extend the intra-block
+      pass to recognize `CompExpr::AssignIndex { root, path, value }`
+      as a reuse site:
+  - Within one basic block (§3.7), if `root` is a known owned binding
+    of a list size class, rewrite the rebind to thread a `DropReuse`
+    token into the surrounding store (exact IR shape decided in Step 1
+    — either a new `AssignIndex` field carrying the token, or an
+    explicit `DropReuse` + `AllocReuse` adjacent pair the backend can
+    pattern-match).
+  - **Skip** when `root` is cell-promoted (decided by
+    `closure_capture`): captured `mut` has refcount > 1 by
+    construction (§3.4).
+  - **Skip** when `value` evaluation crosses a path breakpoint
+    (`PerformEffect` / `WithHandler` / `Resume` / effect-intersecting
+    `Call`).
+- [ ] Focused tests in `perceus_reuse::tests`:
+  - `assign_index_unique_inserts_drop_reuse`
+  - `assign_index_skipped_when_root_is_cell`
+  - `assign_index_skipped_across_perform_effect`
+  - `nested_assign_index_chains_drop_reuse_per_level`
+
+#### Step 2 — Codex plan review
+
+- Send the Step 1 IR rewrite proposal to Codex. Confirm consistency
+  with §3.4 (semantics preservation under shared cells) and §3.7
+  (path breakpoints), and that the chosen IR shape does not require
+  cross-pass coordination beyond what `closure_capture` already
+  provides.
+
+#### Step 3 — Backend lowering: single-level `xs[i] := v` reuse path
+
+- [ ] In `crates/goby-wasm/src/gen_lower/lower.rs::lower_assign_index`,
+      branch on the Step 1 IR signal:
+  - **Reuse-eligible:** emit `__goby_drop_reuse` on `root`, perform an
+    in-place element store, and rebind via `alloc_reuse(token, S)`.
+    No descent / ascent path-copy. The token ABI guarantees the fast
+    path is allocation-free when `is_unique(root)`.
+  - **Not reuse-eligible** (cell-promoted, shared, breakpoint): keep
+    the existing `ListGet` + `ListSet` path-copy lowering. Cell write-
+    back via `LoadCellValue` / `StoreCellValue` is unchanged.
+- [ ] Extend `BackendIntrinsic::ListSetInPlace` use to "Step 1 reuse
+      signal present" while preserving the existing
+      `lower_supported_inline_list_fold_mutating_each` aliasing gate
+      (do not weaken or replace it — both gates must hold).
+- [ ] Runtime tests in `crates/goby-wasm/src/compile_tests.rs`:
+  - `mut_assign_index_unique_reuses` — `reuse_hits == 1`,
+    `peak_bytes == total_bytes` on the unique path.
+  - `mut_assign_index_shared_falls_through` — cell-promoted `mut`
+    captured by a closure; `reuse_hits == 0`, output byte-identical
+    to the pre-M6 baseline.
+
+#### Step 4 — Nested `xs[i][j] := v` reuse chain
+
+- [ ] Extend the `lower_assign_index` descent / ascent so reuse tokens
+      propagate per level: outer unique → `DropReuse` outer, fetch
+      inner, recurse into inner with the same Step 1 judgment, store
+      result back into the outer reused payload.
+- [ ] Per-level fallback: if any level is shared, switch that level
+      and everything below to copy-on-write while keeping the outer
+      reuse intact where proven unique.
+- [ ] Runtime tests:
+  - `nested_assign_index_unique_reuses_outer_only`
+  - `nested_assign_index_unique_reuses_all_levels`
+
+#### Step 5 — `stdlib/goby/list.gb` `set` rewrite
+
+- [ ] Rewrite `set xs i v` as the immutable-update surface form so it
+      benefits from reuse automatically (`mut ys = xs; ys[i] := v; ys`
+      or equivalent if expressible at surface level). If the surface
+      form cannot reach the same intrinsic, leave `__goby_list_set` in
+      place but reroute its backend lowering through the Step 3 / 4
+      path. Either outcome is acceptable provided example outputs are
+      byte-identical.
+
+#### Step 6 — Codex code review
+
+- Send the Step 1, 3, 4, 5 diffs to Codex. Focus areas:
+  - cell-promoted detection has no holes (every captured `mut` path
+    stays on copy-on-write);
+  - nested fallback preserves per-level uniqueness invariants;
+  - `ListSetInPlace` aliasing contract is still satisfied at every
+    new call site.
+
+#### Step 7 — Example output parity and acceptance
+
+- [ ] Confirm `examples/mut_list.gb`, `closure_mut.gb`,
+      `closure_mut_list.gb`, `closure_mut_nested_list.gb` produce
+      byte-identical output via the existing `runtime_output_tests.rs`
+      snapshots.
+- [ ] Measure `examples/refcount_reuse_loop.gb` with
+      `cargo run -p goby-cli -- run --debug-alloc-stats`. Required:
+  - `total_bytes < 200 * 1024`,
+  - `peak_bytes` of the same order,
+  - checksum matches the value fixed in §1.1.
+- [ ] If the budget does not converge, close the §M5-deferred
+      chunk-level reuse gap (M5 list `AllocReuse` currently bumps a
+      fresh chunk per call) inside this step before declaring
+      acceptance.
+- [ ] Un-ignore the `total_bytes < 200 * 1024` assertion in
+      `crates/goby-wasm/tests/wasm_exports_and_smoke.rs::refcount_reuse_loop_example_compiles`.
+
+#### Step 8 — STATE / PLAN sync and commit
+
+- [ ] Update `doc/STATE.md` to mark Perceus M5 acceptance and M6
+      complete; sync `memory/project_perceus_status.md`.
+- [ ] Update `doc/PLAN.md` §4.2 Perceus track row for M6.
+- [ ] Run `goby-invariants` (spec / examples / diagnostics gate)
+      before commit.
+
+#### Acceptance
+
+- `cargo test -p goby-wasm` green.
+- Four `mut` / `closure_mut*` example outputs byte-identical.
+- `examples/refcount_reuse_loop.gb` `total_bytes < 200 KiB` and
+  checksum matches §1.1.
+- `tests/alloc_baseline.txt` deltas (if any) explained per entry in
+  the commit message.
 
 ### M7 — Remove the bump-only fallback; document
 
