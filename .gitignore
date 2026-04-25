@@ -1,6 +1,7 @@
 /target
 /examples/*.wasm
 .codex
+.cargo
 *.elc
 **/node_modules/
 /tooling/vscode-goby/out/
