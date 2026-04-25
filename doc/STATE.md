@@ -1,10 +1,34 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-25 (Perceus M6 Step 4 WIP — nested AssignIndex outer-header reuse path implemented)
+Last updated: 2026-04-26 (Perceus M6 Step 4 backend per-level reuse landed; Step 7 acceptance gated on additional `mut ys = xs` shape support)
 
 ## Current Focus
 
-**Perceus M6 Step 4 実装中。nested `AssignIndex` は outer list header reuse まで実装済み。**
+**Perceus M6 Step 4 (per-level reuse for nested `AssignIndex`) backend is complete.** Static `FreshList` proof in `perceus_reuse` plus the "first None stops reuse" rule in the backend now lower a fresh nested literal (`[[seed, 2], [3, 4]]`) with `ListSetInPlace` at every level, while shared/aliased inner lists keep copy-on-write `ListSet`.
+
+M6 Step 7 acceptance is **not yet met**: `examples/refcount_reuse_loop.gb` still allocates ~149 MiB because its hot loop is `mut ys = xs; ys[i] := v` — i.e. the binding is initialised from a `Var`, not a fresh literal, so `comp_alloc_size_or_cell` returns `None` and no reuse token is emitted. Closing the budget needs either:
+- propagating the parameter's size class into `mut ys = xs` (so the reuse pass can seed `ys`'s shape from `xs`'s outer class), and/or
+- the M5-deferred chunk-level reuse work the PLAN already reserves under Step 7.
+
+These are follow-ups; M6 Step 4 itself (per-level inner reuse) is landed and tested.
+
+M6 Step 4 (2026-04-26, landed):
+- `AssignIndex.reuse_token` reshaped to `Option<AssignIndexReuse { root_token, levels: Vec<Option<SizeClass>> }>` (commit 4f9f701).
+- `perceus_reuse::SizeOrCell::FreshList { outer, inner }` records inner shape only when every outer-list element is a syntactically fresh, non-aliased list literal of the same shape (`is_list_shape` filter blocks Tuple/Record/String inner shapes that cannot anchor a List path) (commit b00eab1).
+- `lower_assign_index_reuse` consumes `levels` and emits `ListSetInPlace` for ascent levels `i < reuse_depth`; inner levels need no extra `RefCountDropReuse` / `AllocReuse` because `ListGet` does not bump the inner header's refcount (commit 91360ca).
+
+Verification:
+- `cargo fmt --all --check` green.
+- `cargo test --workspace` green (goby-core 757 passed +3 new perceus_reuse tests; goby-wasm 699 passed +4 new lower/runtime tests).
+- New focused tests:
+  - perceus_reuse: `assign_index_fresh_nested_literal_records_inner_class`, `assign_index_shared_inner_var_falls_back`, `assign_index_first_none_stops_reuse`.
+  - gen_lower::lower::tests: `lower_assign_index_two_levels_uniform_inner_reuses_all_levels`, `lower_assign_index_two_levels_inner_none_after_outer_reuse_uses_listset`.
+  - compile_tests: `nested_assign_index_fresh_literal_reuses_inner_in_place`, `nested_assign_index_shared_inner_falls_back`.
+
+Next actions:
+- Either extend `comp_alloc_size_or_cell` to seed `mut ys = xs` from the variable's existing shape, or pursue the chunk-level reuse work flagged in PLAN_PERCEUS §M6 Step 7. Both before un-ignoring the `total_bytes < 200 * 1024` assertion in `wasm_exports_and_smoke.rs::refcount_reuse_loop_example_compiles`.
+
+Earlier history (kept for context):
 
 M6 Step 4 WIP (2026-04-25, 作業中):
 - `lower_assign_index_reuse` を `depth > 1` に拡張 (lower.rs)。
