@@ -557,7 +557,20 @@ Output format: human-readable (default) and JSON lines (`--json`).
   a missing gate condition in `gen_lower/mod.rs` — modules with non-main
   user-defined declarations were incorrectly routed to the interpreter fallback
   instead of the general-lower path.
-- Next: M2 (refcount emission and reuse loop).
+- M2–M4.5 complete (2026-04-22): refcount emission, free-list, ownership
+  classification (`Owned` / `Borrowed`), drop insertion, conservative borrow
+  inference with branch balancing, and `alloc_baseline.txt` regression gate.
+- M5 Steps 1–9 complete (2026-04-25): `SizeClass` IR, `DropReuse` /
+  `AllocReuse` / `AllocInit` nodes, intra-block `Drop → alloc` pairing,
+  tail-call cross-call reuse IR pass (`Call.reuse_token` /
+  `IrDecl.reuse_param`), `reuse_hits` counter, and the wasm ABI wiring
+  (hidden trailing `i64` param + `emit_alloc_reuse` payload-only reuse).
+  The runtime test `cross_call_reuse_hidden_param_increments_reuse_hits`
+  proves cross-call reuse fires at the wasm layer.
+- Next: M5 Step 10 (`__goby_alloc_reuse` / `__goby_drop_reuse` runtime
+  helpers + 5 correctness tests) and M6 (`mut` lowering through reuse) so
+  that `examples/refcount_reuse_loop.gb` actually exercises the reuse path
+  and Step 11 acceptance (`total_bytes < 200 KiB`) becomes reachable.
 
 #### 4.2.1 Perceus M1 prerequisite: bitwise XOR (`^`) operator — complete
 
