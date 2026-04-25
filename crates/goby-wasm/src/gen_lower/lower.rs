@@ -2555,14 +2555,16 @@ fn lower_assign_index(
 
     let root_is_cell = aliases.get(root) == Some(&AliasValue::CellPromoted);
 
-    // Reuse fast path: root is uniquely owned (proven by perceus_reuse), depth == 1,
+    // Reuse fast path: root is uniquely owned (proven by perceus_reuse),
     // and root is not cell-promoted. Emit drop_reuse + ListSetInPlace + alloc_reuse
-    // instead of the copy-on-write ListSet path.
+    // instead of the copy-on-write ListSet path. Nested paths reuse the outer
+    // root header only; inner levels still use ListSet so aliases of inner lists
+    // keep value semantics until the reuse pass can prove per-level uniqueness.
     if let Some((tok, sc)) = reuse_token {
-        if depth == 1 && !root_is_cell {
+        if !root_is_cell {
             return lower_assign_index_reuse(
                 root,
-                &path[0],
+                path,
                 value,
                 tok,
                 sc,
@@ -2726,26 +2728,25 @@ fn lower_assign_index(
     Ok(instrs)
 }
 
-/// Reuse fast path for `AssignIndex` with `depth == 1` and a valid reuse token.
+/// Reuse fast path for `AssignIndex` with a valid root reuse token.
 ///
 /// Emits:
 /// 1. Load `root` onto the stack and run `drop_reuse` → store token in `tok_local`.
-/// 2. Evaluate the rhs value.
-/// 3. `ListSetInPlace(root, path[0], rhs)` → in-place element write; result is the same list handle.
+/// 2. For nested paths, copy-update inner levels with `ListSet`.
+/// 3. `ListSetInPlace(root, path[0], updated)` → in-place element write; result is the same list handle.
 /// 4. `StoreLocal root` — rebind root to the (same) list handle.
 /// 5. `AllocReuse(tok_local, sc, Retain)` → reset refcount=1 on the header; result is the tagged ptr.
 ///    (Result of AllocReuse is discarded — root was already stored in step 4.)
 /// 6. Push `Unit`.
 ///
-/// When `is_unique(root)` at runtime, steps 1–5 are allocation-free.
-/// When `!is_unique(root)`, `drop_reuse` returns null; `AllocReuse` falls through to a fresh alloc,
-/// and `ListSetInPlace` was a no-op since refcount > 1 means the mutation is visible to other owners.
-/// In that case the caller must guarantee copy-on-write semantics — this function does NOT fall back
-/// to path-copy, so this path must only be taken when the reuse pass has proven static uniqueness.
+/// When `is_unique(root)` at runtime, the outer-header update is allocation-free.
+/// This function does not dynamically fall back to path-copy for the root level:
+/// `ListSetInPlace` mutates the supplied list header. The caller must only use
+/// this path when the reuse pass has proven static uniqueness for `root`.
 #[allow(clippy::too_many_arguments)]
 fn lower_assign_index_reuse(
     root: &str,
-    index: &ValueExpr,
+    path: &[ValueExpr],
     value: &CompExpr,
     tok: &str,
     sc: SizeClass,
@@ -2755,13 +2756,26 @@ fn lower_assign_index_reuse(
     reuse_decls: &HashSet<String>,
     lambda_decls: &mut Vec<LambdaAuxDecl>,
 ) -> Result<Vec<WasmBackendInstr>, LowerError> {
+    let depth = path.len();
     let tok_local = tok.to_string();
     let mut instrs: Vec<WasmBackendInstr> = Vec::new();
+    let descent_tmp = |i: usize| format!("__lset_{}_reuse_d{}", root, i);
+    let ascent_tmp = |i: usize| format!("__lset_{}_reuse_u{}", root, i);
 
     // Declare the reuse token local.
     instrs.push(WasmBackendInstr::DeclareLocal {
         name: tok_local.clone(),
     });
+    for i in 0..depth.saturating_sub(1) {
+        instrs.push(WasmBackendInstr::DeclareLocal {
+            name: descent_tmp(i),
+        });
+    }
+    for i in 1..depth {
+        instrs.push(WasmBackendInstr::DeclareLocal {
+            name: ascent_tmp(i),
+        });
+    }
 
     // 1. drop_reuse(root) → tok_local
     instrs.extend(lower_value_ctx(
@@ -2774,15 +2788,29 @@ fn lower_assign_index_reuse(
         token_local: tok_local.clone(),
     });
 
-    // 2–3. ListSetInPlace(root, index, rhs) → same list handle → StoreLocal root
-    instrs.extend(lower_value_ctx(
-        &ValueExpr::Var(root.to_string()),
-        aliases,
-        bindings,
-        known_decls,
-    )?);
-    instrs.extend(lower_value_ctx(index, aliases, bindings, known_decls)?);
-    instrs.extend(lower_comp_inner(
+    for (i, index_value) in path.iter().enumerate().take(depth.saturating_sub(1)) {
+        instrs.push(WasmBackendInstr::LoadLocal {
+            name: if i == 0 {
+                root.to_string()
+            } else {
+                descent_tmp(i - 1)
+            },
+        });
+        instrs.extend(lower_value_ctx(
+            index_value,
+            aliases,
+            bindings,
+            known_decls,
+        )?);
+        instrs.push(WasmBackendInstr::Intrinsic {
+            intrinsic: BackendIntrinsic::ListGet,
+        });
+        instrs.push(WasmBackendInstr::StoreLocal {
+            name: descent_tmp(i),
+        });
+    }
+
+    let rhs_instrs = lower_comp_inner(
         value,
         false,
         aliases,
@@ -2790,7 +2818,45 @@ fn lower_assign_index_reuse(
         known_decls,
         reuse_decls,
         lambda_decls,
+    )?;
+
+    // Inner levels preserve copy-on-write semantics. Only the outer root header
+    // is rewritten in place under the static reuse proof.
+    for i in (1..depth).rev() {
+        instrs.push(WasmBackendInstr::LoadLocal {
+            name: descent_tmp(i - 1),
+        });
+        instrs.extend(lower_value_ctx(&path[i], aliases, bindings, known_decls)?);
+        if i == depth - 1 {
+            instrs.extend(rhs_instrs.clone());
+        } else {
+            instrs.push(WasmBackendInstr::LoadLocal {
+                name: ascent_tmp(i + 1),
+            });
+        }
+        instrs.push(WasmBackendInstr::Intrinsic {
+            intrinsic: BackendIntrinsic::ListSet,
+        });
+        instrs.push(WasmBackendInstr::StoreLocal {
+            name: ascent_tmp(i),
+        });
+    }
+
+    // 2–3. ListSetInPlace(root, index, updated) → same list handle → StoreLocal root
+    instrs.extend(lower_value_ctx(
+        &ValueExpr::Var(root.to_string()),
+        aliases,
+        bindings,
+        known_decls,
     )?);
+    instrs.extend(lower_value_ctx(&path[0], aliases, bindings, known_decls)?);
+    if depth == 1 {
+        instrs.extend(rhs_instrs);
+    } else {
+        instrs.push(WasmBackendInstr::LoadLocal {
+            name: ascent_tmp(1),
+        });
+    }
     instrs.push(WasmBackendInstr::Intrinsic {
         intrinsic: BackendIntrinsic::ListSetInPlace,
     });
@@ -3697,7 +3763,8 @@ fn instrs_load_local(instrs: &[WasmBackendInstr], name: &str) -> bool {
 mod tests {
     use super::*;
     use crate::gen_lower::backend_ir::{
-        BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp, WasmBackendInstr as I,
+        BackendAllocInit, BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp,
+        WasmBackendInstr as I,
     };
 
     fn lower_comp_with_aliases(
@@ -5548,6 +5615,77 @@ build n =
                 I::I64Const(encode_unit()),
             ]
         );
+    }
+
+    #[test]
+    fn lower_assign_index_two_levels_with_reuse_reuses_outer_only() {
+        use crate::gen_lower::value::encode_int;
+
+        let comp = CompExpr::AssignIndex {
+            root: "xs".to_string(),
+            path: vec![ValueExpr::IntLit(1), ValueExpr::IntLit(0)],
+            value: Box::new(CompExpr::Value(ValueExpr::IntLit(42))),
+            reuse_token: Some((
+                "__perceus_reuse_token_0".to_string(),
+                SizeClass::for_list_header(1),
+            )),
+        };
+        let instrs = lower_comp(&comp).expect("nested AssignIndex reuse should lower");
+
+        assert!(
+            instrs.iter().any(|instr| matches!(
+                instr,
+                I::RefCountDropReuse { token_local } if token_local == "__perceus_reuse_token_0"
+            )),
+            "root reuse token should be produced: {instrs:?}"
+        );
+        assert_eq!(
+            instrs
+                .iter()
+                .filter(|instr| matches!(
+                    instr,
+                    I::Intrinsic {
+                        intrinsic: BackendIntrinsic::ListSetInPlace
+                    }
+                ))
+                .count(),
+            1,
+            "outer level should use exactly one in-place set: {instrs:?}"
+        );
+        assert!(
+            instrs.iter().any(|instr| matches!(
+                instr,
+                I::Intrinsic {
+                    intrinsic: BackendIntrinsic::ListSet
+                }
+            )),
+            "inner level should keep copy-on-write ListSet: {instrs:?}"
+        );
+        assert!(
+            instrs.windows(4).any(|window| {
+                matches!(
+                    &window[0],
+                    I::LoadLocal { name } if name == "__lset_xs_reuse_d0"
+                ) && window[1] == I::I64Const(encode_int(0).unwrap())
+                    && matches!(
+                        &window[2],
+                        I::I64Const(value) if *value == encode_int(42).unwrap()
+                    )
+                    && window[3]
+                        == I::Intrinsic {
+                            intrinsic: BackendIntrinsic::ListSet,
+                        }
+            }),
+            "inner update should be path-copied before outer in-place write: {instrs:?}"
+        );
+        assert!(instrs.iter().any(|instr| matches!(
+            instr,
+            I::AllocReuse {
+                token_local,
+                init: BackendAllocInit::Retain,
+                ..
+            } if token_local == "__perceus_reuse_token_0"
+        )));
     }
 
     // ── lower_supported_inline_list_fold_mutating_each ─────────────────────

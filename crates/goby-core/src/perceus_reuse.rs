@@ -297,10 +297,15 @@ fn insert_reuse_seq(
 }
 
 fn comp_alloc_class(comp: &CompExpr) -> Option<SizeClass> {
-    let CompExpr::Value(value) = comp else {
-        return None;
-    };
-    allocation_class(value)
+    match comp {
+        CompExpr::Value(value) => allocation_class(value),
+        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. }
+            if !is_conservative_abort_comp(value) =>
+        {
+            comp_alloc_class(body)
+        }
+        _ => None,
+    }
 }
 
 fn drop_value_class(value: &ValueExpr, sizes: &SizeEnv) -> Option<SizeClass> {
@@ -1507,6 +1512,53 @@ mod tests {
         assert!(
             ir.contains("@reuse("),
             "unique AssignIndex should get a reuse_token:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn assign_index_unique_with_anf_wrapped_initializer_inserts_reuse() {
+        let decl = IrDecl {
+            name: "main".to_string(),
+            params: vec![],
+            result_ty: IrType::Unknown,
+            residual_effects: vec![],
+            reuse_param: None,
+            body: CompExpr::LetMut {
+                name: "xs".to_string(),
+                ty: IrType::Unknown,
+                value: Box::new(CompExpr::Let {
+                    name: "__inner".to_string(),
+                    ty: IrType::Unknown,
+                    value: Box::new(CompExpr::Value(ValueExpr::ListLit {
+                        elements: vec![ValueExpr::IntLit(1), ValueExpr::IntLit(2)],
+                        spread: None,
+                    })),
+                    body: Box::new(CompExpr::Value(ValueExpr::ListLit {
+                        elements: vec![ValueExpr::Var("__inner".to_string())],
+                        spread: None,
+                    })),
+                }),
+                body: Box::new(CompExpr::Seq {
+                    stmts: vec![CompExpr::AssignIndex {
+                        root: "xs".to_string(),
+                        path: vec![ValueExpr::IntLit(0), ValueExpr::IntLit(1)],
+                        value: Box::new(CompExpr::Value(ValueExpr::IntLit(99))),
+                        reuse_token: None,
+                    }],
+                    tail: Box::new(CompExpr::Value(ValueExpr::Unit)),
+                }),
+            },
+        };
+
+        let rewritten = insert_reuse(decl);
+        let module = IrModule {
+            decls: vec![rewritten],
+        };
+        validate_ir(&module).expect("rewritten IR should validate");
+        let ir = fmt_ir(&module);
+        assert!(
+            ir.contains("@reuse("),
+            "ANF-wrapped initializer should still seed AssignIndex reuse:\n{ir}"
         );
     }
 

@@ -97,6 +97,15 @@ fn read_runtime_io_general_lowering_fixture(name: &str) -> String {
     })
 }
 
+fn parse_alloc_stats_field(stderr: &str, field: &str) -> u64 {
+    stderr
+        .split_whitespace()
+        .find_map(|part| part.strip_prefix(&format!("{field}=")))
+        .unwrap_or_else(|| panic!("missing {field} field in alloc stats: {stderr}"))
+        .parse()
+        .unwrap_or_else(|e| panic!("invalid {field} field in alloc stats: {e}: {stderr}"))
+}
+
 #[test]
 fn compile_module_self_tail_decl_member_uses_shared_dispatcher_without_wrapper_recursion() {
     let source = r#"
@@ -1662,6 +1671,51 @@ main =
     let actual = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
         .expect("compiled Wasm should execute mutable nested-list parity sample");
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn nested_assign_index_unique_reuses_outer_only() {
+    let source = r#"
+import goby/string ( length )
+
+main : Unit -> Unit can Print, Read
+main =
+  seed = length (read())
+  inner = [seed, 2]
+  mut xs = [inner, [3, 4]]
+  xs[0][1] := 99
+  println "ok"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "nested mutable-list sample should classify as GeneralLowered"
+    );
+    let (instrs, _) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should succeed")
+        .expect("sample should use general lowering");
+    assert!(
+        format!("{instrs:?}").contains("RefCountDropReuse"),
+        "nested AssignIndex should lower with a root reuse token: {instrs:?}"
+    );
+    let output = execute_runtime_module_with_stdin_config_and_options_captured(
+        &module,
+        Some(String::new()),
+        None,
+        CompileOptions {
+            debug_alloc_stats: true,
+        },
+    )
+    .expect("nested mutable-list sample should execute")
+    .expect("sample should run on runtime-owned Wasm");
+    assert_eq!(output.stdout, "ok\n", "nested update sample should execute");
+    let reuse_hits = parse_alloc_stats_field(&output.stderr, "reuse_hits");
+    assert_eq!(
+        reuse_hits, 1,
+        "nested update should reuse only the outer list header for now; stderr:\n{}",
+        output.stderr
+    );
 }
 
 #[test]

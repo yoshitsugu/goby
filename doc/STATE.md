@@ -1,10 +1,34 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-25 (Perceus M6 Step 3 WIP — backend reuse lowering wasm検証エラー修正済み、workspace gate green)
+Last updated: 2026-04-25 (Perceus M6 Step 4 WIP — nested AssignIndex outer-header reuse path implemented)
 
 ## Current Focus
 
-**Perceus M6 Step 3 実装中。`lower_assign_index_reuse` の wasm validation blocker は修正済み。**
+**Perceus M6 Step 4 実装中。nested `AssignIndex` は outer list header reuse まで実装済み。**
+
+M6 Step 4 WIP (2026-04-25, 作業中):
+- `lower_assign_index_reuse` を `depth > 1` に拡張 (lower.rs)。
+  - root は `RefCountDropReuse` → outer `ListSetInPlace` → `AllocReuse(Retain)` で header reuse。
+  - inner levels は引き続き `ListSet` copy-on-write。
+  - これにより inner list alias の value semantics を保ったまま outer header だけ reuse する。
+  - full per-level inner reuse / dynamic fallback は未実装で、Step 4 の残り。
+- `perceus_reuse::comp_alloc_class` が pure `Let` / `LetMut` で包まれた initializer の最終 allocation class を拾うよう修正。
+  - nested list literal lowering は ANF let を含むため、これがないと `LetMut xs = [[...], ...]` の size class が seed されない。
+- Tests added:
+  - `perceus_reuse::tests::assign_index_unique_with_anf_wrapped_initializer_inserts_reuse`
+  - `gen_lower::lower::tests::lower_assign_index_two_levels_with_reuse_reuses_outer_only`
+  - `compile_tests::nested_assign_index_unique_reuses_outer_only`
+
+Verification so far:
+- `cargo test -p goby-core perceus_reuse::tests::assign_index_unique_with_anf_wrapped_initializer_inserts_reuse`
+- `cargo test -p goby-wasm gen_lower::lower::tests::lower_assign_index_two_levels_with_reuse_reuses_outer_only`
+- `cargo test -p goby-wasm compile_tests::nested_assign_index_unique_reuses_outer_only`
+- `cargo fmt --all --check`
+- `cargo check`
+- `cargo test --workspace`
+
+Next actions:
+- Finish Step 4 per-level reuse for inner unique lists, including fallback when a level is shared.
 
 M6 Step 3 WIP (2026-04-25, 作業中):
 - `AssignIndex.reuse_token` の型を `Option<String>` → `Option<(String, SizeClass)>` に変更 (ir.rs)。
@@ -68,7 +92,7 @@ M5 Step 10 (2026-04-25, previous):
 - 5 本の correctness test (perceus_reuse + compile_tests)。
 
 **Next actions:**
-- Commit M6 Step 3 → proceed to Step 4.
+- Finish M6 Step 4 inner per-level reuse/fallback.
 - M6 completion → Step 11 acceptance gate (`total_bytes < 200 KiB`).
 
 See `doc/PLAN_PERCEUS.md` §M4 "As-shipped scope note" for the full M4 scope,
