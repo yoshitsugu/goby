@@ -131,7 +131,16 @@ fn insert_reuse_comp(comp: CompExpr, sizes: &SizeEnv, next_token: usize) -> (Com
                 Some(SizeOrCell::Size(_)) if comp_contains_conservative_abort(&value) => None,
                 Some(SizeOrCell::Size(class)) => {
                     let tok = format!("__perceus_reuse_token_{next_token}");
-                    Some((tok, *class))
+                    let mut levels: Vec<Option<crate::size_class::SizeClass>> =
+                        Vec::with_capacity(path.len());
+                    levels.push(Some(*class));
+                    for _ in 1..path.len() {
+                        levels.push(None);
+                    }
+                    Some(crate::ir::AssignIndexReuse {
+                        root_token: tok,
+                        levels,
+                    })
                 }
                 None => None,
             };
@@ -1786,11 +1795,11 @@ mod tests {
         // LetMut registers the initial size class in the body's SizeEnv.
         // The outer xs[0] receives token_0; the inner xs2[0] receives token_1.
         assert!(
-            ir.contains("@reuse(__perceus_reuse_token_0)"),
+            ir.contains("@reuse(__perceus_reuse_token_0,"),
             "outer xs AssignIndex should get reuse_token_0:\n{ir}"
         );
         assert!(
-            ir.contains("@reuse(__perceus_reuse_token_1)"),
+            ir.contains("@reuse(__perceus_reuse_token_1,"),
             "inner xs2 AssignIndex should get reuse_token_1:\n{ir}"
         );
     }

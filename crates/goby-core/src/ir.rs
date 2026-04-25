@@ -123,6 +123,26 @@ pub enum AllocInit {
     Interp(Vec<IrInterpPart>),
 }
 
+/// Per-level reuse metadata attached to `CompExpr::AssignIndex`.
+///
+/// `root_token` is the reuse token local that the backend allocates for the
+/// root of the assignment. Per-level token locals for inner reuse sites are
+/// derived from this name (see `gen_lower::lower::lower_assign_index_reuse`).
+///
+/// `levels` has length equal to `path.len()`. `levels[0]` is the size class
+/// of the root list and is always `Some` when this struct is present.
+/// `levels[i]` for `i >= 1` is `Some(class)` only when the perceus reuse pass
+/// can statically prove the inner list at that depth is a freshly-allocated,
+/// non-aliased header of the given size class. The backend must apply the
+/// "first None stops reuse" rule: once a `None` appears at level `i`, all
+/// deeper levels (`> i`) must fall back to copy-on-write `ListSet`,
+/// regardless of whether they carry a `Some` size class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssignIndexReuse {
+    pub root_token: String,
+    pub levels: Vec<Option<SizeClass>>,
+}
+
 /// A computation expression that may sequence effects or control flow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompExpr {
@@ -171,12 +191,15 @@ pub enum CompExpr {
         root: String,
         path: Vec<ValueExpr>,
         value: Box<CompExpr>,
-        /// Reuse token + size class set by `perceus_reuse::insert_reuse` when
+        /// Per-level reuse metadata set by `perceus_reuse::insert_reuse` when
         /// `root` is uniquely owned and value evaluation contains no path
         /// breakpoint. `None` until the reuse pass runs; backend uses this to
         /// emit `drop_reuse` + in-place store + `alloc_reuse(token, class)`
-        /// instead of path-copy.
-        reuse_token: Option<(String, SizeClass)>,
+        /// instead of path-copy. See `AssignIndexReuse` for the per-level
+        /// (root + inner) shape; `levels[0]` is always `Some` when reuse is
+        /// emitted, deeper levels are `Some` only when statically proven
+        /// to own a fresh, distinct list header.
+        reuse_token: Option<AssignIndexReuse>,
     },
     /// Pattern-matching case expression.
     Case {
@@ -609,10 +632,20 @@ fn fmt_comp(out: &mut String, c: &CompExpr, depth: usize) {
                 fmt_value(out, idx);
                 out.push(']');
             }
-            if let Some((tok, _sc)) = reuse_token {
+            if let Some(reuse) = reuse_token {
                 out.push_str(" @reuse(");
-                out.push_str(tok);
-                out.push(')');
+                out.push_str(&reuse.root_token);
+                out.push_str(", levels=[");
+                for (i, lvl) in reuse.levels.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    match lvl {
+                        Some(sc) => out.push_str(&format!("{:?}", sc)),
+                        None => out.push('_'),
+                    }
+                }
+                out.push_str("])");
             }
             out.push_str(" =\n");
             fmt_comp(out, value, depth + 1);
@@ -874,11 +907,29 @@ fn validate_comp(c: &CompExpr, decl_name: &str) -> Result<(), IrValidateError> {
             reuse_token,
             ..
         } => {
-            if let Some((tok, _sc)) = reuse_token {
-                if tok.is_empty() {
+            if let Some(reuse) = reuse_token {
+                if reuse.root_token.is_empty() {
                     return Err(IrValidateError {
                         message: format!(
                             "in decl `{}`: AssignIndex reuse_token must not be empty",
+                            decl_name
+                        ),
+                    });
+                }
+                if reuse.levels.len() != path.len() {
+                    return Err(IrValidateError {
+                        message: format!(
+                            "in decl `{}`: AssignIndex reuse levels length {} must equal path length {}",
+                            decl_name,
+                            reuse.levels.len(),
+                            path.len()
+                        ),
+                    });
+                }
+                if reuse.levels.first().copied().flatten().is_none() {
+                    return Err(IrValidateError {
+                        message: format!(
+                            "in decl `{}`: AssignIndex reuse levels[0] must be Some(class)",
                             decl_name
                         ),
                     });

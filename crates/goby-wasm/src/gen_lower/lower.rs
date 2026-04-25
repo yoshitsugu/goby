@@ -2424,7 +2424,7 @@ fn lower_comp_inner(
             root,
             path,
             value,
-            reuse_token.as_ref().map(|(tok, sc)| (tok.as_str(), *sc)),
+            reuse_token.as_ref(),
             aliases,
             bindings,
             known_decls,
@@ -2539,7 +2539,7 @@ fn lower_assign_index(
     root: &str,
     path: &[ValueExpr],
     value: &CompExpr,
-    reuse_token: Option<(&str, SizeClass)>,
+    reuse_token: Option<&goby_core::ir::AssignIndexReuse>,
     aliases: &HashMap<String, AliasValue>,
     bindings: &ClosureBindingEnv,
     known_decls: &HashSet<String>,
@@ -2560,14 +2560,20 @@ fn lower_assign_index(
     // instead of the copy-on-write ListSet path. Nested paths reuse the outer
     // root header only; inner levels still use ListSet so aliases of inner lists
     // keep value semantics until the reuse pass can prove per-level uniqueness.
-    if let Some((tok, sc)) = reuse_token {
+    if let Some(reuse) = reuse_token {
         if !root_is_cell {
+            // levels[0] must be Some(class) per validator.
+            let root_sc = reuse.levels.first().copied().flatten().ok_or_else(|| {
+                LowerError::UnsupportedForm {
+                    node: "AssignIndex reuse with empty levels".to_string(),
+                }
+            })?;
             return lower_assign_index_reuse(
                 root,
                 path,
                 value,
-                tok,
-                sc,
+                &reuse.root_token,
+                root_sc,
                 aliases,
                 bindings,
                 known_decls,
@@ -5625,10 +5631,10 @@ build n =
             root: "xs".to_string(),
             path: vec![ValueExpr::IntLit(1), ValueExpr::IntLit(0)],
             value: Box::new(CompExpr::Value(ValueExpr::IntLit(42))),
-            reuse_token: Some((
-                "__perceus_reuse_token_0".to_string(),
-                SizeClass::for_list_header(1),
-            )),
+            reuse_token: Some(goby_core::ir::AssignIndexReuse {
+                root_token: "__perceus_reuse_token_0".to_string(),
+                levels: vec![Some(SizeClass::for_list_header(1)), None],
+            }),
         };
         let instrs = lower_comp(&comp).expect("nested AssignIndex reuse should lower");
 
