@@ -905,6 +905,119 @@ mod tests {
         );
     }
 
+    /// PLAN_PERCEUS §M5 correctness checklist: reuse must not cross a
+    /// `PerformEffect` block terminator. The dropped `old` lives across an
+    /// effect call; the following allocation must remain a plain alloc.
+    #[test]
+    fn reuse_not_across_perform_effect() {
+        let decl = IrDecl {
+            name: "main".to_string(),
+            params: vec![],
+            result_ty: IrType::Unknown,
+            residual_effects: vec![],
+            reuse_param: None,
+            body: CompExpr::Let {
+                name: "old".to_string(),
+                ty: IrType::Unknown,
+                value: Box::new(CompExpr::Value(ValueExpr::TupleLit(vec![
+                    ValueExpr::IntLit(1),
+                    ValueExpr::IntLit(2),
+                ]))),
+                body: Box::new(CompExpr::Seq {
+                    stmts: vec![
+                        CompExpr::Drop {
+                            value: Box::new(ValueExpr::Var("old".to_string())),
+                        },
+                        CompExpr::PerformEffect {
+                            effect: "Print".to_string(),
+                            op: "println".to_string(),
+                            args: vec![ValueExpr::StrLit("x".to_string())],
+                        },
+                    ],
+                    tail: Box::new(CompExpr::Let {
+                        name: "next".to_string(),
+                        ty: IrType::Unknown,
+                        value: Box::new(CompExpr::Value(ValueExpr::TupleLit(vec![
+                            ValueExpr::IntLit(3),
+                            ValueExpr::IntLit(4),
+                        ]))),
+                        body: Box::new(CompExpr::Value(ValueExpr::Var("next".to_string()))),
+                    }),
+                }),
+            },
+        };
+
+        let rewritten = insert_reuse(decl);
+        let module = IrModule {
+            decls: vec![rewritten],
+        };
+        validate_ir(&module).expect("non-reuse IR should validate");
+        let ir = fmt_ir(&module);
+        assert!(
+            ir.contains("drop old"),
+            "drop should remain ordinary across PerformEffect:\n{ir}"
+        );
+        assert!(
+            !ir.contains("alloc_reuse"),
+            "PerformEffect terminator must block reuse pairing:\n{ir}"
+        );
+    }
+
+    /// PLAN_PERCEUS §M5 correctness checklist: reuse must not cross a
+    /// `WithHandler` boundary. A `Drop` followed by a `WithHandler`-wrapped
+    /// allocation must remain a plain alloc — the handler installation is a
+    /// block terminator under §3.7.
+    #[test]
+    fn reuse_not_across_with_handler() {
+        let decl = IrDecl {
+            name: "main".to_string(),
+            params: vec![],
+            result_ty: IrType::Unknown,
+            residual_effects: vec![],
+            reuse_param: None,
+            body: CompExpr::Let {
+                name: "old".to_string(),
+                ty: IrType::Unknown,
+                value: Box::new(CompExpr::Value(ValueExpr::TupleLit(vec![
+                    ValueExpr::IntLit(1),
+                    ValueExpr::IntLit(2),
+                ]))),
+                body: Box::new(CompExpr::Seq {
+                    stmts: vec![CompExpr::Drop {
+                        value: Box::new(ValueExpr::Var("old".to_string())),
+                    }],
+                    tail: Box::new(CompExpr::WithHandler {
+                        handler: Box::new(CompExpr::Value(ValueExpr::Var("h".to_string()))),
+                        body: Box::new(CompExpr::Let {
+                            name: "next".to_string(),
+                            ty: IrType::Unknown,
+                            value: Box::new(CompExpr::Value(ValueExpr::TupleLit(vec![
+                                ValueExpr::IntLit(3),
+                                ValueExpr::IntLit(4),
+                            ]))),
+                            body: Box::new(CompExpr::Value(ValueExpr::Var("next".to_string()))),
+                        }),
+                    }),
+                }),
+            },
+        };
+
+        let rewritten = insert_reuse(decl);
+        let module = IrModule {
+            decls: vec![rewritten],
+        };
+        validate_ir(&module).expect("non-reuse IR should validate");
+        let ir = fmt_ir(&module);
+        assert!(
+            ir.contains("drop old"),
+            "drop should remain ordinary across WithHandler:\n{ir}"
+        );
+        assert!(
+            !ir.contains("alloc_reuse"),
+            "WithHandler boundary must block reuse pairing:\n{ir}"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // first_alloc_class / rewrite_callee_first_alloc tests (Step 8)
     // -----------------------------------------------------------------------

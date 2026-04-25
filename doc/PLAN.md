@@ -567,10 +567,19 @@ Output format: human-readable (default) and JSON lines (`--json`).
   (hidden trailing `i64` param + `emit_alloc_reuse` payload-only reuse).
   The runtime test `cross_call_reuse_hidden_param_increments_reuse_hits`
   proves cross-call reuse fires at the wasm layer.
-- Next: M5 Step 10 (`__goby_alloc_reuse` / `__goby_drop_reuse` runtime
-  helpers + 5 correctness tests) and M6 (`mut` lowering through reuse) so
-  that `examples/refcount_reuse_loop.gb` actually exercises the reuse path
-  and Step 11 acceptance (`total_bytes < 200 KiB`) becomes reachable.
+- M5 Step 10 complete (2026-04-25): the §3.3 `alloc_reuse` / `drop_reuse`
+  semantics ship inline (helper-function extraction is deferred to M7
+  since it does not move the budget). Five correctness tests landed —
+  `reuse_not_across_perform_effect` and `reuse_not_across_with_handler`
+  in `goby-core/perceus_reuse.rs`, plus
+  `reuse_fires_on_unique_list_update`, `reuse_falls_through_when_shared`,
+  and `tail_call_reuse_passes_token` in `goby-wasm/compile_tests.rs`.
+  The two wasm reuse-path tests use `Tuple(2)` rather than list lits so
+  the assertion is not confounded by the per-allocation chunk bump that
+  M5 list `AllocReuse` still performs (§7.0).
+- Next: M6 (`mut` lowering through reuse) so that
+  `examples/refcount_reuse_loop.gb` actually exercises the reuse path and
+  Step 11 acceptance (`total_bytes < 200 KiB`) becomes reachable.
 
 #### 4.2.1 Perceus M1 prerequisite: bitwise XOR (`^`) operator — complete
 

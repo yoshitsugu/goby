@@ -1,15 +1,28 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-25 (Perceus M5 Step 9 complete — wasm ABI wiring landed; source-level reuse still gated on M6)
+Last updated: 2026-04-25 (Perceus M5 Step 10 complete — correctness tests landed; acceptance still gated on M6)
 
 ## Current Focus
 
-**Perceus M3–M4.5 complete. M5 Step 9 (wasm ABI wiring) 完了。次は Step 10 (runtime helpers) または M6 (mut lowering via reuse)。**
-Steps 9-a (callee hidden trailing `i64` parameter), 9-b (caller trailing actual),
-9-c (`AllocReuse` lowering: `token != 0` で payload-only reuse、=0 で `alloc_with_flag` フォールバック),
-9-d (`cross_call_reuse_hidden_param_increments_reuse_hits` runtime compile test) は commit `50cc7bf8` で landing 済み。
-hidden-param ABI を介して cross-call reuse が wasm レベルで実際に発火することを runtime test で実証。
+**Perceus M3–M4.5 complete. M5 Step 10 (correctness tests + peak_bytes 整合) 完了。残るのは acceptance (Step 11) と M6 (`mut` lowering via reuse)。**
 
+Step 10 (2026-04-25):
+- §3.3 `alloc_reuse` / `drop_reuse` セマンティクスは Step 7/9 で inline 発行済み。
+  helper 関数化は budget 改善に寄与しないため M7 へ持ち越し (PLAN_PERCEUS §M5 反映)。
+- 5 本の correctness test を追加:
+  - `crates/goby-core/src/perceus_reuse.rs::tests::reuse_not_across_perform_effect`
+  - `crates/goby-core/src/perceus_reuse.rs::tests::reuse_not_across_with_handler`
+  - `crates/goby-wasm/src/compile_tests.rs::reuse_fires_on_unique_list_update`
+    (`Tuple(2)` で reuse_hits == 1 / peak == total を観測。M5 list AllocReuse は
+    chunk 毎回 bump のため、peak/total invariant が confound されるので tuple 採用)
+  - `crates/goby-wasm/src/compile_tests.rs::reuse_falls_through_when_shared`
+    (`RefCountDup` で refcount=2 にしてから `DropReuse` → token=null fall-through。
+    reuse_hits == 0 と「両 alloc 同時 live で peak == total」を観測)
+  - `crates/goby-wasm/src/compile_tests.rs::tail_call_reuse_passes_token`
+    (§3.7.1 cross-call ABI; 既存 `cross_call_reuse_hidden_param_increments_reuse_hits`
+    と同形を PLAN 正規名で追加。git 互換性のため既存名はそのまま残置)
+
+Step 9 までの状態:
 - `AuxDecl.reuse_param_name: Option<String>` 追加済み (emit.rs)
 - callee signature: `reuse_param_name.is_some()` の時 wasm type に +1 `i64` param
 - caller: `lower_comp_inner` に `reuse_decls: &HashSet<String>` 追加、
@@ -18,7 +31,7 @@ hidden-param ABI を介して cross-call reuse が wasm レベルで実際に発
   `lower_aux_decl` → `lower_comp_inner` まで伝播
 - `emit_alloc_reuse` / `emit_alloc_reuse_payload` が token!=0 で refcount=1 書き戻し + token return、=0 で従来 alloc にフォールスルー
 
-**9-e measurement (2026-04-25):**
+**9-e measurement (2026-04-25, unchanged after Step 10):**
 - `cargo run -p goby-cli -- run --debug-alloc-stats examples/refcount_reuse_loop.gb`
   → `total_bytes=155954768 peak_bytes=155954768 free_list_hits=0 reuse_hits=0`
 - 既知の理由: 正規プログラムの `step` は `if` 分岐で始まり `first_alloc_class=None` のため Step 8 IR pass の対象外。
@@ -26,10 +39,10 @@ hidden-param ABI を介して cross-call reuse が wasm レベルで実際に発
 - `alloc_baseline.txt` 更新は M5 Step 11 (acceptance) まで保留 (PLAN_PERCEUS_M5_STEP9.md §9-e の方針通り)。
 
 **次のアクション:**
-- Step 10: `__goby_alloc_reuse` / `__goby_drop_reuse` runtime helpers + `peak_bytes` 整合
 - M6 (`mut` lowering via reuse) — `step` の `mut ys = xs; ys[i] := v` が `DropReuse` 経由で
-  reusable パスに乗ると `refcount_reuse_loop.gb` の reuse_hits が立つ
-- いずれかが landing した後 Step 11 acceptance gate (`total_bytes < 200 KiB`) へ
+  reusable パスに乗ると `refcount_reuse_loop.gb` の reuse_hits が立つ。
+  M5 list AllocReuse の chunk 毎回 bump も併せて検討要。
+- M6 が landing した後 Step 11 acceptance gate (`total_bytes < 200 KiB`) へ。
 
 See `doc/PLAN_PERCEUS.md` §M4 "As-shipped scope note" for the full M4 scope,
 and the M5 section for the current step-by-step progress.

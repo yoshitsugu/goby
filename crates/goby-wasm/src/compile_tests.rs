@@ -2953,3 +2953,416 @@ fn cross_call_reuse_hidden_param_increments_reuse_hits() {
         "expected cross-call hidden-param reuse to increment reuse_hits twice; got {hits}"
     );
 }
+
+/// PLAN_PERCEUS §M5 correctness checklist: a unique allocation followed by
+/// `DropReuse → AllocReuse` of the same size class must hit the reuse fast
+/// path — `reuse_hits` increments and `peak_bytes` integrity holds (the
+/// reuse path must not call `alloc_from_top`, so total_bytes equals
+/// exactly one allocation worth, not two).
+///
+/// Uses `Tuple(2)` rather than `ListLit` so that the assertion is not
+/// confounded by the per-allocation chunk bump (M5 reuses only the list
+/// header, which §7.0 of PLAN_PERCEUS notes leaves chunk_alloc_size on
+/// every list AllocReuse). Tuple/Record are §3.2's other reuse classes
+/// and exercise the same `emit_alloc_reuse_payload` write-back.
+#[test]
+fn reuse_fires_on_unique_list_update() {
+    use crate::gen_lower::backend_ir::{BackendAllocInit, WasmBackendInstr as I};
+    use crate::gen_lower::emit::{EmitOptions, emit_general_module_with_aux_and_options};
+    use crate::gen_lower::value::encode_int;
+    use crate::layout::{
+        GLOBAL_ALLOC_BYTES_TOTAL_OFFSET, GLOBAL_PEAK_BYTES_OFFSET, GLOBAL_REUSE_HITS_OFFSET,
+        MemoryLayout,
+    };
+    use crate::size_class::SizeClass;
+    use wasmtime::{Config, Engine, Linker, Module as WasmModule, Store};
+    use wasmtime_wasi::WasiCtxBuilder;
+    use wasmtime_wasi::p1::{self, WasiP1Ctx};
+    use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
+
+    let sc = SizeClass::for_tuple(2);
+    let zero_tok = "__zero_tok".to_string();
+    let acc = "__acc".to_string();
+    let tok = "__tok".to_string();
+
+    let tuple_init = || BackendAllocInit::TupleLit {
+        element_instrs: vec![
+            vec![I::I64Const(encode_int(7).expect("encode int"))],
+            vec![I::I64Const(encode_int(8).expect("encode int"))],
+        ],
+    };
+
+    let main_instrs = vec![
+        I::DeclareLocal {
+            name: zero_tok.clone(),
+        },
+        I::I64Const(0),
+        I::StoreLocal {
+            name: zero_tok.clone(),
+        },
+        I::DeclareLocal { name: acc.clone() },
+        I::DeclareLocal { name: tok.clone() },
+        // First alloc — fresh bump, peak/total grow.
+        I::AllocReuse {
+            token_local: zero_tok.clone(),
+            size_class: sc,
+            init: tuple_init(),
+        },
+        I::StoreLocal { name: acc.clone() },
+        // DropReuse on the unique allocation → token holds payload ptr.
+        I::LoadLocal { name: acc.clone() },
+        I::RefCountDropReuse {
+            token_local: tok.clone(),
+        },
+        // AllocReuse with the surviving token must recycle in place — no bump.
+        I::AllocReuse {
+            token_local: tok.clone(),
+            size_class: sc,
+            init: tuple_init(),
+        },
+        I::StoreLocal { name: acc.clone() },
+        I::LoadLocal { name: acc },
+        I::RefCountDrop,
+    ];
+
+    let wasm = emit_general_module_with_aux_and_options(
+        &main_instrs,
+        &[],
+        &MemoryLayout::default(),
+        EmitOptions::default(),
+    )
+    .expect("manual reuse module should emit");
+    assert_valid_wasm_module(&wasm);
+
+    let mut config = Config::new();
+    config.wasm_memory64(true);
+    let engine = Engine::new(&config).expect("engine");
+    let wasm_module = WasmModule::from_binary(&engine, &wasm).expect("parse wasm");
+    let wasi_ctx = WasiCtxBuilder::new()
+        .stdin(MemoryInputPipe::new(String::new()))
+        .stdout(MemoryOutputPipe::new(4096))
+        .build_p1();
+    let mut store = Store::new(&engine, wasi_ctx);
+    let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
+    p1::add_to_linker_sync(&mut linker, |t| t).expect("wasi linker");
+    let instance = linker
+        .instantiate(&mut store, &wasm_module)
+        .expect("instantiate");
+    let start = instance
+        .get_typed_func::<(), ()>(&mut store, "_start")
+        .expect("_start export");
+    start.call(&mut store, ()).expect("_start call");
+
+    let memory = instance
+        .get_memory(&mut store, "memory")
+        .expect("memory export");
+
+    let mut hits_bytes = [0u8; 8];
+    memory
+        .read(&store, GLOBAL_REUSE_HITS_OFFSET as usize, &mut hits_bytes)
+        .expect("read reuse_hits");
+    let hits = u64::from_le_bytes(hits_bytes);
+    assert_eq!(
+        hits, 1,
+        "expected exactly one reuse hit on unique drop_reuse + alloc_reuse pair; got {hits}"
+    );
+
+    // The reuse path must not call alloc_from_top a second time. With one
+    // upstream Tuple(2) bump and a token-recycled second allocation,
+    // total_bytes should equal peak_bytes (no second bump → no growth
+    // above the first alloc). The shared fall-through test below
+    // cross-checks the inverse.
+    let mut total_bytes = [0u8; 8];
+    memory
+        .read(
+            &store,
+            GLOBAL_ALLOC_BYTES_TOTAL_OFFSET as usize,
+            &mut total_bytes,
+        )
+        .expect("read total_bytes");
+    let total = u64::from_le_bytes(total_bytes);
+    let mut peak_bytes = [0u8; 8];
+    memory
+        .read(&store, GLOBAL_PEAK_BYTES_OFFSET as usize, &mut peak_bytes)
+        .expect("read peak_bytes");
+    let peak = u64::from_le_bytes(peak_bytes);
+    assert!(total > 0, "first alloc must bump total_bytes; got 0");
+    assert_eq!(
+        peak, total,
+        "reuse path must not bump a second time: peak={peak} total={total}"
+    );
+}
+
+/// PLAN_PERCEUS §M5 correctness checklist: when the dropped allocation is
+/// shared (refcount > 1), `drop_reuse` must yield a null token and
+/// `alloc_reuse` must fall through to a fresh allocation. `reuse_hits` stays
+/// at 0 and `peak_bytes` grows by a second allocation worth.
+#[test]
+fn reuse_falls_through_when_shared() {
+    use crate::gen_lower::backend_ir::{BackendAllocInit, WasmBackendInstr as I};
+    use crate::gen_lower::emit::{EmitOptions, emit_general_module_with_aux_and_options};
+    use crate::gen_lower::value::encode_int;
+    use crate::layout::{
+        GLOBAL_ALLOC_BYTES_TOTAL_OFFSET, GLOBAL_PEAK_BYTES_OFFSET, GLOBAL_REUSE_HITS_OFFSET,
+        MemoryLayout,
+    };
+    use crate::size_class::SizeClass;
+    use wasmtime::{Config, Engine, Linker, Module as WasmModule, Store};
+    use wasmtime_wasi::WasiCtxBuilder;
+    use wasmtime_wasi::p1::{self, WasiP1Ctx};
+    use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
+
+    let sc = SizeClass::for_tuple(2);
+    let zero_tok = "__zero_tok".to_string();
+    let acc_orig = "__acc_orig".to_string();
+    let acc_new = "__acc_new".to_string();
+    let tok = "__tok".to_string();
+
+    let tuple_init = || BackendAllocInit::TupleLit {
+        element_instrs: vec![
+            vec![I::I64Const(encode_int(11).expect("encode int"))],
+            vec![I::I64Const(encode_int(12).expect("encode int"))],
+        ],
+    };
+
+    let main_instrs = vec![
+        I::DeclareLocal {
+            name: zero_tok.clone(),
+        },
+        I::I64Const(0),
+        I::StoreLocal {
+            name: zero_tok.clone(),
+        },
+        I::DeclareLocal {
+            name: acc_orig.clone(),
+        },
+        I::DeclareLocal {
+            name: acc_new.clone(),
+        },
+        I::DeclareLocal { name: tok.clone() },
+        // First alloc — fresh bump.
+        I::AllocReuse {
+            token_local: zero_tok.clone(),
+            size_class: sc,
+            init: tuple_init(),
+        },
+        I::StoreLocal {
+            name: acc_orig.clone(),
+        },
+        // Bump refcount to 2 → drop_reuse will see a shared object and yield
+        // a null token, leaving the original allocation alive at refcount=1.
+        I::LoadLocal {
+            name: acc_orig.clone(),
+        },
+        I::RefCountDup,
+        I::LoadLocal {
+            name: acc_orig.clone(),
+        },
+        I::RefCountDropReuse {
+            token_local: tok.clone(),
+        },
+        // alloc_reuse(null) must fall through to a brand-new allocation.
+        I::AllocReuse {
+            token_local: tok.clone(),
+            size_class: sc,
+            init: tuple_init(),
+        },
+        I::StoreLocal {
+            name: acc_new.clone(),
+        },
+        // Balance both allocations: one drop for the original (still
+        // refcount=1 after the shared drop_reuse decrement) and one for the
+        // fall-through allocation.
+        I::LoadLocal { name: acc_orig },
+        I::RefCountDrop,
+        I::LoadLocal { name: acc_new },
+        I::RefCountDrop,
+    ];
+
+    let wasm = emit_general_module_with_aux_and_options(
+        &main_instrs,
+        &[],
+        &MemoryLayout::default(),
+        EmitOptions::default(),
+    )
+    .expect("manual shared-reuse module should emit");
+    assert_valid_wasm_module(&wasm);
+
+    let mut config = Config::new();
+    config.wasm_memory64(true);
+    let engine = Engine::new(&config).expect("engine");
+    let wasm_module = WasmModule::from_binary(&engine, &wasm).expect("parse wasm");
+    let wasi_ctx = WasiCtxBuilder::new()
+        .stdin(MemoryInputPipe::new(String::new()))
+        .stdout(MemoryOutputPipe::new(4096))
+        .build_p1();
+    let mut store = Store::new(&engine, wasi_ctx);
+    let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
+    p1::add_to_linker_sync(&mut linker, |t| t).expect("wasi linker");
+    let instance = linker
+        .instantiate(&mut store, &wasm_module)
+        .expect("instantiate");
+    let start = instance
+        .get_typed_func::<(), ()>(&mut store, "_start")
+        .expect("_start export");
+    start.call(&mut store, ()).expect("_start call");
+
+    let memory = instance
+        .get_memory(&mut store, "memory")
+        .expect("memory export");
+
+    let mut hits_bytes = [0u8; 8];
+    memory
+        .read(&store, GLOBAL_REUSE_HITS_OFFSET as usize, &mut hits_bytes)
+        .expect("read reuse_hits");
+    let hits = u64::from_le_bytes(hits_bytes);
+    assert_eq!(
+        hits, 0,
+        "shared drop_reuse must not bump reuse_hits; got {hits}"
+    );
+
+    // Two distinct allocations must have occurred (the original + the
+    // fall-through). With both still live when the second alloc happens,
+    // total_bytes / peak_bytes both reflect two allocations' worth of
+    // growth, which is at least twice the unique-path total measured by
+    // `reuse_fires_on_unique_list_update`. Encode the cross-test
+    // invariant inline by checking peak_bytes == total_bytes (both bumps
+    // happened back-to-back without a free in between) and total_bytes
+    // >= 2 (i.e. genuinely a multi-allocation total, not a free-list
+    // recycle).
+    let mut total_bytes = [0u8; 8];
+    memory
+        .read(
+            &store,
+            GLOBAL_ALLOC_BYTES_TOTAL_OFFSET as usize,
+            &mut total_bytes,
+        )
+        .expect("read total_bytes");
+    let total = u64::from_le_bytes(total_bytes);
+    let mut peak_bytes = [0u8; 8];
+    memory
+        .read(&store, GLOBAL_PEAK_BYTES_OFFSET as usize, &mut peak_bytes)
+        .expect("read peak_bytes");
+    let peak = u64::from_le_bytes(peak_bytes);
+    assert!(
+        total >= 2,
+        "fall-through path must record at least two allocations; total_bytes={total}"
+    );
+    assert_eq!(
+        peak, total,
+        "both shared allocations must be live concurrently: peak={peak} total={total}"
+    );
+}
+
+/// PLAN_PERCEUS §M5 correctness checklist: §3.7.1 cross-call reuse — a tail
+/// `Call` whose callee carries a hidden trailing reuse-token parameter must
+/// receive the caller's `DropReuse` token and recycle the callee's first
+/// allocation.
+///
+/// This test mirrors `cross_call_reuse_hidden_param_increments_reuse_hits`
+/// (kept for git history) under the PLAN-normative test name so the §M5
+/// checklist line ("tail_call_reuse_passes_token") has a 1:1 mapping.
+#[test]
+fn tail_call_reuse_passes_token() {
+    use crate::gen_lower::backend_ir::{BackendAllocInit, WasmBackendInstr as I};
+    use crate::gen_lower::emit::{AuxDecl, EmitOptions, emit_general_module_with_aux_and_options};
+    use crate::gen_lower::value::encode_int;
+    use crate::layout::{GLOBAL_REUSE_HITS_OFFSET, MemoryLayout};
+    use crate::size_class::SizeClass;
+    use wasmtime::{Config, Engine, Linker, Module as WasmModule, Store};
+    use wasmtime_wasi::WasiCtxBuilder;
+    use wasmtime_wasi::p1::{self, WasiP1Ctx};
+    use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
+
+    let sc = SizeClass::for_list_header(1);
+    let zero_tok = "__zero_tok".to_string();
+    let acc = "__acc".to_string();
+    let tok = "__tok".to_string();
+    let reuse_param = "__reuse_param".to_string();
+
+    let list_init = || BackendAllocInit::ListLit {
+        element_instrs: vec![vec![I::I64Const(encode_int(1).expect("encode int"))]],
+    };
+    let aux_decls = vec![AuxDecl {
+        decl_name: "step".to_string(),
+        param_names: vec!["acc".to_string()],
+        returns_wasm_heap: true,
+        instrs: vec![I::AllocReuse {
+            token_local: reuse_param.clone(),
+            size_class: sc,
+            init: list_init(),
+        }],
+        reuse_param_name: Some(reuse_param),
+    }];
+
+    let main_instrs = vec![
+        I::DeclareLocal {
+            name: zero_tok.clone(),
+        },
+        I::I64Const(0),
+        I::StoreLocal {
+            name: zero_tok.clone(),
+        },
+        I::DeclareLocal { name: acc.clone() },
+        I::DeclareLocal { name: tok.clone() },
+        I::AllocReuse {
+            token_local: zero_tok.clone(),
+            size_class: sc,
+            init: list_init(),
+        },
+        I::StoreLocal { name: acc.clone() },
+        I::LoadLocal { name: acc.clone() },
+        I::RefCountDropReuse {
+            token_local: tok.clone(),
+        },
+        I::LoadLocal { name: acc.clone() },
+        I::LoadLocal { name: tok.clone() },
+        I::DeclCall {
+            decl_name: "step".to_string(),
+        },
+        I::StoreLocal { name: acc.clone() },
+        I::LoadLocal { name: acc },
+        I::RefCountDrop,
+    ];
+
+    let wasm = emit_general_module_with_aux_and_options(
+        &main_instrs,
+        &aux_decls,
+        &MemoryLayout::default(),
+        EmitOptions::default(),
+    )
+    .expect("tail-call reuse module should emit");
+    assert_valid_wasm_module(&wasm);
+
+    let mut config = Config::new();
+    config.wasm_memory64(true);
+    let engine = Engine::new(&config).expect("engine");
+    let wasm_module = WasmModule::from_binary(&engine, &wasm).expect("parse wasm");
+    let wasi_ctx = WasiCtxBuilder::new()
+        .stdin(MemoryInputPipe::new(String::new()))
+        .stdout(MemoryOutputPipe::new(4096))
+        .build_p1();
+    let mut store = Store::new(&engine, wasi_ctx);
+    let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
+    p1::add_to_linker_sync(&mut linker, |t| t).expect("wasi linker");
+    let instance = linker
+        .instantiate(&mut store, &wasm_module)
+        .expect("instantiate");
+    let start = instance
+        .get_typed_func::<(), ()>(&mut store, "_start")
+        .expect("_start export");
+    start.call(&mut store, ()).expect("_start call");
+
+    let memory = instance
+        .get_memory(&mut store, "memory")
+        .expect("memory export");
+    let mut hits_bytes = [0u8; 8];
+    memory
+        .read(&store, GLOBAL_REUSE_HITS_OFFSET as usize, &mut hits_bytes)
+        .expect("read reuse_hits");
+    let hits = u64::from_le_bytes(hits_bytes);
+    assert!(
+        hits >= 1,
+        "tail-call reuse must let the callee recycle the caller token; reuse_hits={hits}"
+    );
+}

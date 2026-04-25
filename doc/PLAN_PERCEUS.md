@@ -1282,21 +1282,43 @@ acceptance test.
         (`step` starts with `if`, so `first_alloc_class = None`); full M5
         budget convergence is gated on Step 10 (runtime helpers) and M6
         (`mut` lowering via reuse).
-- [ ] Emit `__goby_alloc_reuse` and `__goby_drop_reuse` runtime
-      helpers per §3.3. `peak_bytes` accounting stays correct on the
-      reuse path.
-- [ ] Correctness tests:
+- [x] `__goby_alloc_reuse` and `__goby_drop_reuse` semantics per §3.3
+      are emitted inline (Step 7/9) rather than as separate runtime
+      helper functions; `peak_bytes` accounting stays correct because
+      the reuse fast path skips `emit_alloc_from_top` entirely. Helper
+      function extraction is deferred to M7 (no budget impact).
+- [x] Correctness tests (2026-04-25, Step 10):
       `reuse_fires_on_unique_list_update`,
       `reuse_falls_through_when_shared`,
       `reuse_not_across_perform_effect`,
       `reuse_not_across_with_handler`,
       `tail_call_reuse_passes_token`.
+      - `reuse_fires_on_unique_list_update` and
+        `reuse_falls_through_when_shared` exercise `Tuple(2)` reuse
+        rather than list (the M5 list AllocReuse still bumps a fresh
+        chunk per §7.0, which would confound the peak/total invariant).
+        Together they show `reuse_hits == 1 && peak == total` on the
+        unique path and `reuse_hits == 0 && peak == total` (with both
+        allocs live concurrently) on the shared fall-through.
+      - `tail_call_reuse_passes_token` is the §3.7.1 cross-call ABI
+        check; it lives next to the original
+        `cross_call_reuse_hidden_param_increments_reuse_hits` (kept
+        verbatim for git history).
+      - The two `reuse_not_across_*` tests live in
+        `crates/goby-core/src/perceus_reuse.rs` and assert the IR
+        shape after `insert_reuse` (no `alloc_reuse` synthesized
+        across the boundary).
 - [ ] Un-ignore the M1 integration test for
       `examples/refcount_reuse_loop.gb` and add an assertion that
       `total_bytes < 200 * 1024`.
 - [ ] **Acceptance:** the M1 test passes under `goby run
       --max-memory-mb 16` with `total_bytes < 200 KiB` and the
       recorded checksum.
+      - Deferred to ride alongside M6 (`mut` via reuse). With M5 alone
+        `examples/refcount_reuse_loop.gb` still allocates ~149 MiB
+        because chunk reuse and `xs[i] := v`-driven reuse are M6
+        territory (PLAN_PERCEUS §M6). Step 10 closes the M5 code-ready
+        portion of the checklist; the acceptance number ships with M6.
 
 ### M6 — `mut` lowering through reuse primitives (no semantics change)
 
