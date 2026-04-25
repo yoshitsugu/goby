@@ -2574,6 +2574,7 @@ fn lower_assign_index(
                 value,
                 &reuse.root_token,
                 root_sc,
+                &reuse.levels,
                 aliases,
                 bindings,
                 known_decls,
@@ -2756,6 +2757,7 @@ fn lower_assign_index_reuse(
     value: &CompExpr,
     tok: &str,
     sc: SizeClass,
+    levels: &[Option<SizeClass>],
     aliases: &HashMap<String, AliasValue>,
     bindings: &ClosureBindingEnv,
     known_decls: &HashSet<String>,
@@ -2767,6 +2769,23 @@ fn lower_assign_index_reuse(
     let mut instrs: Vec<WasmBackendInstr> = Vec::new();
     let descent_tmp = |i: usize| format!("__lset_{}_reuse_d{}", root, i);
     let ascent_tmp = |i: usize| format!("__lset_{}_reuse_u{}", root, i);
+
+    // "First None stops reuse": once a level lacks a `Some(class)`, every
+    // deeper level must use copy-on-write `ListSet`. `reuse_depth` is the
+    // count of consecutive `Some` levels starting from level 0.
+    let reuse_depth = {
+        let mut n = 0usize;
+        for lvl in levels.iter().take(depth) {
+            if lvl.is_some() {
+                n += 1;
+            } else {
+                break;
+            }
+        }
+        n
+    };
+    // levels[0] must be Some by validator and the caller's check.
+    debug_assert!(reuse_depth >= 1);
 
     // Declare the reuse token local.
     instrs.push(WasmBackendInstr::DeclareLocal {
@@ -2826,8 +2845,14 @@ fn lower_assign_index_reuse(
         lambda_decls,
     )?;
 
-    // Inner levels preserve copy-on-write semantics. Only the outer root header
-    // is rewritten in place under the static reuse proof.
+    // Ascent. For each inner level i in (1..depth), emit either an in-place
+    // store (`ListSetInPlace`) when level i is reuse-eligible, or a
+    // copy-on-write `ListSet` otherwise. Inner levels do NOT need
+    // `RefCountDropReuse` / `AllocReuse(Retain)`: `ListGet` does not bump
+    // the inner header's refcount, so the static fresh-distinct proof
+    // emitted by `perceus_reuse` already guarantees the inner list header
+    // is uniquely owned (refcount == 1 by construction). `ListSetInPlace`
+    // can therefore mutate the header directly.
     for i in (1..depth).rev() {
         instrs.push(WasmBackendInstr::LoadLocal {
             name: descent_tmp(i - 1),
@@ -2840,15 +2865,18 @@ fn lower_assign_index_reuse(
                 name: ascent_tmp(i + 1),
             });
         }
-        instrs.push(WasmBackendInstr::Intrinsic {
-            intrinsic: BackendIntrinsic::ListSet,
-        });
+        let intrinsic = if i < reuse_depth {
+            BackendIntrinsic::ListSetInPlace
+        } else {
+            BackendIntrinsic::ListSet
+        };
+        instrs.push(WasmBackendInstr::Intrinsic { intrinsic });
         instrs.push(WasmBackendInstr::StoreLocal {
             name: ascent_tmp(i),
         });
     }
 
-    // 2–3. ListSetInPlace(root, index, updated) → same list handle → StoreLocal root
+    // Outer (level 0). Always reuse since `levels[0]` is `Some(class)` here.
     instrs.extend(lower_value_ctx(
         &ValueExpr::Var(root.to_string()),
         aliases,
@@ -2870,8 +2898,9 @@ fn lower_assign_index_reuse(
         name: root.to_string(),
     });
 
-    // 4. alloc_reuse(tok_local, sc, Retain) → resets refcount=1 on the header.
-    //    The returned tagged ptr is discarded (root already points to the same header).
+    // alloc_reuse(tok_local, sc, Retain) → resets refcount=1 on the root
+    // header. The returned tagged ptr is discarded (root already points to
+    // the same header).
     instrs.push(WasmBackendInstr::AllocReuse {
         token_local: tok_local,
         size_class: sc.into(),
@@ -5692,6 +5721,114 @@ build n =
                 ..
             } if token_local == "__perceus_reuse_token_0"
         )));
+    }
+
+    #[test]
+    fn lower_assign_index_two_levels_uniform_inner_reuses_all_levels() {
+        // levels = [Some(_), Some(_)] → both inner and outer use ListSetInPlace
+        // and there must be no copy-on-write ListSet emitted.
+        let comp = CompExpr::AssignIndex {
+            root: "xs".to_string(),
+            path: vec![ValueExpr::IntLit(1), ValueExpr::IntLit(0)],
+            value: Box::new(CompExpr::Value(ValueExpr::IntLit(42))),
+            reuse_token: Some(goby_core::ir::AssignIndexReuse {
+                root_token: "__perceus_reuse_token_0".to_string(),
+                levels: vec![
+                    Some(SizeClass::for_list_header(1)),
+                    Some(SizeClass::for_list_header(1)),
+                ],
+            }),
+        };
+        let instrs = lower_comp(&comp).expect("nested per-level reuse should lower");
+
+        let in_place_count = instrs
+            .iter()
+            .filter(|instr| {
+                matches!(
+                    instr,
+                    I::Intrinsic {
+                        intrinsic: BackendIntrinsic::ListSetInPlace
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            in_place_count, 2,
+            "per-level reuse must emit exactly two ListSetInPlace (inner+outer): {instrs:?}"
+        );
+        let copy_count = instrs
+            .iter()
+            .filter(|instr| {
+                matches!(
+                    instr,
+                    I::Intrinsic {
+                        intrinsic: BackendIntrinsic::ListSet
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            copy_count, 0,
+            "per-level reuse must not fall back to ListSet: {instrs:?}"
+        );
+        // Only the root token survives — inner reuse needs no extra DropReuse.
+        let drop_reuse_count = instrs
+            .iter()
+            .filter(|instr| matches!(instr, I::RefCountDropReuse { .. }))
+            .count();
+        assert_eq!(
+            drop_reuse_count, 1,
+            "inner levels must not emit additional RefCountDropReuse: {instrs:?}"
+        );
+        let alloc_reuse_count = instrs
+            .iter()
+            .filter(|instr| matches!(instr, I::AllocReuse { .. }))
+            .count();
+        assert_eq!(
+            alloc_reuse_count, 1,
+            "inner levels must not emit additional AllocReuse: {instrs:?}"
+        );
+    }
+
+    #[test]
+    fn lower_assign_index_two_levels_inner_none_after_outer_reuse_uses_listset() {
+        // First-None rule: levels = [Some(_), None] → only outer in-place,
+        // inner uses ListSet. Equivalent to the existing outer-only test but
+        // exercises the new code path explicitly.
+        let comp = CompExpr::AssignIndex {
+            root: "xs".to_string(),
+            path: vec![ValueExpr::IntLit(1), ValueExpr::IntLit(0)],
+            value: Box::new(CompExpr::Value(ValueExpr::IntLit(42))),
+            reuse_token: Some(goby_core::ir::AssignIndexReuse {
+                root_token: "__perceus_reuse_token_0".to_string(),
+                levels: vec![Some(SizeClass::for_list_header(1)), None],
+            }),
+        };
+        let instrs = lower_comp(&comp).expect("first-none AssignIndex should lower");
+        let in_place_count = instrs
+            .iter()
+            .filter(|instr| {
+                matches!(
+                    instr,
+                    I::Intrinsic {
+                        intrinsic: BackendIntrinsic::ListSetInPlace
+                    }
+                )
+            })
+            .count();
+        assert_eq!(in_place_count, 1, "only outer is in-place: {instrs:?}");
+        let copy_count = instrs
+            .iter()
+            .filter(|instr| {
+                matches!(
+                    instr,
+                    I::Intrinsic {
+                        intrinsic: BackendIntrinsic::ListSet
+                    }
+                )
+            })
+            .count();
+        assert_eq!(copy_count, 1, "inner must use copy ListSet: {instrs:?}");
     }
 
     // ── lower_supported_inline_list_fold_mutating_each ─────────────────────

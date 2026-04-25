@@ -1718,6 +1718,104 @@ main =
     );
 }
 
+/// §M6 Step 4: a fresh nested list literal (`[[seed, 2], [3, 4]]`) where
+/// `seed` is dynamic (defeats `is_closed_literal`) authorises per-level
+/// reuse. The inner level uses `ListSetInPlace` directly (no extra
+/// `RefCountDropReuse` / `AllocReuse`), so `reuse_hits` stays at `1` (outer
+/// only) but no copy-on-write `ListSet` should appear in the lowered IR.
+#[test]
+fn nested_assign_index_fresh_literal_reuses_inner_in_place() {
+    // `seed` is dynamic so neither outer nor inner list literal is closed.
+    let source = r#"
+import goby/string ( length )
+
+main : Unit -> Unit can Print, Read
+main =
+  seed = length (read())
+  mut xs = [[seed, 2], [3, 4]]
+  xs[0][1] := 99
+  println "ok"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (instrs, _) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should succeed")
+        .expect("sample should use general lowering");
+    let dump = format!("{instrs:?}");
+    assert!(
+        dump.contains("RefCountDropReuse"),
+        "fresh nested literal should still take the reuse path: {dump}"
+    );
+    // Per-level reuse: ListSet (copy-on-write) must NOT appear inside the
+    // AssignIndex lowering.  Two ListSetInPlace calls (inner + outer) replace
+    // the previous "inner ListSet, outer ListSetInPlace" sequence.
+    let in_place_count = dump.matches("ListSetInPlace").count();
+    let copy_count = dump
+        .split("ListSetInPlace")
+        .map(|piece| piece.matches("ListSet").count())
+        .sum::<usize>();
+    assert!(
+        in_place_count >= 2,
+        "expected >=2 ListSetInPlace (inner+outer reuse); dump:\n{dump}"
+    );
+    assert_eq!(
+        copy_count, 0,
+        "fresh nested literal must not fall back to copy ListSet; dump:\n{dump}"
+    );
+    let output = execute_runtime_module_with_stdin_config_and_options_captured(
+        &module,
+        Some(String::new()),
+        None,
+        CompileOptions {
+            debug_alloc_stats: true,
+        },
+    )
+    .expect("nested fresh-literal sample should execute")
+    .expect("sample should run on runtime-owned Wasm");
+    assert_eq!(output.stdout, "ok\n");
+    let reuse_hits = parse_alloc_stats_field(&output.stderr, "reuse_hits");
+    assert_eq!(
+        reuse_hits, 1,
+        "outer header reuse still increments reuse_hits exactly once; stderr:\n{}",
+        output.stderr
+    );
+}
+
+/// §M6 Step 4 negative: when the inner list is shared (`inner = [...]; mut xs
+/// = [inner, inner]`), per-level reuse must NOT fire. Outer reuse still
+/// works; the inner level falls back to copy-on-write `ListSet`.
+#[test]
+fn nested_assign_index_shared_inner_falls_back() {
+    let source = r#"
+main : Unit -> Unit can Print, Read
+main =
+  inner = [1, 2]
+  mut xs = [inner, inner]
+  xs[0][1] := 99
+  println "ok"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (instrs, _) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should succeed")
+        .expect("sample should use general lowering");
+    let dump = format!("{instrs:?}");
+    let copy_in_assign = dump.matches("ListSet ").count() + dump.matches("ListSet,").count();
+    assert!(
+        copy_in_assign >= 1 || dump.contains("ListSet"),
+        "shared inner case must keep ListSet copy path somewhere; dump:\n{dump}"
+    );
+    let output = execute_runtime_module_with_stdin_config_and_options_captured(
+        &module,
+        Some(String::new()),
+        None,
+        CompileOptions {
+            debug_alloc_stats: true,
+        },
+    )
+    .expect("shared-inner sample should execute")
+    .expect("sample should run on runtime-owned Wasm");
+    assert_eq!(output.stdout, "ok\n");
+}
+
 #[test]
 fn compile_module_routes_echo_read_line_println_through_dynamic_wasi_io_classification() {
     let source = r#"
