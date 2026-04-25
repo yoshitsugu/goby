@@ -100,6 +100,7 @@ pub(crate) fn lower_comp(comp: &CompExpr) -> Result<Vec<WasmBackendInstr>, Lower
         &HashMap::new(),
         &bindings,
         &HashSet::new(),
+        &HashSet::new(),
         &mut lambda_decls,
     )?;
     debug_assert!(
@@ -129,6 +130,7 @@ pub(crate) fn lower_comp_with_decls(
         &HashMap::new(),
         &bindings,
         known_decls,
+        &HashSet::new(),
         &mut lambda_decls,
     )?;
     debug_assert!(
@@ -156,6 +158,7 @@ pub(crate) fn lower_comp_collecting_lambdas(
         &HashMap::new(),
         &bindings,
         known_decls,
+        &HashSet::new(),
         lambda_decls,
     )
 }
@@ -164,6 +167,7 @@ pub(crate) fn lower_comp_collecting_lambdas_with_params(
     comp: &CompExpr,
     decl_params: &[String],
     known_decls: &HashSet<String>,
+    reuse_decls: &HashSet<String>,
     lambda_decls: &mut Vec<LambdaAuxDecl>,
 ) -> Result<Vec<WasmBackendInstr>, LowerError> {
     let bindings = ClosureBindingEnv::with_decl_params(decl_params.iter().map(String::as_str));
@@ -173,6 +177,7 @@ pub(crate) fn lower_comp_collecting_lambdas_with_params(
         &HashMap::new(),
         &bindings,
         known_decls,
+        reuse_decls,
         lambda_decls,
     )
 }
@@ -539,7 +544,11 @@ fn rename_comp_var(comp: &CompExpr, from: &str, to: &str) -> CompExpr {
             then_: Box::new(rename_comp_var(then_, from, to)),
             else_: Box::new(rename_comp_var(else_, from, to)),
         },
-        CompExpr::Call { callee, args, reuse_token } => CompExpr::Call {
+        CompExpr::Call {
+            callee,
+            args,
+            reuse_token,
+        } => CompExpr::Call {
             callee: Box::new(rename_value_var(callee, from, to)),
             args: args
                 .iter()
@@ -964,6 +973,7 @@ fn lower_supported_inline_list_fold_mutating_each(
         &body_aliases,
         &cb_bindings,
         known_decls,
+        &HashSet::new(),
         lambda_decls,
     )?);
     body_instrs.push(WasmBackendInstr::Intrinsic {
@@ -1235,6 +1245,7 @@ fn lower_list_each_mutating_assign(
         &body_aliases,
         &cb_bindings,
         known_decls,
+        &HashSet::new(),
         lambda_decls,
     )?);
     body_instrs.push(WasmBackendInstr::Intrinsic {
@@ -1452,8 +1463,15 @@ fn lower_self_recursive_int_scan_case(
                 return Ok(None);
             }
             decls.insert(name.clone());
-            let value_instrs =
-                lower_comp_inner(value, false, aliases, bindings, known_decls, lambda_decls)?;
+            let value_instrs = lower_comp_inner(
+                value,
+                false,
+                aliases,
+                bindings,
+                known_decls,
+                &HashSet::new(),
+                lambda_decls,
+            )?;
             let mut instrs = hoist_declare_locals(value_instrs, decls);
             instrs.push(WasmBackendInstr::StoreLocal { name: name.clone() });
             let mut scoped_bindings = bindings.clone();
@@ -1483,8 +1501,15 @@ fn lower_self_recursive_int_scan_case(
                 if contains_self_decl_call(stmt, decl_name) {
                     return Ok(None);
                 }
-                let stmt_instrs =
-                    lower_comp_inner(stmt, false, aliases, bindings, known_decls, lambda_decls)?;
+                let stmt_instrs = lower_comp_inner(
+                    stmt,
+                    false,
+                    aliases,
+                    bindings,
+                    known_decls,
+                    &HashSet::new(),
+                    lambda_decls,
+                )?;
                 instrs.extend(hoist_declare_locals(stmt_instrs, decls));
                 instrs.push(WasmBackendInstr::Drop);
             }
@@ -1526,8 +1551,15 @@ fn lower_self_recursive_int_scan_case(
             if contains_self_decl_call(comp, decl_name) {
                 return Ok(None);
             }
-            let base_instrs =
-                lower_comp_inner(comp, false, aliases, bindings, known_decls, lambda_decls)?;
+            let base_instrs = lower_comp_inner(
+                comp,
+                false,
+                aliases,
+                bindings,
+                known_decls,
+                &HashSet::new(),
+                lambda_decls,
+            )?;
             let mut instrs = vec![WasmBackendInstr::LoadLocal {
                 name: acc_local.to_string(),
             }];
@@ -1822,20 +1854,44 @@ fn direct_decl_call_instr(decl_name: &str, tail_position: bool) -> WasmBackendIn
     }
 }
 
+/// Append a trailing reuse-token actual before a direct decl call.
+/// - If `reuse_token = Some(tok)`, push `LoadLocal(tok)` (caller donates its token).
+/// - Else if the callee is in `reuse_decls`, push `I64Const(0)` (no token to donate).
+/// - Otherwise do nothing (callee has no hidden reuse param).
+fn emit_reuse_trailing_actual(
+    instrs: &mut Vec<WasmBackendInstr>,
+    callee_name: &str,
+    reuse_token: &Option<String>,
+    reuse_decls: &HashSet<String>,
+) {
+    if let Some(tok) = reuse_token {
+        instrs.push(WasmBackendInstr::LoadLocal { name: tok.clone() });
+    } else if reuse_decls.contains(callee_name) {
+        instrs.push(WasmBackendInstr::I64Const(0));
+    }
+}
+
 fn lower_comp_inner(
     comp: &CompExpr,
     tail_position: bool,
     aliases: &HashMap<String, AliasValue>,
     bindings: &ClosureBindingEnv,
     known_decls: &HashSet<String>,
+    reuse_decls: &HashSet<String>,
     lambda_decls: &mut Vec<LambdaAuxDecl>,
 ) -> Result<Vec<WasmBackendInstr>, LowerError> {
     match comp {
         // Lambda in value position (e.g. returned from a decl or bound by Let) is lowered
         // through lower_lambda which has access to bindings/known_decls/lambda_decls.
-        CompExpr::Value(ValueExpr::Lambda { param, body }) => {
-            lower_lambda(param, body, aliases, bindings, known_decls, lambda_decls)
-        }
+        CompExpr::Value(ValueExpr::Lambda { param, body }) => lower_lambda(
+            param,
+            body,
+            aliases,
+            bindings,
+            known_decls,
+            reuse_decls,
+            lambda_decls,
+        ),
         CompExpr::Value(v) => lower_value_ctx(v, aliases, bindings, known_decls),
 
         CompExpr::Let {
@@ -1852,6 +1908,7 @@ fn lower_comp_inner(
                     &scoped_aliases,
                     &scoped_bindings,
                     known_decls,
+                    reuse_decls,
                     lambda_decls,
                 )?;
                 if !instrs_load_local(&body_instrs, name) {
@@ -1859,8 +1916,15 @@ fn lower_comp_inner(
                 }
             }
             let mut instrs = vec![WasmBackendInstr::DeclareLocal { name: name.clone() }];
-            let value_instrs =
-                lower_comp_inner(value, false, aliases, bindings, known_decls, lambda_decls)?;
+            let value_instrs = lower_comp_inner(
+                value,
+                false,
+                aliases,
+                bindings,
+                known_decls,
+                reuse_decls,
+                lambda_decls,
+            )?;
             // Track whether the local holds a capturing closure so later call sites can
             // preserve closure-specific metadata even though emission converges on the
             // generic indirect-call path.
@@ -1883,6 +1947,7 @@ fn lower_comp_inner(
                 &scoped_aliases,
                 &scoped_bindings,
                 known_decls,
+                reuse_decls,
                 lambda_decls,
             )?);
             Ok(instrs)
@@ -1897,6 +1962,7 @@ fn lower_comp_inner(
                     aliases,
                     bindings,
                     known_decls,
+                    reuse_decls,
                     lambda_decls,
                 )?);
                 instrs.push(WasmBackendInstr::Drop);
@@ -1907,6 +1973,7 @@ fn lower_comp_inner(
                 aliases,
                 bindings,
                 known_decls,
+                reuse_decls,
                 lambda_decls,
             )?);
             Ok(instrs)
@@ -1934,7 +2001,11 @@ fn lower_comp_inner(
             Ok(instrs)
         }
 
-        CompExpr::Call { callee, args, .. } => {
+        CompExpr::Call {
+            callee,
+            args,
+            reuse_token,
+        } => {
             if let Some(op) = resolve_effect_call_target(callee, aliases) {
                 let mut instrs = Vec::new();
                 for arg in args {
@@ -2050,6 +2121,7 @@ fn lower_comp_inner(
                         lambda_decls,
                     )?);
                 }
+                emit_reuse_trailing_actual(&mut instrs, name, reuse_token, reuse_decls);
                 instrs.push(direct_decl_call_instr(name, tail_position));
                 Ok(instrs)
             } else if let goby_core::ir::ValueExpr::Var(name) = callee.as_ref() {
@@ -2067,6 +2139,12 @@ fn lower_comp_inner(
                             lambda_decls,
                         )?);
                     }
+                    emit_reuse_trailing_actual(
+                        &mut instrs,
+                        resolved_name,
+                        reuse_token,
+                        reuse_decls,
+                    );
                     instrs.push(direct_decl_call_instr(resolved_name, tail_position));
                     Ok(instrs)
                 } else if (name == "fold"
@@ -2172,6 +2250,7 @@ fn lower_comp_inner(
                 aliases,
                 bindings,
                 known_decls,
+                reuse_decls,
                 lambda_decls,
             )?;
             let else_instrs = lower_comp_inner(
@@ -2180,6 +2259,7 @@ fn lower_comp_inner(
                 aliases,
                 bindings,
                 known_decls,
+                reuse_decls,
                 lambda_decls,
             )?;
             instrs.push(WasmBackendInstr::If {
@@ -2220,6 +2300,7 @@ fn lower_comp_inner(
                     aliases,
                     bindings,
                     known_decls,
+                    reuse_decls,
                     lambda_decls,
                 )?);
                 instrs.push(WasmBackendInstr::StoreLocal {
@@ -2244,6 +2325,7 @@ fn lower_comp_inner(
                     &body_aliases,
                     &body_bindings,
                     known_decls,
+                    reuse_decls,
                     lambda_decls,
                 )?);
                 Ok(instrs)
@@ -2257,6 +2339,7 @@ fn lower_comp_inner(
                     aliases,
                     bindings,
                     known_decls,
+                    reuse_decls,
                     lambda_decls,
                 )?);
                 instrs.push(WasmBackendInstr::StoreLocal { name: name.clone() });
@@ -2268,6 +2351,7 @@ fn lower_comp_inner(
                     aliases,
                     &body_bindings,
                     known_decls,
+                    reuse_decls,
                     lambda_decls,
                 )?);
                 Ok(instrs)
@@ -2278,8 +2362,15 @@ fn lower_comp_inner(
             // If the binding is cell-promoted, write through the cell.
             if aliases.get(name.as_str()) == Some(&AliasValue::CellPromoted) {
                 let cell_local = cell_local_name(name);
-                let value_instrs =
-                    lower_comp_inner(value, false, aliases, bindings, known_decls, lambda_decls)?;
+                let value_instrs = lower_comp_inner(
+                    value,
+                    false,
+                    aliases,
+                    bindings,
+                    known_decls,
+                    reuse_decls,
+                    lambda_decls,
+                )?;
                 let mut instrs = vec![WasmBackendInstr::StoreCellValue {
                     cell_ptr_instrs: vec![WasmBackendInstr::LoadLocal { name: cell_local }],
                     value_instrs,
@@ -2292,8 +2383,15 @@ fn lower_comp_inner(
             } else {
                 // Plain path: lower value and store in the existing named local.
                 // No DeclareLocal is emitted because the local was already declared by the enclosing LetMut.
-                let mut instrs =
-                    lower_comp_inner(value, false, aliases, bindings, known_decls, lambda_decls)?;
+                let mut instrs = lower_comp_inner(
+                    value,
+                    false,
+                    aliases,
+                    bindings,
+                    known_decls,
+                    reuse_decls,
+                    lambda_decls,
+                )?;
                 instrs.push(WasmBackendInstr::StoreLocal { name: name.clone() });
                 // Assign produces Unit.
                 instrs.push(WasmBackendInstr::I64Const(
@@ -2310,6 +2408,7 @@ fn lower_comp_inner(
             aliases,
             bindings,
             known_decls,
+            reuse_decls,
             lambda_decls,
         ),
 
@@ -2320,6 +2419,7 @@ fn lower_comp_inner(
             aliases,
             bindings,
             known_decls,
+            reuse_decls,
             lambda_decls,
         ),
         CompExpr::Dup { value } => {
@@ -2422,6 +2522,7 @@ fn lower_assign_index(
     aliases: &HashMap<String, AliasValue>,
     bindings: &ClosureBindingEnv,
     known_decls: &HashSet<String>,
+    reuse_decls: &HashSet<String>,
     lambda_decls: &mut Vec<LambdaAuxDecl>,
 ) -> Result<Vec<WasmBackendInstr>, LowerError> {
     let depth = path.len();
@@ -2519,7 +2620,15 @@ fn lower_assign_index(
     // ascent_tmp(0)       = list.set(root, path[0], ascent_tmp(1))
     //
     // For depth=1: ascent_tmp(0) = list.set(root, path[0], rhs_value)
-    let rhs_instrs = lower_comp_inner(value, false, aliases, bindings, known_decls, lambda_decls)?;
+    let rhs_instrs = lower_comp_inner(
+        value,
+        false,
+        aliases,
+        bindings,
+        known_decls,
+        reuse_decls,
+        lambda_decls,
+    )?;
 
     for i in (0..depth).rev() {
         instrs.push(WasmBackendInstr::LoadLocal {
@@ -2589,6 +2698,7 @@ fn lower_case(
     aliases: &HashMap<String, AliasValue>,
     bindings: &ClosureBindingEnv,
     known_decls: &HashSet<String>,
+    reuse_decls: &HashSet<String>,
     lambda_decls: &mut Vec<LambdaAuxDecl>,
 ) -> Result<Vec<WasmBackendInstr>, LowerError> {
     use crate::gen_lower::backend_ir::{BackendCasePattern, BackendListPatternItem, CaseArmInstr};
@@ -2649,6 +2759,7 @@ fn lower_case(
             aliases,
             &arm_bindings,
             known_decls,
+            reuse_decls,
             lambda_decls,
         )?;
         backend_arms.push(CaseArmInstr {
@@ -2992,9 +3103,15 @@ fn lower_value_as_arg(
             }
             lower_value(v)
         }
-        ValueExpr::Lambda { param, body } => {
-            lower_lambda(param, body, aliases, bindings, known_decls, lambda_decls)
-        }
+        ValueExpr::Lambda { param, body } => lower_lambda(
+            param,
+            body,
+            aliases,
+            bindings,
+            known_decls,
+            &HashSet::new(),
+            lambda_decls,
+        ),
         ValueExpr::GlobalRef { module, name } => {
             if let Some(BackendEffectOp::Print(op)) = backend_effect_op(module, name) {
                 return lower_print_effect_as_arg(op, lambda_decls);
@@ -3047,6 +3164,7 @@ fn lower_lambda(
     outer_aliases: &HashMap<String, AliasValue>,
     bindings: &ClosureBindingEnv,
     known_decls: &HashSet<String>,
+    reuse_decls: &HashSet<String>,
     lambda_decls: &mut Vec<LambdaAuxDecl>,
 ) -> Result<Vec<WasmBackendInstr>, LowerError> {
     let (params, flattened_body) = flatten_lambda_chain(param, body);
@@ -3065,6 +3183,7 @@ fn lower_lambda(
             &HashMap::new(),
             &body_bindings,
             known_decls,
+            reuse_decls,
             lambda_decls,
         )?;
         let n = LAMBDA_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
@@ -3142,6 +3261,7 @@ fn lower_lambda(
         &body_aliases,
         &body_bindings,
         known_decls,
+        reuse_decls,
         lambda_decls,
     )?;
 
@@ -3461,6 +3581,7 @@ mod tests {
             aliases,
             &bindings,
             &HashSet::new(),
+            &HashSet::new(),
             &mut lambda_decls,
         )
     }
@@ -3681,7 +3802,7 @@ build n =
             body: Box::new(CompExpr::Call {
                 callee: Box::new(ValueExpr::Var("printer".to_string())),
                 args: vec![ValueExpr::Var("text".to_string())],
-            reuse_token: None,
+                reuse_token: None,
             }),
         };
         let instrs = lower_comp(&comp).expect("local print alias call should lower");
@@ -3803,7 +3924,7 @@ build n =
                     ValueExpr::Var("text".to_string()),
                     ValueExpr::StrLit("\n".to_string()),
                 ],
-            reuse_token: None,
+                reuse_token: None,
             }),
             body: Box::new(CompExpr::Call {
                 callee: Box::new(ValueExpr::Var("each".to_string())),
@@ -3814,7 +3935,7 @@ build n =
                         name: "println".to_string(),
                     },
                 ],
-            reuse_token: None,
+                reuse_token: None,
             }),
         };
         let known_decls: HashSet<String> = ["each".to_string()].into();
@@ -3853,7 +3974,7 @@ build n =
                     ValueExpr::Var("text".to_string()),
                     ValueExpr::StrLit("\n".to_string()),
                 ],
-            reuse_token: None,
+                reuse_token: None,
             }),
             body: Box::new(CompExpr::Let {
                 name: "line".to_string(),
@@ -3864,7 +3985,7 @@ build n =
                         name: "get".to_string(),
                     }),
                     args: vec![ValueExpr::Var("lines".to_string()), ValueExpr::IntLit(1)],
-            reuse_token: None,
+                    reuse_token: None,
                 }),
                 body: Box::new(CompExpr::PerformEffect {
                     effect: "Print".to_string(),
@@ -4107,6 +4228,7 @@ build n =
             &HashMap::new(),
             &bindings,
             &known_decls,
+            &HashSet::new(),
             &mut Vec::new(),
         )
         .expect("known_decl Var callee should lower");
@@ -4124,7 +4246,7 @@ build n =
             stmts: vec![CompExpr::Call {
                 callee: Box::new(ValueExpr::Var("helper".to_string())),
                 args: vec![ValueExpr::IntLit(1)],
-            reuse_token: None,
+                reuse_token: None,
             }],
             tail: Box::new(CompExpr::Value(ValueExpr::Unit)),
         };
@@ -4166,6 +4288,7 @@ build n =
             &HashMap::new(),
             &bindings,
             &known_decls,
+            &HashSet::new(),
             &mut Vec::new(),
         )
         .expect("funcref arg should lower OK");
@@ -4438,7 +4561,7 @@ build n =
                     body: CompExpr::Call {
                         callee: Box::new(ValueExpr::Var("helper".to_string())),
                         args: vec![ValueExpr::Var("x".to_string())],
-            reuse_token: None,
+                        reuse_token: None,
                     },
                 },
                 IrCaseArm {
@@ -4716,7 +4839,7 @@ build n =
                 body: Box::new(CompExpr::Call {
                     callee: Box::new(ValueExpr::Var("add10".to_string())),
                     args: vec![ValueExpr::IntLit(5)],
-            reuse_token: None,
+                    reuse_token: None,
                 }),
             }),
         };
@@ -4865,6 +4988,7 @@ build n =
             true,
             &aliases,
             &ClosureBindingEnv::default(),
+            &HashSet::new(),
             &HashSet::new(),
             &mut Vec::new(),
         )
@@ -5307,6 +5431,7 @@ build n =
             aliases,
             bindings,
             known_decls,
+            &HashSet::new(),
             &mut lambda_decls,
         )?;
         Ok((instrs, lambda_decls))

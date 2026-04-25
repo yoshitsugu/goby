@@ -1,14 +1,36 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-24 (Perceus M5 Step 8: tail-call cross-call reuse IR pass)
+Last updated: 2026-04-25 (Perceus M5 Step 9: wasm ABI wiring — 9-a/9-b/9-d landed, source-level reuse still pending)
 
 ## Current Focus
 
-**Perceus M3–M4.5 complete. M5 in progress — Step 8 (tail-call cross-call
-reuse IR) landed.** Intra-block `DropReuse`/`AllocReuse` pairing and the
-tail-call reuse-token IR transformation are both wired into
-`run_perceus_passes`. Backend lowering still uses the no-op fallback path
-(Step 9 connects the wasm ABI so `reuse_hits` begins firing).
+**Perceus M3–M4.5 complete. M5 in progress — Step 9 (wasm ABI wiring) 継続中。**
+Steps 9-a (callee hidden trailing `i64` parameter), 9-b (caller trailing actual),
+and 9-d (cross-call runtime compile test) are implemented and full workspace gate is green.
+Still uncommitted.
+
+- `AuxDecl.reuse_param_name: Option<String>` 追加済み (emit.rs)
+- callee signature: `reuse_param_name.is_some()` の時 wasm type に +1 `i64` param
+- caller: `lower_comp_inner` に `reuse_decls: &HashSet<String>` 追加、
+  `emit_reuse_trailing_actual` が `LoadLocal(tok)` or `I64Const(0)` を push
+- `reuse_decls` は `lower_module_to_instrs` で `ir_module.decls` から構築し
+  `lower_aux_decl` → `lower_comp_inner` まで伝播
+
+**次のアクション:**
+- 9-d landed:
+  - `crates/goby-wasm/src/compile_tests.rs` に hand-built backend-IR runtime test
+    `cross_call_reuse_hidden_param_increments_reuse_hits` を追加
+  - hidden trailing token actual + hidden callee param + `AllocReuse` を通して
+    `reuse_hits >= 2` を観測
+- 9-e measurement:
+  - `cargo run -p goby-cli -- run --debug-alloc-stats --max-memory-mb 16 examples/refcount_reuse_loop.gb`
+    still reports `total_bytes=155954768`, `reuse_hits=0`
+  - known reason remains: `step` starts with `if`, so current `first_alloc_class` analysis
+    does not mark it reusable; ABI is wired, but the normative source has not reached it yet
+- Next:
+  - source-level integration shape that actually triggers tail cross-call reuse for the normative path
+    (either reshape `refcount_reuse_loop` lowering path or add a smaller source-level acceptance first)
+- `goby-invariants` チェック後にコミット
 
 See `doc/PLAN_PERCEUS.md` §M4 "As-shipped scope note" for the full M4 scope,
 and the M5 section for the current step-by-step progress.
@@ -117,9 +139,10 @@ and the M5 section for the current step-by-step progress.
   - focused Perceus tests grew from 18 to 22.
 
 **Perceus M5** — intra-block pairing + tail-call reuse IR complete (Step 8).
-Next: Step 9 — wasm ABI wiring so `reuse_hits` begins firing in the
-`refcount_reuse_loop` benchmark. Keep `list_case.gb` alloc-stats coverage on
-the follow-up list once it moves to the GeneralLowered path.
+Step 9 (wasm ABI wiring) continues: 9-a/9-b/9-d 実装済み、full gate green、未コミット。
+The new runtime compile test proves hidden-param cross-call reuse works at the Wasm ABI layer.
+`refcount_reuse_loop.gb` still does not hit the path (`reuse_hits=0`), so source-level
+integration remains the next slice. Keep `list_case.gb` alloc-stats coverage on the follow-up list.
 
 - M5 IR scaffold started on 2026-04-23:
   - shared IR now has `AllocInit`, `CompExpr::DropReuse`, and
@@ -223,9 +246,10 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 
 ## Immediate Next Actions
 
-1. **Perceus M5:** measure `examples/refcount_reuse_loop.gb` allocation under the
-   now-wired fallback reuse pass (Step 6.5), then implement the `__goby_drop_reuse`
-   / `__goby_alloc_reuse` runtime helpers and the tail-call reuse-token plumbing.
+1. **Perceus M5 Step 9 (続き):**
+   - source-level acceptance for cross-call reuse on a real lowered Goby program
+   - `refcount_reuse_loop.gb` を `reuse_hits > 0` / low-allocation path に乗せる
+   - `goby-invariants` チェック → commit (current Step 9 ABI slice)
 2. Extend `tooling/` syntax highlight definitions to cover `^` (tracked as a
    TODO under `doc/PLAN.md` §4.2.1).
 

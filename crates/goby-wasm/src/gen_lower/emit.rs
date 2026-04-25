@@ -1281,10 +1281,9 @@ pub(crate) fn compute_tail_call_group_plans(aux_decls: &[AuxDecl]) -> Vec<TailCa
         let member_arities: HashMap<String, usize> = component
             .iter()
             .map(|&idx| {
-                (
-                    aux_decls[idx].decl_name.clone(),
-                    aux_decls[idx].param_names.len(),
-                )
+                let d = &aux_decls[idx];
+                let arity = d.param_names.len() + if d.reuse_param_name.is_some() { 1 } else { 0 };
+                (d.decl_name.clone(), arity)
             })
             .collect();
         let max_arity = member_arities.values().copied().max().unwrap_or(0);
@@ -1336,6 +1335,9 @@ pub(crate) struct AuxDecl {
     pub(crate) param_names: Vec<String>,
     pub(crate) returns_wasm_heap: bool,
     pub(crate) instrs: Vec<WasmBackendInstr>,
+    /// If `Some(name)`, this decl has a hidden trailing `i64` reuse-token parameter.
+    /// The name is registered as a wasm local at index `param_names.len()`.
+    pub(crate) reuse_param_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1623,7 +1625,13 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         .iter()
         .map(|decl| {
             let idx = types.len();
-            let params: Vec<ValType> = vec![ValType::I64; decl.param_names.len()];
+            let param_count = decl.param_names.len()
+                + if decl.reuse_param_name.is_some() {
+                    1
+                } else {
+                    0
+                };
+            let params: Vec<ValType> = vec![ValType::I64; param_count];
             types.ty().function(params, [ValType::I64]);
             idx
         })
@@ -1975,7 +1983,12 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             .filter(|i| matches!(i, WasmBackendInstr::DeclareLocal { .. }))
             .count() as u32;
         let aux_helper_i64_scratch_count = required_i64_scratch_count(&decl.instrs);
-        let aux_param_count = decl.param_names.len() as u32;
+        let aux_param_count = decl.param_names.len() as u32
+            + if decl.reuse_param_name.is_some() {
+                1
+            } else {
+                0
+            };
         let aux_i64_count = aux_named_i64_count + aux_helper_i64_scratch_count;
         let aux_i32_scratch_count = required_i32_scratch_count(&decl.instrs);
         let aux_i32_base = aux_param_count + aux_i64_count;
@@ -2003,6 +2016,10 @@ pub(crate) fn emit_general_module_with_aux_and_options(
         );
         for param_name in &decl.param_names {
             ctx.locals.insert(param_name.clone(), ctx.next_local);
+            ctx.next_local += 1;
+        }
+        if let Some(reuse_tok) = &decl.reuse_param_name {
+            ctx.locals.insert(reuse_tok.clone(), ctx.next_local);
             ctx.next_local += 1;
         }
         emit_function_body(
@@ -11489,6 +11506,7 @@ mod tests {
             param_names: vec!["_unit".to_string()],
             returns_wasm_heap: false,
             instrs: vec![I::I64Const(crate::gen_lower::value::encode_int(1).unwrap())],
+            reuse_param_name: None,
         }];
         let wasm = emit_general_module_with_aux(&instrs, &aux_decls, &default_layout())
             .expect("module with aux decl should emit");

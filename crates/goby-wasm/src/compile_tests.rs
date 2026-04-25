@@ -2836,3 +2836,120 @@ main =
         "expected reuse_hits == 1 after drop_reuse on unique allocation; got {hits}"
     );
 }
+
+/// M5 Step 9: cross-call hidden reuse-token ABI must let a callee reuse the
+/// caller-donated allocation across a direct decl call.
+#[test]
+fn cross_call_reuse_hidden_param_increments_reuse_hits() {
+    use crate::gen_lower::backend_ir::{BackendAllocInit, WasmBackendInstr as I};
+    use crate::gen_lower::emit::{AuxDecl, EmitOptions, emit_general_module_with_aux_and_options};
+    use crate::gen_lower::value::encode_int;
+    use crate::layout::{GLOBAL_REUSE_HITS_OFFSET, MemoryLayout};
+    use crate::size_class::SizeClass;
+    use wasmtime::{Config, Engine, Linker, Module as WasmModule, Store};
+    use wasmtime_wasi::WasiCtxBuilder;
+    use wasmtime_wasi::p1::{self, WasiP1Ctx};
+    use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
+
+    let sc = SizeClass::for_list_header(1);
+    let zero_tok = "__zero_tok".to_string();
+    let acc = "__acc".to_string();
+    let tok = "__tok".to_string();
+    let reuse_param = "__reuse_param".to_string();
+
+    let list_init = BackendAllocInit::ListLit {
+        element_instrs: vec![vec![I::I64Const(encode_int(1).expect("encode int"))]],
+    };
+    let aux_decls = vec![AuxDecl {
+        decl_name: "step".to_string(),
+        param_names: vec!["acc".to_string()],
+        returns_wasm_heap: true,
+        instrs: vec![I::AllocReuse {
+            token_local: reuse_param.clone(),
+            size_class: sc,
+            init: list_init.clone(),
+        }],
+        reuse_param_name: Some(reuse_param),
+    }];
+
+    let main_instrs = vec![
+        I::DeclareLocal {
+            name: zero_tok.clone(),
+        },
+        I::I64Const(0),
+        I::StoreLocal {
+            name: zero_tok.clone(),
+        },
+        I::DeclareLocal { name: acc.clone() },
+        I::DeclareLocal { name: tok.clone() },
+        I::AllocReuse {
+            token_local: zero_tok.clone(),
+            size_class: sc,
+            init: list_init,
+        },
+        I::StoreLocal { name: acc.clone() },
+        I::LoadLocal { name: acc.clone() },
+        I::RefCountDropReuse {
+            token_local: tok.clone(),
+        },
+        I::LoadLocal { name: acc.clone() },
+        I::LoadLocal { name: tok.clone() },
+        I::DeclCall {
+            decl_name: "step".to_string(),
+        },
+        I::StoreLocal { name: acc.clone() },
+        I::LoadLocal { name: acc.clone() },
+        I::RefCountDropReuse {
+            token_local: tok.clone(),
+        },
+        I::LoadLocal { name: acc.clone() },
+        I::LoadLocal { name: tok.clone() },
+        I::DeclCall {
+            decl_name: "step".to_string(),
+        },
+        I::StoreLocal { name: acc.clone() },
+        I::LoadLocal { name: acc },
+        I::RefCountDrop,
+    ];
+
+    let wasm = emit_general_module_with_aux_and_options(
+        &main_instrs,
+        &aux_decls,
+        &MemoryLayout::default(),
+        EmitOptions::default(),
+    )
+    .expect("manual cross-call reuse module should emit");
+    assert_valid_wasm_module(&wasm);
+
+    let mut config = Config::new();
+    config.wasm_memory64(true);
+    let engine = Engine::new(&config).expect("engine");
+    let wasm_module = WasmModule::from_binary(&engine, &wasm).expect("parse wasm");
+    let wasi_ctx = WasiCtxBuilder::new()
+        .stdin(MemoryInputPipe::new(String::new()))
+        .stdout(MemoryOutputPipe::new(4096))
+        .build_p1();
+    let mut store = Store::new(&engine, wasi_ctx);
+    let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
+    p1::add_to_linker_sync(&mut linker, |t| t).expect("wasi linker");
+    let instance = linker
+        .instantiate(&mut store, &wasm_module)
+        .expect("instantiate");
+    let start = instance
+        .get_typed_func::<(), ()>(&mut store, "_start")
+        .expect("_start export");
+    start.call(&mut store, ()).expect("_start call");
+
+    let memory = instance
+        .get_memory(&mut store, "memory")
+        .expect("memory export");
+    let mut hits_bytes = [0u8; 8];
+    memory
+        .read(&store, GLOBAL_REUSE_HITS_OFFSET as usize, &mut hits_bytes)
+        .expect("read reuse_hits");
+    let hits = u64::from_le_bytes(hits_bytes);
+    assert!(
+        hits >= 2,
+        "expected cross-call hidden-param reuse to increment reuse_hits twice; got {hits}"
+    );
+}

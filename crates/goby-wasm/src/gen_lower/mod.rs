@@ -1254,6 +1254,8 @@ fn lower_aux_decl(
     type_annotation: Option<&str>,
     body: &CompExpr,
     known_decls: &HashSet<String>,
+    reuse_decls: &HashSet<String>,
+    reuse_param_name: Option<String>,
     allow_safe_handler_lowering: bool,
     lambda_decls: &mut Vec<LambdaAuxDecl>,
 ) -> Result<Result<AuxDecl, GeneralLowerUnsupportedReason>, CodegenError> {
@@ -1273,6 +1275,7 @@ fn lower_aux_decl(
                 &body,
                 &param_names,
                 known_decls,
+                reuse_decls,
                 lambda_decls,
             ),
             Err(err) => Err(err),
@@ -1290,6 +1293,7 @@ fn lower_aux_decl(
                 &body,
                 &param_names,
                 known_decls,
+                reuse_decls,
                 lambda_decls,
             ),
             Err(err) => Err(err),
@@ -1299,6 +1303,7 @@ fn lower_aux_decl(
             &body,
             &param_names,
             known_decls,
+            reuse_decls,
             lambda_decls,
         )
     };
@@ -1320,6 +1325,7 @@ fn lower_aux_decl(
         param_names,
         returns_wasm_heap: true,
         instrs,
+        reuse_param_name,
     }))
 }
 
@@ -1352,6 +1358,8 @@ fn first_non_main_lowering_issue(
             goby_decl.type_annotation.as_deref(),
             &aux_ir_decl.body,
             &known_decls,
+            &HashSet::new(),
+            None,
             allow_safe_handler_lowering,
             &mut lambda_decls,
         )? {
@@ -1531,6 +1539,12 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
         }
     };
     let ir_module = goby_core::perceus::run_perceus_passes(&ir_module);
+    let reuse_decls: HashSet<String> = ir_module
+        .decls
+        .iter()
+        .filter(|d| d.reuse_param.is_some())
+        .map(|d| d.name.clone())
+        .collect();
     let Some(ir_decl) = ir_module.decls.iter().find(|decl| decl.name == "main") else {
         return Ok(Err(GeneralLowerUnsupportedReason::NoMainExecPlan));
     };
@@ -1657,6 +1671,8 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
             source_decl.type_annotation.as_deref(),
             &rewritten_body,
             &known_decls,
+            &reuse_decls,
+            aux_ir_decl.reuse_param.clone(),
             allow_safe_handler_lowering,
             &mut lambda_decls,
         )? {
@@ -1745,6 +1761,8 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
                     goby_decl.type_annotation.as_deref(),
                     &rewritten_body,
                     &known_decls,
+                    &HashSet::new(),
+                    None,
                     true, // stdlib handlers are one-shot tail-resumptive by construction
                     &mut lambda_decls,
                 )? {
@@ -1773,6 +1791,7 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
             param_names: lam.param_names,
             returns_wasm_heap: true,
             instrs: lam.instrs,
+            reuse_param_name: None,
         });
     }
 

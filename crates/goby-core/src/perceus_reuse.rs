@@ -520,9 +520,9 @@ pub fn insert_tail_reuse_module(
     module: crate::ir::IrModule,
     next_token: &mut usize,
 ) -> crate::ir::IrModule {
-    use std::collections::HashMap;
     use crate::ir::IrModule;
     use crate::size_class::SizeClass;
+    use std::collections::HashMap;
 
     // Build callee first-alloc map.
     let first_alloc_map: HashMap<String, SizeClass> = module
@@ -578,13 +578,8 @@ fn rewrite_tail_reuse_comp(
             body,
         } => {
             let bound_size = comp_alloc_class(&value);
-            let value = rewrite_tail_reuse_comp(
-                *value,
-                sizes,
-                first_alloc_map,
-                callee_token,
-                next_token,
-            );
+            let value =
+                rewrite_tail_reuse_comp(*value, sizes, first_alloc_map, callee_token, next_token);
             let mut body_sizes = sizes.clone();
             if let Some(class) = bound_size {
                 body_sizes.insert(name.clone(), class);
@@ -611,13 +606,8 @@ fn rewrite_tail_reuse_comp(
             value,
             body,
         } => {
-            let value = rewrite_tail_reuse_comp(
-                *value,
-                sizes,
-                first_alloc_map,
-                callee_token,
-                next_token,
-            );
+            let value =
+                rewrite_tail_reuse_comp(*value, sizes, first_alloc_map, callee_token, next_token);
             let mut body_sizes = sizes.clone();
             body_sizes.remove(&name);
             let body = rewrite_tail_reuse_comp(
@@ -667,9 +657,14 @@ fn rewrite_tail_reuse_comp(
                 .collect();
             CompExpr::Case { scrutinee, arms }
         }
-        CompExpr::Seq { stmts, tail } => {
-            rewrite_tail_reuse_seq(stmts, *tail, sizes, first_alloc_map, callee_token, next_token)
-        }
+        CompExpr::Seq { stmts, tail } => rewrite_tail_reuse_seq(
+            stmts,
+            *tail,
+            sizes,
+            first_alloc_map,
+            callee_token,
+            next_token,
+        ),
         CompExpr::WithHandler { handler, body } => CompExpr::WithHandler {
             handler: Box::new(rewrite_tail_reuse_comp(
                 *handler,
@@ -757,8 +752,7 @@ fn rewrite_tail_reuse_seq(
     }
 
     // No rewrite — recurse into tail.
-    let new_tail =
-        rewrite_tail_reuse_comp(tail, sizes, first_alloc_map, callee_token, next_token);
+    let new_tail = rewrite_tail_reuse_comp(tail, sizes, first_alloc_map, callee_token, next_token);
     CompExpr::Seq {
         stmts,
         tail: Box::new(new_tail),
@@ -767,7 +761,9 @@ fn rewrite_tail_reuse_seq(
 
 #[cfg(test)]
 mod tests {
-    use super::{first_alloc_class, insert_reuse, insert_tail_reuse_module, rewrite_callee_first_alloc};
+    use super::{
+        first_alloc_class, insert_reuse, insert_tail_reuse_module, rewrite_callee_first_alloc,
+    };
     use crate::ir::{CompExpr, IrDecl, IrModule, IrType, ValueExpr, fmt_ir, validate_ir};
     use crate::size_class::SizeClass;
 

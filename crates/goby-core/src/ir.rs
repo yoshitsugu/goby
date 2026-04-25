@@ -795,10 +795,7 @@ pub fn validate_ir(module: &IrModule) -> Result<(), IrValidateError> {
         if let Some(p) = &decl.reuse_param {
             if p.is_empty() {
                 return Err(IrValidateError {
-                    message: format!(
-                        "in decl `{}`: reuse_param must not be empty",
-                        decl.name
-                    ),
+                    message: format!("in decl `{}`: reuse_param must not be empty", decl.name),
                 });
             }
         }
