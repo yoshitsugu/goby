@@ -5,11 +5,49 @@ use crate::ir::{AllocInit, CompExpr, IrDecl, IrType, ValueExpr};
 use crate::size_class::SizeClass;
 
 /// Size-class or cell-promoted marker for a binding in scope.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// The `Size` variant is the simple case: outer-only size class is known;
+/// inner level shape is unknown / not statically owned.
+///
+/// The `FreshList` variant carries additional inner-shape information that
+/// the perceus reuse pass uses to authorize per-level reuse of nested
+/// `xs[i][j] := v` writes. It is only emitted when the binding's
+/// initialiser is a syntactically fresh nested list literal whose elements
+/// own distinct list headers (no aliasing, no spread, no `repeat`). See
+/// `comp_alloc_size_or_cell` for the conservative seed rule.
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum SizeOrCell {
     Size(SizeClass),
+    /// Outer list is `outer`; each element of the outer list is a freshly
+    /// allocated, non-aliased list with shape `inner`. Used to authorize
+    /// per-level reuse of `xs[i][j] := v`.
+    FreshList {
+        outer: SizeClass,
+        inner: Box<SizeOrCell>,
+    },
     /// Binding is heap-cell promoted (captured mut). Reuse must be skipped.
     CellPromoted,
+}
+
+impl SizeOrCell {
+    /// Outer-level size class, ignoring nested inner shape.
+    fn outer_class(&self) -> Option<SizeClass> {
+        match self {
+            SizeOrCell::Size(c) => Some(*c),
+            SizeOrCell::FreshList { outer, .. } => Some(*outer),
+            SizeOrCell::CellPromoted => None,
+        }
+    }
+
+    /// Walk one level inwards. Returns the inner shape if the current
+    /// level is a `FreshList`, otherwise `None` (= per-level reuse blocked
+    /// at this depth and below).
+    fn step_in(&self) -> Option<&SizeOrCell> {
+        match self {
+            SizeOrCell::FreshList { inner, .. } => Some(inner),
+            _ => None,
+        }
+    }
 }
 
 type SizeEnv = HashMap<String, SizeOrCell>;
@@ -33,11 +71,11 @@ fn insert_reuse_comp(comp: CompExpr, sizes: &SizeEnv, next_token: usize) -> (Com
             value,
             body,
         } => {
-            let bound_size = comp_alloc_class(&value);
+            let bound_shape = comp_alloc_size_or_cell(&value);
             let (value, next_token) = insert_reuse_comp(*value, sizes, next_token);
             let mut body_sizes = sizes.clone();
-            if let Some(class) = bound_size {
-                body_sizes.insert(name.clone(), SizeOrCell::Size(class));
+            if let Some(shape) = bound_shape {
+                body_sizes.insert(name.clone(), shape);
             } else {
                 body_sizes.remove(&name);
             }
@@ -65,16 +103,17 @@ fn insert_reuse_comp(comp: CompExpr, sizes: &SizeEnv, next_token: usize) -> (Com
                 &ClosureBindingEnv::default(),
                 &HashSet::new(),
             ) == BindingRepr::HeapCell;
-            // Peek at initial value's size class before consuming it.
-            let init_class = comp_alloc_class(&value);
+            // Peek at initial value's shape before consuming it.
+            let init_shape = comp_alloc_size_or_cell(&value);
             let (value, next_token) = insert_reuse_comp(*value, sizes, next_token);
             let mut body_sizes = sizes.clone();
             if is_cell {
                 body_sizes.insert(name.clone(), SizeOrCell::CellPromoted);
-            } else if let Some(class) = init_class {
-                // Register the initial size class so AssignIndex can identify
-                // reuse candidates within the LetMut body.
-                body_sizes.insert(name.clone(), SizeOrCell::Size(class));
+            } else if let Some(shape) = init_shape {
+                // Register the initial shape so AssignIndex can identify
+                // reuse candidates within the LetMut body. `FreshList`
+                // shapes additionally enable per-level inner reuse.
+                body_sizes.insert(name.clone(), shape);
             } else {
                 body_sizes.remove(&name);
             }
@@ -128,19 +167,25 @@ fn insert_reuse_comp(comp: CompExpr, sizes: &SizeEnv, next_token: usize) -> (Com
             // Skip when: root is cell-promoted, or value evaluation crosses a path breakpoint.
             let reuse_token = match sizes.get(&root) {
                 Some(SizeOrCell::CellPromoted) => None,
-                Some(SizeOrCell::Size(_)) if comp_contains_conservative_abort(&value) => None,
-                Some(SizeOrCell::Size(class)) => {
-                    let tok = format!("__perceus_reuse_token_{next_token}");
-                    let mut levels: Vec<Option<crate::size_class::SizeClass>> =
-                        Vec::with_capacity(path.len());
-                    levels.push(Some(*class));
-                    for _ in 1..path.len() {
-                        levels.push(None);
+                Some(shape) if comp_contains_conservative_abort(&value) => {
+                    let _ = shape;
+                    None
+                }
+                Some(shape) => {
+                    // Walk the static shape along the path to assign per-level
+                    // reuse size classes. The "first None stops reuse" rule:
+                    // once a level's inner shape is unknown, every deeper
+                    // level falls back to copy-on-write `ListSet`.
+                    let levels = build_reuse_levels(shape, path.len());
+                    if levels.first().copied().flatten().is_some() {
+                        let tok = format!("__perceus_reuse_token_{next_token}");
+                        Some(crate::ir::AssignIndexReuse {
+                            root_token: tok,
+                            levels,
+                        })
+                    } else {
+                        None
                     }
-                    Some(crate::ir::AssignIndexReuse {
-                        root_token: tok,
-                        levels,
-                    })
                 }
                 None => None,
             };
@@ -249,14 +294,14 @@ fn insert_reuse_seq(
                     });
                 }
                 let rebind_name = name.clone();
-                let new_class = comp_alloc_class(value);
+                let new_shape = comp_alloc_size_or_cell(value);
                 let (stmt_out, updated) = insert_reuse_comp(stmt, &live_sizes, next);
                 next = updated;
                 rewritten.push(stmt_out);
                 // Update live_sizes to reflect the new binding.
-                match new_class {
-                    Some(class) => {
-                        live_sizes.insert(rebind_name, SizeOrCell::Size(class));
+                match new_shape {
+                    Some(shape) => {
+                        live_sizes.insert(rebind_name, shape);
                     }
                     None => {
                         live_sizes.remove(&rebind_name);
@@ -305,6 +350,30 @@ fn insert_reuse_seq(
     )
 }
 
+/// Walk a `SizeOrCell` shape `path_len` levels deep, assigning a per-level
+/// size class (`Some(class)`) or marking the level as unknown (`None`).
+///
+/// "First None stops reuse": once a level cannot supply a `FreshList` inner
+/// shape, every subsequent level is `None`. This guarantees the backend
+/// never emits an in-place store below an uncertain level — preserving the
+/// `ListSetInPlace` aliasing contract.
+fn build_reuse_levels(root_shape: &SizeOrCell, path_len: usize) -> Vec<Option<SizeClass>> {
+    let mut levels = Vec::with_capacity(path_len);
+    let mut current: Option<&SizeOrCell> = Some(root_shape);
+    for i in 0..path_len {
+        match current {
+            Some(shape) => {
+                levels.push(shape.outer_class());
+                if i + 1 < path_len {
+                    current = shape.step_in();
+                }
+            }
+            None => levels.push(None),
+        }
+    }
+    levels
+}
+
 fn comp_alloc_class(comp: &CompExpr) -> Option<SizeClass> {
     match comp {
         CompExpr::Value(value) => allocation_class(value),
@@ -317,11 +386,103 @@ fn comp_alloc_class(comp: &CompExpr) -> Option<SizeClass> {
     }
 }
 
+/// Conservative analyser of a binding initialiser that produces a
+/// nested `SizeOrCell::FreshList` shape when it can prove every nested
+/// list inside is a freshly allocated, non-aliased header.
+///
+/// Recognised shapes (returning a `FreshList` with inner shape):
+/// - `[a0, a1, ...]` (no spread, no repeat) where every element is a
+///   fresh allocation that itself recursively analyses to a non-`None`
+///   shape.
+///
+/// Falls back to `comp_alloc_class` (plain `Size`) for the outer
+/// when items contain anything not statically known to be unique:
+/// - `Var(_)` (alias risk),
+/// - `ListLit` with `spread: Some(_)`,
+/// - `Call`, `If`, `Case` (unknown identity),
+/// - any non-list element where inner reuse would not apply.
+fn comp_alloc_size_or_cell(comp: &CompExpr) -> Option<SizeOrCell> {
+    match comp {
+        CompExpr::Value(value) => value_alloc_size_or_cell(value),
+        // ANF-wrapped initialiser: a let/let-mut whose body computes the
+        // actual allocation. Mirrors `comp_alloc_class`'s behaviour.
+        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. }
+            if !is_conservative_abort_comp(value) =>
+        {
+            comp_alloc_size_or_cell(body)
+        }
+        _ => None,
+    }
+}
+
+fn value_alloc_size_or_cell(value: &ValueExpr) -> Option<SizeOrCell> {
+    match value {
+        ValueExpr::ListLit { elements, spread } if spread.is_none() => {
+            let outer = SizeClass::for_list_header(1);
+            if !outer.is_reusable() {
+                return None;
+            }
+            // Per-level inner reuse is authorised only when every element
+            // is itself a freshly allocated, non-aliased *list* (i.e. the
+            // path index at this depth lands on a List header that
+            // `ListSetInPlace` can mutate). Tuples / records / strings are
+            // valid inner element values but cannot anchor a deeper
+            // `xs[i][j] := v` reuse, so they collapse to outer-only.
+            //
+            // If any element is a `Var(_)`, `Call`, `If`, `Case`, a
+            // non-list literal, or an aliased shape, we still record the
+            // outer size class so root-level reuse fires; the inner slot
+            // is left unknown.
+            let mut inner_shape: Option<SizeOrCell> = None;
+            let mut homogeneous_list_elements = true;
+            for element in elements {
+                let Some(elem_shape) = value_alloc_size_or_cell(element) else {
+                    homogeneous_list_elements = false;
+                    break;
+                };
+                if !is_list_shape(&elem_shape) {
+                    homogeneous_list_elements = false;
+                    break;
+                }
+                match &inner_shape {
+                    None => inner_shape = Some(elem_shape),
+                    Some(prev) if prev == &elem_shape => {}
+                    Some(_) => {
+                        homogeneous_list_elements = false;
+                        break;
+                    }
+                }
+            }
+            match (homogeneous_list_elements, inner_shape) {
+                (true, Some(inner)) => Some(SizeOrCell::FreshList {
+                    outer,
+                    inner: Box::new(inner),
+                }),
+                _ => Some(SizeOrCell::Size(outer)),
+            }
+        }
+        // Plain allocations whose inner per-level reuse does not apply.
+        // We still record the outer size class so root-level reuse fires.
+        ValueExpr::TupleLit(_) | ValueExpr::RecordLit { .. } | ValueExpr::Interp(_) => {
+            allocation_class(value).map(SizeOrCell::Size)
+        }
+        _ => None,
+    }
+}
+
+fn is_list_shape(shape: &SizeOrCell) -> bool {
+    match shape {
+        SizeOrCell::Size(c) => matches!(c, SizeClass::Header(_)),
+        SizeOrCell::FreshList { .. } => true,
+        SizeOrCell::CellPromoted => false,
+    }
+}
+
 fn drop_value_class(value: &ValueExpr, sizes: &SizeEnv) -> Option<SizeClass> {
     match value {
         ValueExpr::Var(name) => match sizes.get(name) {
-            Some(SizeOrCell::Size(class)) => Some(*class),
-            _ => None, // CellPromoted or unknown → not reusable
+            Some(SizeOrCell::CellPromoted) | None => None,
+            Some(shape) => shape.outer_class(),
         },
         _ => allocation_class(value),
     }
@@ -718,12 +879,12 @@ fn rewrite_tail_reuse_comp(
             value,
             body,
         } => {
-            let bound_size = comp_alloc_class(&value);
+            let bound_shape = comp_alloc_size_or_cell(&value);
             let value =
                 rewrite_tail_reuse_comp(*value, sizes, first_alloc_map, callee_token, next_token);
             let mut body_sizes = sizes.clone();
-            if let Some(class) = bound_size {
-                body_sizes.insert(name.clone(), SizeOrCell::Size(class));
+            if let Some(shape) = bound_shape {
+                body_sizes.insert(name.clone(), shape);
             } else {
                 body_sizes.remove(&name);
             }
@@ -1801,6 +1962,159 @@ mod tests {
         assert!(
             ir.contains("@reuse(__perceus_reuse_token_1,"),
             "inner xs2 AssignIndex should get reuse_token_1:\n{ir}"
+        );
+    }
+
+    /// §M6 Step 4: a fresh nested list literal (`[[1, 2], [3, 4]]`) should
+    /// seed a `FreshList` shape, so a two-level `xs[i][j] := v` records
+    /// inner size class and the reuse_token's levels vec is two `Some`s.
+    #[test]
+    fn assign_index_fresh_nested_literal_records_inner_class() {
+        let decl = IrDecl {
+            name: "main".to_string(),
+            params: vec![],
+            result_ty: IrType::Unknown,
+            residual_effects: vec![],
+            reuse_param: None,
+            body: CompExpr::LetMut {
+                name: "xs".to_string(),
+                ty: IrType::Unknown,
+                value: Box::new(CompExpr::Value(ValueExpr::ListLit {
+                    elements: vec![
+                        ValueExpr::ListLit {
+                            elements: vec![ValueExpr::IntLit(1), ValueExpr::IntLit(2)],
+                            spread: None,
+                        },
+                        ValueExpr::ListLit {
+                            elements: vec![ValueExpr::IntLit(3), ValueExpr::IntLit(4)],
+                            spread: None,
+                        },
+                    ],
+                    spread: None,
+                })),
+                body: Box::new(CompExpr::Seq {
+                    stmts: vec![CompExpr::AssignIndex {
+                        root: "xs".to_string(),
+                        path: vec![ValueExpr::IntLit(0), ValueExpr::IntLit(1)],
+                        value: Box::new(CompExpr::Value(ValueExpr::IntLit(99))),
+                        reuse_token: None,
+                    }],
+                    tail: Box::new(CompExpr::Value(ValueExpr::Unit)),
+                }),
+            },
+        };
+
+        let rewritten = insert_reuse(decl);
+        let module = IrModule {
+            decls: vec![rewritten],
+        };
+        validate_ir(&module).expect("fresh nested AssignIndex IR should validate");
+        let ir = fmt_ir(&module);
+        // Outer Some(Header(1)), inner Some(Header(1)) too.
+        assert!(
+            ir.contains("@reuse(__perceus_reuse_token_0, levels=[Header(1), Header(1)])"),
+            "fresh nested literal must produce two Some levels:\n{ir}"
+        );
+    }
+
+    /// Negative: `inner = [1, 2]; mut xs = [inner, inner]` aliases the same
+    /// list across both outer slots, so the inner level must NOT be marked
+    /// reusable.
+    #[test]
+    fn assign_index_shared_inner_var_falls_back() {
+        let decl = IrDecl {
+            name: "main".to_string(),
+            params: vec![],
+            result_ty: IrType::Unknown,
+            residual_effects: vec![],
+            reuse_param: None,
+            body: CompExpr::Let {
+                name: "inner".to_string(),
+                ty: IrType::Unknown,
+                value: Box::new(CompExpr::Value(ValueExpr::ListLit {
+                    elements: vec![ValueExpr::IntLit(1), ValueExpr::IntLit(2)],
+                    spread: None,
+                })),
+                body: Box::new(CompExpr::LetMut {
+                    name: "xs".to_string(),
+                    ty: IrType::Unknown,
+                    value: Box::new(CompExpr::Value(ValueExpr::ListLit {
+                        elements: vec![
+                            ValueExpr::Var("inner".to_string()),
+                            ValueExpr::Var("inner".to_string()),
+                        ],
+                        spread: None,
+                    })),
+                    body: Box::new(CompExpr::Seq {
+                        stmts: vec![CompExpr::AssignIndex {
+                            root: "xs".to_string(),
+                            path: vec![ValueExpr::IntLit(0), ValueExpr::IntLit(1)],
+                            value: Box::new(CompExpr::Value(ValueExpr::IntLit(99))),
+                            reuse_token: None,
+                        }],
+                        tail: Box::new(CompExpr::Value(ValueExpr::Unit)),
+                    }),
+                }),
+            },
+        };
+
+        let rewritten = insert_reuse(decl);
+        let module = IrModule {
+            decls: vec![rewritten],
+        };
+        validate_ir(&module).expect("shared-inner IR should validate");
+        let ir = fmt_ir(&module);
+        // Outer reuse must still fire (root is unique). Inner level must be `_`.
+        assert!(
+            ir.contains("@reuse(__perceus_reuse_token_0, levels=[Header(1), _])"),
+            "shared inner var must downgrade inner level to None:\n{ir}"
+        );
+    }
+
+    /// Negative: a path that walks deeper than the recorded `FreshList`
+    /// shape gets `_` for the deeper levels (first-None stops reuse).
+    #[test]
+    fn assign_index_first_none_stops_reuse() {
+        // Outer is a fresh list of TupleLit (which has no FreshList inner
+        // shape), so path `xs[0][1]` must be `[List(1), _]`.
+        let decl = IrDecl {
+            name: "main".to_string(),
+            params: vec![],
+            result_ty: IrType::Unknown,
+            residual_effects: vec![],
+            reuse_param: None,
+            body: CompExpr::LetMut {
+                name: "xs".to_string(),
+                ty: IrType::Unknown,
+                value: Box::new(CompExpr::Value(ValueExpr::ListLit {
+                    elements: vec![ValueExpr::TupleLit(vec![
+                        ValueExpr::IntLit(1),
+                        ValueExpr::IntLit(2),
+                    ])],
+                    spread: None,
+                })),
+                body: Box::new(CompExpr::Seq {
+                    stmts: vec![CompExpr::AssignIndex {
+                        root: "xs".to_string(),
+                        path: vec![ValueExpr::IntLit(0), ValueExpr::IntLit(1)],
+                        value: Box::new(CompExpr::Value(ValueExpr::IntLit(99))),
+                        reuse_token: None,
+                    }],
+                    tail: Box::new(CompExpr::Value(ValueExpr::Unit)),
+                }),
+            },
+        };
+
+        let rewritten = insert_reuse(decl);
+        let module = IrModule {
+            decls: vec![rewritten],
+        };
+        validate_ir(&module).expect("first-None IR should validate");
+        let ir = fmt_ir(&module);
+        // Inner Tuple(2) is not a FreshList, so step_in returns None at depth 1.
+        assert!(
+            ir.contains("@reuse(__perceus_reuse_token_0, levels=[Header(1), _])"),
+            "deeper levels past a non-FreshList must be _:\n{ir}"
         );
     }
 }
