@@ -1269,6 +1269,19 @@ acceptance test.
         `perceus_reuse::insert_tail_reuse_module` wired into
         `run_perceus_passes`. Backend fallback lowering is no-op (Step 9
         connects the ABI).
+      - 2026-04-25 (Step 9 complete, commit `50cc7bf8`): wasm ABI wiring landed.
+        Callees with `reuse_param = Some(_)` carry a hidden trailing `i64`
+        parameter; callers push `LoadLocal(tok)` or `i64.const 0` as the
+        matching trailing actual via `emit_reuse_trailing_actual`.
+        `emit_alloc_reuse` performs payload-only reuse when `token != 0`
+        (writes `refcount = 1`, returns `token` unchanged) and falls through
+        to `emit_alloc_with_flag` when `token == 0`. New runtime compile test
+        `cross_call_reuse_hidden_param_increments_reuse_hits` observes
+        `reuse_hits >= 2` across direct tail calls. The normative
+        `refcount_reuse_loop.gb` does not yet trigger the path
+        (`step` starts with `if`, so `first_alloc_class = None`); full M5
+        budget convergence is gated on Step 10 (runtime helpers) and M6
+        (`mut` lowering via reuse).
 - [ ] Emit `__goby_alloc_reuse` and `__goby_drop_reuse` runtime
       helpers per §3.3. `peak_bytes` accounting stays correct on the
       reuse path.
