@@ -994,6 +994,7 @@ fn lower_list_index_assign(
         root,
         path: path_vals,
         value: Box::new(rhs_comp),
+        reuse_token: None,
     };
 
     // Wrap in any ANF Let bindings, outermost first.
@@ -1937,7 +1938,12 @@ choose n =
         );
         let ir_decl = lower_declaration(&decl).unwrap();
         match &ir_decl.body {
-            CompExpr::AssignIndex { root, path, value } => {
+            CompExpr::AssignIndex {
+                root,
+                path,
+                value,
+                reuse_token: _,
+            } => {
                 assert_eq!(root, "xs");
                 assert_eq!(path.len(), 1);
                 assert!(

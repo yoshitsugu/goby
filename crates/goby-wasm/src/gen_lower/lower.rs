@@ -11,6 +11,7 @@ use goby_core::closure_capture::{
     analyze_lambda_callable_env_for_params, binding_repr_for_let_mut, has_mutable_write_capture_of,
 };
 use goby_core::ir::{AllocInit, CompExpr, IrBinOp, IrInterpPart, ValueExpr};
+use goby_core::size_class::SizeClass;
 
 use crate::gen_lower::backend_ir::{
     BackendAllocInit, BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp,
@@ -401,7 +402,12 @@ fn comp_expr_mentions_var(comp: &CompExpr, target: &str) -> bool {
         CompExpr::Assign { name, value } => {
             (name == target) || comp_expr_mentions_var(value, target)
         }
-        CompExpr::AssignIndex { root, path, value } => {
+        CompExpr::AssignIndex {
+            root,
+            path,
+            value,
+            reuse_token: _,
+        } => {
             root == target
                 || path
                     .iter()
@@ -560,13 +566,19 @@ fn rename_comp_var(comp: &CompExpr, from: &str, to: &str) -> CompExpr {
             name: name.clone(),
             value: Box::new(rename_comp_var(value, from, to)),
         },
-        CompExpr::AssignIndex { root, path, value } => CompExpr::AssignIndex {
+        CompExpr::AssignIndex {
+            root,
+            path,
+            value,
+            reuse_token,
+        } => CompExpr::AssignIndex {
             root: root.clone(),
             path: path
                 .iter()
                 .map(|item| rename_value_var(item, from, to))
                 .collect(),
             value: Box::new(rename_comp_var(value, from, to)),
+            reuse_token: reuse_token.clone(),
         },
         CompExpr::Case { scrutinee, arms } => CompExpr::Case {
             scrutinee: Box::new(rename_value_var(scrutinee, from, to)),
@@ -792,6 +804,7 @@ fn lower_supported_inline_list_fold_mutating_each(
         root,
         path,
         value: rhs,
+        reuse_token: _,
     } = &stmts[0]
     else {
         return Ok(None);
@@ -1090,6 +1103,7 @@ fn lower_list_each_mutating_assign(
         root,
         path,
         value: rhs,
+        reuse_token: _,
     } = &stmts[0]
     else {
         return Ok(None);
@@ -2401,10 +2415,16 @@ fn lower_comp_inner(
             }
         }
 
-        CompExpr::AssignIndex { root, path, value } => lower_assign_index(
+        CompExpr::AssignIndex {
             root,
             path,
             value,
+            reuse_token,
+        } => lower_assign_index(
+            root,
+            path,
+            value,
+            reuse_token.as_ref().map(|(tok, sc)| (tok.as_str(), *sc)),
             aliases,
             bindings,
             known_decls,
@@ -2519,6 +2539,7 @@ fn lower_assign_index(
     root: &str,
     path: &[ValueExpr],
     value: &CompExpr,
+    reuse_token: Option<(&str, SizeClass)>,
     aliases: &HashMap<String, AliasValue>,
     bindings: &ClosureBindingEnv,
     known_decls: &HashSet<String>,
@@ -2530,6 +2551,28 @@ fn lower_assign_index(
         return Err(LowerError::UnsupportedForm {
             node: "AssignIndex with empty path".to_string(),
         });
+    }
+
+    let root_is_cell = aliases.get(root) == Some(&AliasValue::CellPromoted);
+
+    // Reuse fast path: root is uniquely owned (proven by perceus_reuse), depth == 1,
+    // and root is not cell-promoted. Emit drop_reuse + ListSetInPlace + alloc_reuse
+    // instead of the copy-on-write ListSet path.
+    if let Some((tok, sc)) = reuse_token {
+        if depth == 1 && !root_is_cell {
+            return lower_assign_index_reuse(
+                root,
+                &path[0],
+                value,
+                tok,
+                sc,
+                aliases,
+                bindings,
+                known_decls,
+                reuse_decls,
+                lambda_decls,
+            );
+        }
     }
 
     let mut instrs: Vec<WasmBackendInstr> = Vec::new();
@@ -2549,7 +2592,6 @@ fn lower_assign_index(
     // If so, root loads must go through LoadCellValue and write-back through StoreCellValue,
     // following the same contract as CompExpr::Assign. Non-root temporaries (__lset_* locals)
     // are structurally plain locals declared within this function and are never cell-promoted.
-    let root_is_cell = aliases.get(root) == Some(&AliasValue::CellPromoted);
 
     // If root is cell-promoted, cache its current list value into a plain scratch local once.
     // This avoids reading the cell twice (once during descent, once during ascent's i==0 load),
@@ -2675,6 +2717,95 @@ fn lower_assign_index(
             name: root.to_string(),
         });
     }
+
+    // AssignIndex produces Unit
+    instrs.push(WasmBackendInstr::I64Const(
+        crate::gen_lower::value::encode_unit(),
+    ));
+
+    Ok(instrs)
+}
+
+/// Reuse fast path for `AssignIndex` with `depth == 1` and a valid reuse token.
+///
+/// Emits:
+/// 1. Load `root` onto the stack and run `drop_reuse` → store token in `tok_local`.
+/// 2. Evaluate the rhs value.
+/// 3. `ListSetInPlace(root, path[0], rhs)` → in-place element write; result is the same list handle.
+/// 4. `StoreLocal root` — rebind root to the (same) list handle.
+/// 5. `AllocReuse(tok_local, sc, Retain)` → reset refcount=1 on the header; result is the tagged ptr.
+///    (Result of AllocReuse is discarded — root was already stored in step 4.)
+/// 6. Push `Unit`.
+///
+/// When `is_unique(root)` at runtime, steps 1–5 are allocation-free.
+/// When `!is_unique(root)`, `drop_reuse` returns null; `AllocReuse` falls through to a fresh alloc,
+/// and `ListSetInPlace` was a no-op since refcount > 1 means the mutation is visible to other owners.
+/// In that case the caller must guarantee copy-on-write semantics — this function does NOT fall back
+/// to path-copy, so this path must only be taken when the reuse pass has proven static uniqueness.
+#[allow(clippy::too_many_arguments)]
+fn lower_assign_index_reuse(
+    root: &str,
+    index: &ValueExpr,
+    value: &CompExpr,
+    tok: &str,
+    sc: SizeClass,
+    aliases: &HashMap<String, AliasValue>,
+    bindings: &ClosureBindingEnv,
+    known_decls: &HashSet<String>,
+    reuse_decls: &HashSet<String>,
+    lambda_decls: &mut Vec<LambdaAuxDecl>,
+) -> Result<Vec<WasmBackendInstr>, LowerError> {
+    let tok_local = tok.to_string();
+    let mut instrs: Vec<WasmBackendInstr> = Vec::new();
+
+    // Declare the reuse token local.
+    instrs.push(WasmBackendInstr::DeclareLocal {
+        name: tok_local.clone(),
+    });
+
+    // 1. drop_reuse(root) → tok_local
+    instrs.extend(lower_value_ctx(
+        &ValueExpr::Var(root.to_string()),
+        aliases,
+        bindings,
+        known_decls,
+    )?);
+    instrs.push(WasmBackendInstr::RefCountDropReuse {
+        token_local: tok_local.clone(),
+    });
+
+    // 2–3. ListSetInPlace(root, index, rhs) → same list handle → StoreLocal root
+    instrs.extend(lower_value_ctx(
+        &ValueExpr::Var(root.to_string()),
+        aliases,
+        bindings,
+        known_decls,
+    )?);
+    instrs.extend(lower_value_ctx(index, aliases, bindings, known_decls)?);
+    instrs.extend(lower_comp_inner(
+        value,
+        false,
+        aliases,
+        bindings,
+        known_decls,
+        reuse_decls,
+        lambda_decls,
+    )?);
+    instrs.push(WasmBackendInstr::Intrinsic {
+        intrinsic: BackendIntrinsic::ListSetInPlace,
+    });
+    instrs.push(WasmBackendInstr::StoreLocal {
+        name: root.to_string(),
+    });
+
+    // 4. alloc_reuse(tok_local, sc, Retain) → resets refcount=1 on the header.
+    //    The returned tagged ptr is discarded (root already points to the same header).
+    instrs.push(WasmBackendInstr::AllocReuse {
+        token_local: tok_local,
+        size_class: sc.into(),
+        init: BackendAllocInit::Retain,
+    });
+    instrs.push(WasmBackendInstr::Drop);
 
     // AssignIndex produces Unit
     instrs.push(WasmBackendInstr::I64Const(
@@ -5159,6 +5290,7 @@ build n =
             root: "xs".to_string(),
             path: vec![ValueExpr::IntLit(0)],
             value: Box::new(CompExpr::Value(ValueExpr::IntLit(99))),
+            reuse_token: None,
         };
         let aliases: HashMap<String, AliasValue> =
             [("xs".to_string(), AliasValue::CellPromoted)].into();
@@ -5219,6 +5351,7 @@ build n =
             root: "xs".to_string(),
             path: vec![ValueExpr::IntLit(1), ValueExpr::IntLit(0)],
             value: Box::new(CompExpr::Value(ValueExpr::IntLit(42))),
+            reuse_token: None,
         };
         let aliases: HashMap<String, AliasValue> =
             [("xs".to_string(), AliasValue::CellPromoted)].into();
@@ -5308,6 +5441,7 @@ build n =
             root: "xs".to_string(),
             path: vec![ValueExpr::IntLit(0)],
             value: Box::new(CompExpr::Value(ValueExpr::IntLit(99))),
+            reuse_token: None,
         };
         let instrs = lower_comp(&comp).expect("AssignIndex single-level should lower");
         assert_eq!(
@@ -5350,6 +5484,7 @@ build n =
             root: "xs".to_string(),
             path: vec![ValueExpr::IntLit(1), ValueExpr::IntLit(0)],
             value: Box::new(CompExpr::Value(ValueExpr::IntLit(42))),
+            reuse_token: None,
         };
         let instrs = lower_comp(&comp).expect("AssignIndex two-level should lower");
         assert_eq!(
@@ -5454,6 +5589,7 @@ build n =
                 root: root.to_string(),
                 path: vec![ValueExpr::Var(path_var.to_string())],
                 value: Box::new(CompExpr::Value(rhs)),
+                reuse_token: None,
             }],
             tail: Box::new(CompExpr::Value(ValueExpr::Unit)),
         };

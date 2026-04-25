@@ -859,7 +859,7 @@ pub(crate) fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBacken
                         result.extend(collect_all_instrs(field));
                     }
                 }
-                BackendAllocInit::Interp(_) => {}
+                BackendAllocInit::Interp(_) | BackendAllocInit::Retain => {}
             },
             WasmBackendInstr::ListReverseFoldPrepend {
                 list_instrs,
@@ -993,7 +993,7 @@ pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                                 return true;
                             }
                         }
-                        BackendAllocInit::Interp(_) => {}
+                        BackendAllocInit::Interp(_) | BackendAllocInit::Retain => {}
                     },
                     WasmBackendInstr::CreateClosure {
                         func_handle_instrs,
@@ -1155,6 +1155,7 @@ fn required_heap_base_spill_count_instr(instr: &WasmBackendInstr) -> u32 {
                     .unwrap_or(0)
             }
             BackendAllocInit::Interp(_) => 0,
+            BackendAllocInit::Retain => 1,
         },
         WasmBackendInstr::ListReverseFoldPrepend {
             list_instrs,
@@ -5305,6 +5306,12 @@ fn emit_alloc_reuse(
                     "gen_lower/emit: AllocReuse interpolation initializer is not supported yet"
                         .to_string(),
             });
+        }
+        BackendAllocInit::Retain => {
+            // Payload already contains valid data (e.g. list header updated in-place by
+            // ListSetInPlace before this alloc_reuse call). Only reset refcount to 1.
+            emit_alloc_reuse_payload(function, token_local, object_ptr, sc, hs)?;
+            emit_push_tagged_ptr(function, object_ptr, TAG_LIST, pw);
         }
     }
 

@@ -1,48 +1,75 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-25 (Perceus M5 Step 10 complete — correctness tests landed; acceptance still gated on M6)
+Last updated: 2026-04-25 (Perceus M6 Step 3 WIP — backend reuse lowering wasm検証エラー修正済み、workspace gate green)
 
 ## Current Focus
 
-**Perceus M3–M4.5 complete. M5 Step 10 (correctness tests + peak_bytes 整合) 完了。残るのは acceptance (Step 11) と M6 (`mut` lowering via reuse)。**
+**Perceus M6 Step 3 実装中。`lower_assign_index_reuse` の wasm validation blocker は修正済み。**
 
-Step 10 (2026-04-25):
+M6 Step 3 WIP (2026-04-25, 作業中):
+- `AssignIndex.reuse_token` の型を `Option<String>` → `Option<(String, SizeClass)>` に変更 (ir.rs)。
+  - size class を backend まで伝搬するため必要。
+- `BackendAllocInit::Retain` variant を追加 (backend_ir.rs):
+  - ペイロードを再初期化せず refcount=1 だけリセットする `alloc_reuse` ケース。
+  - `emit_alloc_reuse` の `Retain` ケース: `emit_alloc_reuse_payload` + `emit_push_tagged_ptr(TAG_LIST)` のみ。
+- `lower_assign_index_reuse` 関数を実装 (lower.rs):
+  - `RefCountDropReuse` → `ListSetInPlace` → `AllocReuse(Retain)` シーケンスを生成。
+- `insert_reuse_seq` 内の `Assign` rebind 後 `live_sizes` を更新するよう修正 (perceus_reuse.rs)。
+- `required_heap_base_spill_count` の `BackendAllocInit::Retain` を `1` に修正 (emit.rs):
+  - `AllocReuse(Retain)` も `emit_alloc_reuse_payload` の `object_ptr` spill local を使うため、
+    `0` のままだと scratch i32 local が不足し wasm validation error になる。
+
+**Resolved blocker (Step 3 WIP):**
+
+Three integration tests fail with wasm validation error:
+  `lm_single_level_list_assign_updates_element`, `lm_multiple_assigns_to_different_indices`,
+  `lm_value_semantics_no_aliasing`
+
+Error: `CodegenError { message: "wasm load: failed to compile: wasm[0]::function[9]::main" }`
+
+Root cause:
+
+1. **Stack shape verified correct** — traced `lower_assign_index_reuse` instruction sequence:
+   - `LoadLocal root` → `RefCountDropReuse{token_local}` (consumes 1, stores token; net: 0)
+   - `LoadLocal root` + `LoadLocal/const index` + rhs computation → `ListSetInPlace` (consumes 3, pushes 1)
+   - `StoreLocal root` (consumes 1; net: 0)
+   - `AllocReuse{Retain}` (produces 1) → `Drop` (consumes 1; net: 0)
+   - `I64Const(unit)` (net: +1 — function result)
+   Stack balance looks correct.
+
+2. **`BackendAllocInit::Retain` in `emit_alloc_reuse`** — added arm calls `emit_alloc_reuse_payload`
+   then `emit_push_tagged_ptr(object_ptr, TAG_LIST, pw)`. This mirrors the TupleLit pattern.
+   The `emit_alloc_reuse_payload` if/else branches both store a ptr into `object_ptr` before
+   returning, so `object_ptr` is valid when `emit_push_tagged_ptr` reads it.
+
+3. **Scratch local count for `Retain`** — `required_heap_base_spill_count` returned 0 for
+   `Retain`, but `emit_alloc_reuse` computes `object_ptr =
+   hs.scratch.i32_base + HELPER_SCRATCH_I32 + heap_base_depth` and stores through it.
+   `Retain => 1` fixes under-allocation of scratch i32 locals.
+
+Verification now passes:
+- `cargo test -p goby-wasm --test wasm_exports_and_smoke lm_`
+  - `lm_single_level_list_assign_updates_element`
+  - `lm_multiple_assigns_to_different_indices`
+  - `lm_value_semantics_no_aliasing`
+  - `lm_nested_two_level_list_assign`
+- `cargo fmt --all --check`
+- `cargo check`
+- `cargo test --workspace`
+
+M6 Step 1 (2026-04-25, landed):
+- `perceus_reuse.rs` に `AssignIndex` reuse-site 認識を追加。
+- `SizeOrCell` enum, `comp_contains_conservative_abort` ヘルパ追加。
+- `insert_reuse_seq` で `Assign` rebind 後 `live_sizes` 更新 (NOTE(step3) コメント削除済み)。
+- 5 本のテスト追加。
+
+M5 Step 10 (2026-04-25, previous):
 - §3.3 `alloc_reuse` / `drop_reuse` セマンティクスは Step 7/9 で inline 発行済み。
-  helper 関数化は budget 改善に寄与しないため M7 へ持ち越し (PLAN_PERCEUS §M5 反映)。
-- 5 本の correctness test を追加:
-  - `crates/goby-core/src/perceus_reuse.rs::tests::reuse_not_across_perform_effect`
-  - `crates/goby-core/src/perceus_reuse.rs::tests::reuse_not_across_with_handler`
-  - `crates/goby-wasm/src/compile_tests.rs::reuse_fires_on_unique_list_update`
-    (`Tuple(2)` で reuse_hits == 1 / peak == total を観測。M5 list AllocReuse は
-    chunk 毎回 bump のため、peak/total invariant が confound されるので tuple 採用)
-  - `crates/goby-wasm/src/compile_tests.rs::reuse_falls_through_when_shared`
-    (`RefCountDup` で refcount=2 にしてから `DropReuse` → token=null fall-through。
-    reuse_hits == 0 と「両 alloc 同時 live で peak == total」を観測)
-  - `crates/goby-wasm/src/compile_tests.rs::tail_call_reuse_passes_token`
-    (§3.7.1 cross-call ABI; 既存 `cross_call_reuse_hidden_param_increments_reuse_hits`
-    と同形を PLAN 正規名で追加。git 互換性のため既存名はそのまま残置)
+- 5 本の correctness test (perceus_reuse + compile_tests)。
 
-Step 9 までの状態:
-- `AuxDecl.reuse_param_name: Option<String>` 追加済み (emit.rs)
-- callee signature: `reuse_param_name.is_some()` の時 wasm type に +1 `i64` param
-- caller: `lower_comp_inner` に `reuse_decls: &HashSet<String>` 追加、
-  `emit_reuse_trailing_actual` が `LoadLocal(tok)` or `I64Const(0)` を push
-- `reuse_decls` は `lower_module_to_instrs` で `ir_module.decls` から構築し
-  `lower_aux_decl` → `lower_comp_inner` まで伝播
-- `emit_alloc_reuse` / `emit_alloc_reuse_payload` が token!=0 で refcount=1 書き戻し + token return、=0 で従来 alloc にフォールスルー
-
-**9-e measurement (2026-04-25, unchanged after Step 10):**
-- `cargo run -p goby-cli -- run --debug-alloc-stats examples/refcount_reuse_loop.gb`
-  → `total_bytes=155954768 peak_bytes=155954768 free_list_hits=0 reuse_hits=0`
-- 既知の理由: 正規プログラムの `step` は `if` 分岐で始まり `first_alloc_class=None` のため Step 8 IR pass の対象外。
-  ABI は配線済みだが正規パスから tail-call reuse が触れない。
-- `alloc_baseline.txt` 更新は M5 Step 11 (acceptance) まで保留 (PLAN_PERCEUS_M5_STEP9.md §9-e の方針通り)。
-
-**次のアクション:**
-- M6 (`mut` lowering via reuse) — `step` の `mut ys = xs; ys[i] := v` が `DropReuse` 経由で
-  reusable パスに乗ると `refcount_reuse_loop.gb` の reuse_hits が立つ。
-  M5 list AllocReuse の chunk 毎回 bump も併せて検討要。
-- M6 が landing した後 Step 11 acceptance gate (`total_bytes < 200 KiB`) へ。
+**Next actions:**
+- Commit M6 Step 3 → proceed to Step 4.
+- M6 completion → Step 11 acceptance gate (`total_bytes < 200 KiB`).
 
 See `doc/PLAN_PERCEUS.md` §M4 "As-shipped scope note" for the full M4 scope,
 and the M5 section for the current step-by-step progress.

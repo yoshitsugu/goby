@@ -452,7 +452,12 @@ fn analyze_comp(
             record_mutable_write_capture(name, bindings, known_decls, captures);
             analyze_comp(value, bindings, known_decls, captures);
         }
-        CompExpr::AssignIndex { root, path, value } => {
+        CompExpr::AssignIndex {
+            root,
+            path,
+            value,
+            reuse_token: _,
+        } => {
             record_mutable_write_capture(root, bindings, known_decls, captures);
             for idx in path {
                 analyze_value(idx, bindings, known_decls, captures);

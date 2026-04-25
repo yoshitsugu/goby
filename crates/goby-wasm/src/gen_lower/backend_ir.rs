@@ -75,6 +75,10 @@ pub(crate) enum BackendAllocInit {
         field_instrs: Vec<Vec<WasmBackendInstr>>,
     },
     Interp(Vec<IrInterpPart>),
+    /// Reuse the existing heap object payload as-is; only reset refcount to 1.
+    /// Used by the `AssignIndex` reuse fast path where `ListSetInPlace` has
+    /// already updated the element in-place before `alloc_reuse` is called.
+    Retain,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

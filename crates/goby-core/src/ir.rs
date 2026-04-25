@@ -171,6 +171,12 @@ pub enum CompExpr {
         root: String,
         path: Vec<ValueExpr>,
         value: Box<CompExpr>,
+        /// Reuse token + size class set by `perceus_reuse::insert_reuse` when
+        /// `root` is uniquely owned and value evaluation contains no path
+        /// breakpoint. `None` until the reuse pass runs; backend uses this to
+        /// emit `drop_reuse` + in-place store + `alloc_reuse(token, class)`
+        /// instead of path-copy.
+        reuse_token: Option<(String, SizeClass)>,
     },
     /// Pattern-matching case expression.
     Case {
@@ -589,7 +595,12 @@ fn fmt_comp(out: &mut String, c: &CompExpr, depth: usize) {
             out.push_str(" =\n");
             fmt_comp(out, value, depth + 1);
         }
-        CompExpr::AssignIndex { root, path, value } => {
+        CompExpr::AssignIndex {
+            root,
+            path,
+            value,
+            reuse_token,
+        } => {
             indent(out, depth);
             out.push_str("assign_index ");
             out.push_str(root);
@@ -597,6 +608,11 @@ fn fmt_comp(out: &mut String, c: &CompExpr, depth: usize) {
                 out.push('[');
                 fmt_value(out, idx);
                 out.push(']');
+            }
+            if let Some((tok, _sc)) = reuse_token {
+                out.push_str(" @reuse(");
+                out.push_str(tok);
+                out.push(')');
             }
             out.push_str(" =\n");
             fmt_comp(out, value, depth + 1);
@@ -852,7 +868,22 @@ fn validate_comp(c: &CompExpr, decl_name: &str) -> Result<(), IrValidateError> {
             Ok(())
         }
         CompExpr::Assign { value, .. } => validate_comp(value, decl_name),
-        CompExpr::AssignIndex { path, value, .. } => {
+        CompExpr::AssignIndex {
+            path,
+            value,
+            reuse_token,
+            ..
+        } => {
+            if let Some((tok, _sc)) = reuse_token {
+                if tok.is_empty() {
+                    return Err(IrValidateError {
+                        message: format!(
+                            "in decl `{}`: AssignIndex reuse_token must not be empty",
+                            decl_name
+                        ),
+                    });
+                }
+            }
             for idx in path {
                 validate_value(idx, decl_name)?;
             }

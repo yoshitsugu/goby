@@ -143,7 +143,12 @@ fn comp_mentions_name(comp: &CompExpr, target: &str) -> bool {
                 || args.iter().any(|arg| value_mentions_name(arg, target))
         }
         CompExpr::Assign { name, value } => name == target || comp_mentions_name(value, target),
-        CompExpr::AssignIndex { root, path, value } => {
+        CompExpr::AssignIndex {
+            root,
+            path,
+            value,
+            reuse_token: _,
+        } => {
             root == target
                 || path.iter().any(|index| value_mentions_name(index, target))
                 || comp_mentions_name(value, target)
@@ -473,7 +478,12 @@ fn rewrite_comp_fold_prepend_callbacks(
                 aliases,
             )),
         },
-        CompExpr::AssignIndex { root, path, value } => CompExpr::AssignIndex {
+        CompExpr::AssignIndex {
+            root,
+            path,
+            value,
+            reuse_token,
+        } => CompExpr::AssignIndex {
             root: root.clone(),
             path: path
                 .iter()
@@ -484,6 +494,7 @@ fn rewrite_comp_fold_prepend_callbacks(
                 callback_shapes,
                 aliases,
             )),
+            reuse_token: reuse_token.clone(),
         },
         CompExpr::Case { scrutinee, arms } => CompExpr::Case {
             scrutinee: Box::new(rewrite_value_fold_prepend_callbacks(

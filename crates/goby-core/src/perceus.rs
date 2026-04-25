@@ -962,7 +962,12 @@ fn drop_insert_comp(
                 next_tmp,
             )
         }
-        CompExpr::AssignIndex { root, path, value } => {
+        CompExpr::AssignIndex {
+            root,
+            path,
+            value,
+            reuse_token,
+        } => {
             let (value, next_tmp) =
                 drop_insert_comp(value, ownership, module_ownership, param_order, next_tmp);
             (
@@ -970,6 +975,7 @@ fn drop_insert_comp(
                     root: root.clone(),
                     path: path.clone(),
                     value: Box::new(value),
+                    reuse_token: reuse_token.clone(),
                 },
                 next_tmp,
             )
