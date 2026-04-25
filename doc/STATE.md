@@ -25,8 +25,29 @@ Verification:
   - gen_lower::lower::tests: `lower_assign_index_two_levels_uniform_inner_reuses_all_levels`, `lower_assign_index_two_levels_inner_none_after_outer_reuse_uses_listset`.
   - compile_tests: `nested_assign_index_fresh_literal_reuses_inner_in_place`, `nested_assign_index_shared_inner_falls_back`.
 
-Next actions:
-- Either extend `comp_alloc_size_or_cell` to seed `mut ys = xs` from the variable's existing shape, or pursue the chunk-level reuse work flagged in PLAN_PERCEUS §M6 Step 7. Both before un-ignoring the `total_bytes < 200 * 1024` assertion in `wasm_exports_and_smoke.rs::refcount_reuse_loop_example_compiles`.
+Next actions (ordered, per PLAN_PERCEUS §M6 "Step 7 execution plan"):
+
+1. **Step 7-a:** Seed `mut ys = xs` from the parameter's outer size class
+   in `comp_alloc_size_or_cell`, **gated on M4.5 `Owned` classification
+   only**. Reason: smallest precondition for reuse to fire on the
+   benchmark; restricting to `Owned` keeps the §3.4 uniqueness invariant
+   intact. Verify `reuse_hits > 0` on `refcount_reuse_loop.gb` (do not
+   expect `total_bytes` to clear 200 KiB yet).
+2. **Step 7-b:** Re-measure. Reason: keep 7-a and 7-c independently
+   bisectable; chunk reuse is committed only if measurement shows it is
+   still required.
+3. **Step 7-c:** Implement chunk-level reuse in `emit_alloc_reuse`
+   (the §M5-deferred item). Reason: with 4096-length lists × 5000
+   iterations, header-only reuse almost certainly cannot reach the
+   200 KiB budget, but the decision is measurement-driven.
+4. **Step 7-d:** Un-ignore the `total_bytes < 200 * 1024` assertion in
+   `wasm_exports_and_smoke.rs::refcount_reuse_loop_example_compiles`.
+5. **Step 5 (`stdlib/goby/list.gb` `set` rewrite) deferred to
+   post-acceptance.** Reason: the benchmark does not exercise
+   `list.set`, and PLAN already states Step 4 alone cannot close the
+   budget — i.e. acceptance depends on 7-a/7-c, not Step 5. Deferring
+   isolates any stdlib ripple from the reuse plumbing landing and
+   keeps `alloc_baseline.txt` deltas attributable.
 
 Earlier history (kept for context):
 

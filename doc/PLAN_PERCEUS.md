@@ -1393,6 +1393,67 @@ the reuse fast path when statically proven unique.
 - [ ] Un-ignore the `total_bytes < 200 * 1024` assertion in
       `crates/goby-wasm/tests/wasm_exports_and_smoke.rs::refcount_reuse_loop_example_compiles`.
 
+##### Step 7 execution plan (2026-04-26 decision log)
+
+The two outstanding sub-items above (`mut ys = xs` seed extension and
+chunk-level reuse) are sequenced as follows. Step 5 (`stdlib/goby/list.gb`
+`set` rewrite) is intentionally deferred until after acceptance lands.
+
+1. **Step 7-a — Seed `mut ys = xs` from the parameter's size class
+   (Owned-parameter case only).** Extend `comp_alloc_size_or_cell` (or
+   the `SizeEnv` seed) so that when `xs` is an `Owned` function
+   parameter with a known outer `SizeClass`, the binding `mut ys = xs`
+   inherits that class. Keep the change strictly conditional on the
+   M4.5 ownership classification: shared / `Borrowed` / unknown
+   parameters must continue returning `None`.
+   - *Rationale:* this is the smallest change that can fire reuse on
+     the benchmark loop and is exactly the precondition Step 7 already
+     reserves. Limiting the seed to `Owned` parameters preserves the
+     §3.4 invariant that reuse fires only on values statically proven
+     unique — a `mut ys = xs` over a shared `xs` would otherwise alias
+     and break value semantics. Broader `mut = Var` propagation is
+     deferred until a concrete second case demands it; YAGNI keeps the
+     proof surface narrow.
+   - *Verification:* expect `reuse_hits > 0` in
+     `goby run --debug-alloc-stats examples/refcount_reuse_loop.gb`.
+     `total_bytes` is **not** expected to clear 200 KiB yet.
+
+2. **Step 7-b — Re-measure and decide on chunk-level reuse.** With
+   header reuse firing, re-run the benchmark. `length=4096` over 5000
+   iterations almost certainly still exceeds 200 KiB because every
+   `AllocReuse` bumps a fresh chunk (M5-deferred), but we commit to a
+   measurement-driven decision rather than a pre-assumed one.
+   - *Rationale:* keeping 7-a and 7-b as separate landings means each
+     can be bisected and reviewed in isolation, and makes the
+     contribution of each mechanism observable in `total_bytes` /
+     `reuse_hits` deltas. If 7-a unexpectedly suffices, 7-b becomes a
+     pure cleanup task instead of an acceptance blocker.
+
+3. **Step 7-c — Implement chunk-level reuse if 7-b shows it is
+   needed.** Extend `emit_alloc_reuse` so the chunk payload is taken
+   from the freed value's chunk(s) instead of bumping. The ListSet/
+   AssignIndex hot path then performs zero per-iteration heap growth.
+   - *Rationale:* this is the §M5 deferred item the PLAN already
+     reserves under Step 7. It is left until 7-b confirms necessity so
+     the work order matches measured impact.
+
+4. **Step 7-d — Un-ignore the `total_bytes < 200 * 1024` assertion.**
+   Only after 7-a (and 7-c if needed) bring the benchmark below
+   budget.
+
+5. **Step 5 (`stdlib/goby/list.gb` `set` rewrite) deferred until
+   post-acceptance.** Although Step 5 sits before Step 7 in the
+   numbered list, the benchmark does not exercise `list.set`, and Step
+   7 explicitly notes "Step 4 alone cannot close the budget" — i.e.
+   the acceptance gate depends on 7-a/7-c, not on Step 5. Reordering
+   minimises the surface under review for the benchmark landing and
+   isolates any `set` rewrite regressions from the reuse plumbing.
+   - *Rationale:* Step 5's surface form rewrite touches the stdlib and
+     can ripple through unrelated examples; bundling it with the
+     acceptance landing risks confounding alloc-baseline deltas. After
+     acceptance, Step 5 becomes a pure code-quality follow-up that can
+     be verified against a stable baseline.
+
 #### Step 8 — STATE / PLAN sync and commit
 
 - [ ] Update `doc/STATE.md` to mark Perceus M5 acceptance and M6
