@@ -1382,10 +1382,13 @@ the reuse fast path when statically proven unique.
     `mut ys = xs; ys[i] := v` initialises `ys` from a `Var`, so
     `comp_alloc_size_or_cell` returns `None` and no reuse token is
     emitted. Step 4 alone cannot close the budget for this benchmark.
-- [ ] Extend `comp_alloc_size_or_cell` (or the `SizeEnv` propagation
+- [x] Extend `comp_alloc_size_or_cell` (or the `SizeEnv` propagation
       path) so `mut ys = xs` inherits `xs`'s outer size class when it
-      is known (function-parameter case). This is a precondition for
-      reuse to fire on the benchmark loop.
+      is known (function-parameter case). **Done 2026-04-26** via
+      `peek_binding_shape` + Owned-param `SizeEnv` seed in
+      `perceus_reuse::insert_reuse`. Synthetic test confirms reuse
+      fires; benchmark still blocked by Step 7-a.5 (intrinsic
+      ownership ABI).
 - [ ] Close the §M5-deferred chunk-level reuse gap (M5 list
       `AllocReuse` currently bumps a fresh chunk per call). Required
       to reach the 200 KiB budget once the per-iteration header reuse
@@ -1417,6 +1420,44 @@ chunk-level reuse) are sequenced as follows. Step 5 (`stdlib/goby/list.gb`
    - *Verification:* expect `reuse_hits > 0` in
      `goby run --debug-alloc-stats examples/refcount_reuse_loop.gb`.
      `total_bytes` is **not** expected to clear 200 KiB yet.
+   - **Status (2026-04-26): landed.** `insert_reuse` now takes a
+     per-decl `Owned`-param `HashSet<String>` and pre-seeds the
+     `SizeEnv` with `Header(1)` placeholders; a new
+     `peek_binding_shape` wrapper allows `Var(p)` passthrough only at
+     Let / LetMut / Assign rebind sites (the recursive
+     `value_alloc_size_or_cell` is unchanged, so `mut ys = [xs, xs]`
+     still falls back to outer-only). Synthetic
+     `step xs i = mut ys = xs; ys[0] := i; step ys (i-1)` (built via
+     a fresh `build` recursion, no `length` call) reports
+     `reuse_hits=5`. The benchmark itself is **still 0** —
+     `length(xs)` is the blocker; see Step 7-a.5 below.
+
+1.5. **Step 7-a.5 — Make read-only list intrinsics actually consume
+   their `Owned` argument.** Discovered while measuring Step 7-a:
+   `__goby_list_length` (and likely other read-only intrinsics) is
+   classified by the ownership pass as `Owned`-arg, so `drop_insert`
+   emits `Dup(xs); length(xs)` to keep `xs` live past the call. But
+   `emit_list_length_helper`
+   (`crates/goby-wasm/src/gen_lower/emit.rs::7532`) reads the header
+   and then drops nothing. The runtime refcount is therefore one
+   higher than the static analysis assumes after the call, and the
+   downstream `mut ys = xs; ys[i] := v` AssignIndex sees rc=2 at
+   `RefCountDropReuse`, taking the cold path and never incrementing
+   `reuse_hits`.
+
+   Two equivalent fixes:
+   - (a) Append a `goby_drop` to the emit of every read-only intrinsic
+     that takes an `Owned` heap arg (length, etc.).
+   - (b) Add an "intrinsic param ownership table" to the ownership
+     pass so these calls treat their list arg as `Borrowed` (no Dup,
+     no consume). drop_insert then keeps the caller's natural rc
+     accounting.
+
+   (b) is preferred — it removes a runtime drop-then-keep round-trip
+   and is closer to the spec's notion of these intrinsics as "pure
+   reads". This step is a precondition for 7-b's measurement, since
+   without it `reuse_hits` stays at 0 on the benchmark and the
+   chunk-reuse decision cannot be data-driven.
 
 2. **Step 7-b — Re-measure and decide on chunk-level reuse.** With
    header reuse firing, re-run the benchmark. `length=4096` over 5000

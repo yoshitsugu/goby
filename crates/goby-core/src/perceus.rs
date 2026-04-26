@@ -30,7 +30,25 @@ pub fn run_perceus_passes(module: &IrModule) -> IrModule {
     let dropped = drop_insert_module(module, &ownership);
     // reuse_pair label covers both intra-block and tail-call cross-call reuse
     let intra = IrModule {
-        decls: dropped.decls.into_iter().map(insert_reuse).collect(),
+        decls: dropped
+            .decls
+            .into_iter()
+            .map(|decl| {
+                let owned_params: HashSet<String> = ownership
+                    .get(&decl.name)
+                    .map(|classes| {
+                        decl.params
+                            .iter()
+                            .filter_map(|(name, _)| {
+                                (classes.get(name) == Some(&OwnershipClass::Owned))
+                                    .then(|| name.clone())
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                insert_reuse(decl, &owned_params)
+            })
+            .collect(),
     };
     let mut next_id: usize = 0;
     insert_tail_reuse_module(intra, &mut next_id)
@@ -2929,6 +2947,74 @@ mod tests {
         assert!(
             !ir_str.contains("dup xs"),
             "borrowed parameter should not be duped across handler boundary; got:\n{ir_str}"
+        );
+    }
+
+    /// M6 Step 7-a benchmark shape: a recursive `step xs i n` whose body is
+    /// `if n==0 { xs } else { mut ys = xs; ys[i] := v; step ys (i+1) (n-1) }`.
+    /// After the perceus pipeline, the AssignIndex on `ys` must carry a
+    /// `@reuse(...)` annotation (Owned-param seed propagating from `xs`).
+    #[test]
+    fn owned_param_seed_fires_on_step_like_recursion() {
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "step".to_string(),
+                params: vec![
+                    ("xs".to_string(), IrType::Unknown),
+                    ("i".to_string(), IrType::Int),
+                    ("n".to_string(), IrType::Int),
+                ],
+                result_ty: IrType::Unknown,
+                residual_effects: vec![],
+                reuse_param: None,
+                body: CompExpr::If {
+                    cond: Box::new(ValueExpr::BinOp {
+                        op: crate::ir::IrBinOp::Eq,
+                        left: Box::new(ValueExpr::Var("n".to_string())),
+                        right: Box::new(ValueExpr::IntLit(0)),
+                    }),
+                    then_: Box::new(CompExpr::Value(ValueExpr::Var("xs".to_string()))),
+                    else_: Box::new(CompExpr::LetMut {
+                        name: "ys".to_string(),
+                        ty: IrType::Unknown,
+                        value: Box::new(CompExpr::Value(ValueExpr::Var("xs".to_string()))),
+                        body: Box::new(CompExpr::Seq {
+                            stmts: vec![CompExpr::AssignIndex {
+                                root: "ys".to_string(),
+                                path: vec![ValueExpr::Var("i".to_string())],
+                                value: Box::new(CompExpr::Value(ValueExpr::IntLit(7))),
+                                reuse_token: None,
+                            }],
+                            tail: Box::new(CompExpr::Call {
+                                callee: Box::new(ValueExpr::GlobalRef {
+                                    module: "".to_string(),
+                                    name: "step".to_string(),
+                                }),
+                                args: vec![
+                                    ValueExpr::Var("ys".to_string()),
+                                    ValueExpr::BinOp {
+                                        op: crate::ir::IrBinOp::Add,
+                                        left: Box::new(ValueExpr::Var("i".to_string())),
+                                        right: Box::new(ValueExpr::IntLit(1)),
+                                    },
+                                    ValueExpr::BinOp {
+                                        op: crate::ir::IrBinOp::Sub,
+                                        left: Box::new(ValueExpr::Var("n".to_string())),
+                                        right: Box::new(ValueExpr::IntLit(1)),
+                                    },
+                                ],
+                                reuse_token: None,
+                            }),
+                        }),
+                    }),
+                },
+            }],
+        };
+        let rewritten = run_perceus_passes(&module);
+        let ir_str = fmt_ir(&rewritten);
+        assert!(
+            ir_str.contains("@reuse("),
+            "Owned-param `mut ys = xs` must seed AssignIndex reuse:\n{ir_str}"
         );
     }
 }

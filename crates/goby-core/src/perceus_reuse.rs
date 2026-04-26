@@ -52,18 +52,40 @@ impl SizeOrCell {
 
 type SizeEnv = HashMap<String, SizeOrCell>;
 
-pub fn insert_reuse(decl: IrDecl) -> IrDecl {
+pub fn insert_reuse(decl: IrDecl, owned_params: &HashSet<String>) -> IrDecl {
+    // Step 7-a seed: pre-register Owned function parameters in `SizeEnv`
+    // with a placeholder `Header(1)` shape so that `mut ys = xs` (where
+    // `xs` is an Owned param) propagates the shape via `peek_binding_shape`
+    // and lights up reuse on the AssignIndex inside the LetMut body.
+    //
+    // The static `Header(1)` is a placeholder — the actual chunk count is
+    // dynamic. Correctness does not rely on it: `lower_assign_index_reuse`
+    // always discards the AllocReuse result (root local already holds the
+    // mutated header from `ListSetInPlace`); the static `sc` only governs
+    // the size of the cold-path fallback fresh allocation that fires when
+    // `RefCountDropReuse` finds rc != 1. For an Owned parameter whose
+    // `mut ys = xs` rebinding does not insert a `Dup`, the runtime
+    // refcount remains 1 and the cold path is not taken.
+    let mut initial_sizes = SizeEnv::new();
+    for param in owned_params {
+        initial_sizes.insert(param.clone(), SizeOrCell::Size(SizeClass::Header(1)));
+    }
     IrDecl {
         name: decl.name,
         params: decl.params,
         result_ty: decl.result_ty,
         residual_effects: decl.residual_effects,
-        body: insert_reuse_comp(decl.body, &SizeEnv::new(), 0).0,
+        body: insert_reuse_comp(decl.body, &initial_sizes, 0, owned_params).0,
         reuse_param: decl.reuse_param,
     }
 }
 
-fn insert_reuse_comp(comp: CompExpr, sizes: &SizeEnv, next_token: usize) -> (CompExpr, usize) {
+fn insert_reuse_comp(
+    comp: CompExpr,
+    sizes: &SizeEnv,
+    next_token: usize,
+    owned_params: &HashSet<String>,
+) -> (CompExpr, usize) {
     match comp {
         CompExpr::Let {
             name,
@@ -71,15 +93,16 @@ fn insert_reuse_comp(comp: CompExpr, sizes: &SizeEnv, next_token: usize) -> (Com
             value,
             body,
         } => {
-            let bound_shape = comp_alloc_size_or_cell(&value);
-            let (value, next_token) = insert_reuse_comp(*value, sizes, next_token);
+            let bound_shape = peek_binding_shape(&value, sizes, owned_params);
+            let (value, next_token) = insert_reuse_comp(*value, sizes, next_token, owned_params);
             let mut body_sizes = sizes.clone();
             if let Some(shape) = bound_shape {
                 body_sizes.insert(name.clone(), shape);
             } else {
                 body_sizes.remove(&name);
             }
-            let (body, next_token) = insert_reuse_comp(*body, &body_sizes, next_token);
+            let (body, next_token) =
+                insert_reuse_comp(*body, &body_sizes, next_token, owned_params);
             (
                 CompExpr::Let {
                     name,
@@ -104,8 +127,8 @@ fn insert_reuse_comp(comp: CompExpr, sizes: &SizeEnv, next_token: usize) -> (Com
                 &HashSet::new(),
             ) == BindingRepr::HeapCell;
             // Peek at initial value's shape before consuming it.
-            let init_shape = comp_alloc_size_or_cell(&value);
-            let (value, next_token) = insert_reuse_comp(*value, sizes, next_token);
+            let init_shape = peek_binding_shape(&value, sizes, owned_params);
+            let (value, next_token) = insert_reuse_comp(*value, sizes, next_token, owned_params);
             let mut body_sizes = sizes.clone();
             if is_cell {
                 body_sizes.insert(name.clone(), SizeOrCell::CellPromoted);
@@ -117,7 +140,8 @@ fn insert_reuse_comp(comp: CompExpr, sizes: &SizeEnv, next_token: usize) -> (Com
             } else {
                 body_sizes.remove(&name);
             }
-            let (body, next_token) = insert_reuse_comp(*body, &body_sizes, next_token);
+            let (body, next_token) =
+                insert_reuse_comp(*body, &body_sizes, next_token, owned_params);
             (
                 CompExpr::LetMut {
                     name,
@@ -128,10 +152,12 @@ fn insert_reuse_comp(comp: CompExpr, sizes: &SizeEnv, next_token: usize) -> (Com
                 next_token,
             )
         }
-        CompExpr::Seq { stmts, tail } => insert_reuse_seq(stmts, *tail, sizes, next_token),
+        CompExpr::Seq { stmts, tail } => {
+            insert_reuse_seq(stmts, *tail, sizes, next_token, owned_params)
+        }
         CompExpr::If { cond, then_, else_ } => {
-            let (then_, next_token) = insert_reuse_comp(*then_, sizes, next_token);
-            let (else_, next_token) = insert_reuse_comp(*else_, sizes, next_token);
+            let (then_, next_token) = insert_reuse_comp(*then_, sizes, next_token, owned_params);
+            let (else_, next_token) = insert_reuse_comp(*else_, sizes, next_token, owned_params);
             (
                 CompExpr::If {
                     cond,
@@ -148,7 +174,7 @@ fn insert_reuse_comp(comp: CompExpr, sizes: &SizeEnv, next_token: usize) -> (Com
             // For `Assign` appearing as a sole expression (outside a `Seq`), the
             // subsequent code is the continuation of the enclosing `Let` body, which
             // re-scopes sizes naturally. No stale token risk in that case.
-            let (value, next_token) = insert_reuse_comp(*value, sizes, next_token);
+            let (value, next_token) = insert_reuse_comp(*value, sizes, next_token, owned_params);
             (
                 CompExpr::Assign {
                     name,
@@ -194,7 +220,7 @@ fn insert_reuse_comp(comp: CompExpr, sizes: &SizeEnv, next_token: usize) -> (Com
             } else {
                 next_token
             };
-            let (value, next_token) = insert_reuse_comp(*value, sizes, next_token);
+            let (value, next_token) = insert_reuse_comp(*value, sizes, next_token, owned_params);
             (
                 CompExpr::AssignIndex {
                     root,
@@ -210,7 +236,7 @@ fn insert_reuse_comp(comp: CompExpr, sizes: &SizeEnv, next_token: usize) -> (Com
             let arms = arms
                 .into_iter()
                 .map(|arm| {
-                    let (body, updated) = insert_reuse_comp(arm.body, sizes, next);
+                    let (body, updated) = insert_reuse_comp(arm.body, sizes, next, owned_params);
                     next = updated;
                     crate::ir::IrCaseArm {
                         pattern: arm.pattern,
@@ -225,7 +251,7 @@ fn insert_reuse_comp(comp: CompExpr, sizes: &SizeEnv, next_token: usize) -> (Com
             let clauses = clauses
                 .into_iter()
                 .map(|clause| {
-                    let (body, updated) = insert_reuse_comp(clause.body, sizes, next);
+                    let (body, updated) = insert_reuse_comp(clause.body, sizes, next, owned_params);
                     next = updated;
                     crate::ir::IrHandlerClause {
                         op_name: clause.op_name,
@@ -237,8 +263,9 @@ fn insert_reuse_comp(comp: CompExpr, sizes: &SizeEnv, next_token: usize) -> (Com
             (CompExpr::Handle { clauses }, next)
         }
         CompExpr::WithHandler { handler, body } => {
-            let (handler, next_token) = insert_reuse_comp(*handler, sizes, next_token);
-            let (body, next_token) = insert_reuse_comp(*body, sizes, next_token);
+            let (handler, next_token) =
+                insert_reuse_comp(*handler, sizes, next_token, owned_params);
+            let (body, next_token) = insert_reuse_comp(*body, sizes, next_token, owned_params);
             (
                 CompExpr::WithHandler {
                     handler: Box::new(handler),
@@ -263,6 +290,7 @@ fn insert_reuse_seq(
     tail: CompExpr,
     sizes: &SizeEnv,
     next_token: usize,
+    owned_params: &HashSet<String>,
 ) -> (CompExpr, usize) {
     let mut next = next_token;
     let mut rewritten = Vec::with_capacity(stmts.len());
@@ -294,8 +322,8 @@ fn insert_reuse_seq(
                     });
                 }
                 let rebind_name = name.clone();
-                let new_shape = comp_alloc_size_or_cell(value);
-                let (stmt_out, updated) = insert_reuse_comp(stmt, &live_sizes, next);
+                let new_shape = peek_binding_shape(value, &live_sizes, owned_params);
+                let (stmt_out, updated) = insert_reuse_comp(stmt, &live_sizes, next, owned_params);
                 next = updated;
                 rewritten.push(stmt_out);
                 // Update live_sizes to reflect the new binding.
@@ -315,7 +343,7 @@ fn insert_reuse_seq(
                         value: Box::new(value),
                     });
                 }
-                let (other, updated) = insert_reuse_comp(other, &live_sizes, next);
+                let (other, updated) = insert_reuse_comp(other, &live_sizes, next, owned_params);
                 next = updated;
                 rewritten.push(other);
             }
@@ -335,10 +363,10 @@ fn insert_reuse_seq(
             rewritten.push(CompExpr::Drop {
                 value: Box::new(value),
             });
-            insert_reuse_comp(tail, &live_sizes, next)
+            insert_reuse_comp(tail, &live_sizes, next, owned_params)
         }
     } else {
-        insert_reuse_comp(tail, &live_sizes, next)
+        insert_reuse_comp(tail, &live_sizes, next, owned_params)
     };
 
     (
@@ -401,6 +429,40 @@ fn comp_alloc_class(comp: &CompExpr) -> Option<SizeClass> {
 /// - `ListLit` with `spread: Some(_)`,
 /// - `Call`, `If`, `Case` (unknown identity),
 /// - any non-list element where inner reuse would not apply.
+/// Binding-site shape lookup with Owned-parameter `Var` passthrough.
+///
+/// Behaves like `comp_alloc_size_or_cell` for fresh allocations, with one
+/// extension: when `value` is `Value(Var(name))` and `name` is in the
+/// `owned_params` set with an entry in `sizes`, we propagate that entry
+/// to the new binding. This authorises reuse on the
+///
+/// ```text
+/// mut ys = xs       // xs is an Owned function parameter
+/// ys[i] := v        // becomes a reuse-eligible AssignIndex
+/// ```
+///
+/// pattern that the `comp_alloc_size_or_cell` recursion would otherwise
+/// reject (it returns `None` for any `Var(_)` to keep alias risks contained).
+///
+/// **Restricted to call sites that bind a fresh name from a single
+/// value** (Let / LetMut peek, `Assign` rebind in `insert_reuse_seq`).
+/// We do not extend `value_alloc_size_or_cell` itself, so `[xs, xs]` does
+/// not get a `FreshList { inner = Header(1) }` shape — the inner element
+/// recursion still sees `Var(_) → None` and falls back to outer-only.
+fn peek_binding_shape(
+    value: &CompExpr,
+    sizes: &SizeEnv,
+    owned_params: &HashSet<String>,
+) -> Option<SizeOrCell> {
+    if let CompExpr::Value(ValueExpr::Var(name)) = value
+        && owned_params.contains(name)
+        && let Some(shape) = sizes.get(name)
+    {
+        return Some(shape.clone());
+    }
+    comp_alloc_size_or_cell(value)
+}
+
 fn comp_alloc_size_or_cell(comp: &CompExpr) -> Option<SizeOrCell> {
     match comp {
         CompExpr::Value(value) => value_alloc_size_or_cell(value),
@@ -1068,6 +1130,7 @@ mod tests {
     };
     use crate::ir::{CompExpr, IrDecl, IrModule, IrType, ValueExpr, fmt_ir, validate_ir};
     use crate::size_class::SizeClass;
+    use std::collections::HashSet;
 
     #[test]
     fn pairs_drop_with_following_tuple_allocation_in_same_seq_tail() {
@@ -1101,7 +1164,7 @@ mod tests {
             },
         };
 
-        let rewritten = insert_reuse(decl);
+        let rewritten = insert_reuse(decl, &HashSet::new());
         let module = IrModule {
             decls: vec![rewritten],
         };
@@ -1143,7 +1206,7 @@ mod tests {
             },
         };
 
-        let rewritten = insert_reuse(decl);
+        let rewritten = insert_reuse(decl, &HashSet::new());
         let module = IrModule {
             decls: vec![rewritten],
         };
@@ -1191,7 +1254,7 @@ mod tests {
             },
         };
 
-        let rewritten = insert_reuse(decl);
+        let rewritten = insert_reuse(decl, &HashSet::new());
         let module = IrModule {
             decls: vec![rewritten],
         };
@@ -1249,7 +1312,7 @@ mod tests {
             },
         };
 
-        let rewritten = insert_reuse(decl);
+        let rewritten = insert_reuse(decl, &HashSet::new());
         let module = IrModule {
             decls: vec![rewritten],
         };
@@ -1304,7 +1367,7 @@ mod tests {
             },
         };
 
-        let rewritten = insert_reuse(decl);
+        let rewritten = insert_reuse(decl, &HashSet::new());
         let module = IrModule {
             decls: vec![rewritten],
         };
@@ -1673,7 +1736,7 @@ mod tests {
             },
         };
 
-        let rewritten = insert_reuse(decl);
+        let rewritten = insert_reuse(decl, &HashSet::new());
         let module = IrModule {
             decls: vec![rewritten],
         };
@@ -1720,7 +1783,7 @@ mod tests {
             },
         };
 
-        let rewritten = insert_reuse(decl);
+        let rewritten = insert_reuse(decl, &HashSet::new());
         let module = IrModule {
             decls: vec![rewritten],
         };
@@ -1776,7 +1839,7 @@ mod tests {
             },
         };
 
-        let rewritten = insert_reuse(decl);
+        let rewritten = insert_reuse(decl, &HashSet::new());
         let module = IrModule {
             decls: vec![rewritten],
         };
@@ -1837,7 +1900,7 @@ mod tests {
             },
         };
 
-        let rewritten = insert_reuse(decl);
+        let rewritten = insert_reuse(decl, &HashSet::new());
         let module = IrModule {
             decls: vec![rewritten],
         };
@@ -1883,7 +1946,7 @@ mod tests {
             },
         };
 
-        let rewritten = insert_reuse(decl);
+        let rewritten = insert_reuse(decl, &HashSet::new());
         let module = IrModule {
             decls: vec![rewritten],
         };
@@ -1946,7 +2009,7 @@ mod tests {
             },
         };
 
-        let rewritten = insert_reuse(decl);
+        let rewritten = insert_reuse(decl, &HashSet::new());
         let module = IrModule {
             decls: vec![rewritten],
         };
@@ -2004,7 +2067,7 @@ mod tests {
             },
         };
 
-        let rewritten = insert_reuse(decl);
+        let rewritten = insert_reuse(decl, &HashSet::new());
         let module = IrModule {
             decls: vec![rewritten],
         };
@@ -2058,7 +2121,7 @@ mod tests {
             },
         };
 
-        let rewritten = insert_reuse(decl);
+        let rewritten = insert_reuse(decl, &HashSet::new());
         let module = IrModule {
             decls: vec![rewritten],
         };
@@ -2105,7 +2168,7 @@ mod tests {
             },
         };
 
-        let rewritten = insert_reuse(decl);
+        let rewritten = insert_reuse(decl, &HashSet::new());
         let module = IrModule {
             decls: vec![rewritten],
         };
@@ -2115,6 +2178,115 @@ mod tests {
         assert!(
             ir.contains("@reuse(__perceus_reuse_token_0, levels=[Header(1), _])"),
             "deeper levels past a non-FreshList must be _:\n{ir}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // M6 Step 7-a: Owned-parameter `mut ys = xs` seed
+    // -----------------------------------------------------------------------
+
+    /// Decl: `step xs = mut ys = xs; ys[0] := 7; ys`. With `xs` in the
+    /// Owned-parameter set, the LetMut peek inherits `xs`'s seeded
+    /// `Header(1)` shape and the AssignIndex on `ys` becomes
+    /// reuse-eligible.
+    fn build_step_seed_decl() -> IrDecl {
+        IrDecl {
+            name: "step".to_string(),
+            params: vec![("xs".to_string(), IrType::Unknown)],
+            result_ty: IrType::Unknown,
+            residual_effects: vec![],
+            reuse_param: None,
+            body: CompExpr::LetMut {
+                name: "ys".to_string(),
+                ty: IrType::Unknown,
+                value: Box::new(CompExpr::Value(ValueExpr::Var("xs".to_string()))),
+                body: Box::new(CompExpr::Seq {
+                    stmts: vec![CompExpr::AssignIndex {
+                        root: "ys".to_string(),
+                        path: vec![ValueExpr::IntLit(0)],
+                        value: Box::new(CompExpr::Value(ValueExpr::IntLit(7))),
+                        reuse_token: None,
+                    }],
+                    tail: Box::new(CompExpr::Value(ValueExpr::Var("ys".to_string()))),
+                }),
+            },
+        }
+    }
+
+    #[test]
+    fn owned_param_seeds_mut_var_assignindex_reuse() {
+        let mut owned = HashSet::new();
+        owned.insert("xs".to_string());
+        let rewritten = insert_reuse(build_step_seed_decl(), &owned);
+        let ir = fmt_ir(&IrModule {
+            decls: vec![rewritten],
+        });
+        assert!(
+            ir.contains("@reuse("),
+            "Owned-param `mut ys = xs` should issue a reuse_token:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn non_owned_var_does_not_seed_mut_assignindex_reuse() {
+        // Same shape, but `xs` is not Owned (empty seed set) → must not fire.
+        let rewritten = insert_reuse(build_step_seed_decl(), &HashSet::new());
+        let ir = fmt_ir(&IrModule {
+            decls: vec![rewritten],
+        });
+        assert!(
+            !ir.contains("@reuse("),
+            "Without Owned-param seed, `mut ys = xs` must not issue a reuse_token:\n{ir}"
+        );
+    }
+
+    /// Even with `xs` Owned, `mut ys = [xs, xs]` must not register an
+    /// inner FreshList — the two `Var(xs)` elements alias each other,
+    /// and inner reuse on a shared header would corrupt value semantics.
+    /// The outer ListLit shape is recognised (Header(1)) but inner level
+    /// must be `_`.
+    #[test]
+    fn owned_param_does_not_leak_into_listlit_inner_shape() {
+        let mut owned = HashSet::new();
+        owned.insert("xs".to_string());
+        let decl = IrDecl {
+            name: "step".to_string(),
+            params: vec![("xs".to_string(), IrType::Unknown)],
+            result_ty: IrType::Unknown,
+            residual_effects: vec![],
+            reuse_param: None,
+            body: CompExpr::LetMut {
+                name: "ys".to_string(),
+                ty: IrType::Unknown,
+                value: Box::new(CompExpr::Value(ValueExpr::ListLit {
+                    elements: vec![
+                        ValueExpr::Var("xs".to_string()),
+                        ValueExpr::Var("xs".to_string()),
+                    ],
+                    spread: None,
+                })),
+                body: Box::new(CompExpr::Seq {
+                    stmts: vec![CompExpr::AssignIndex {
+                        root: "ys".to_string(),
+                        path: vec![ValueExpr::IntLit(0), ValueExpr::IntLit(0)],
+                        value: Box::new(CompExpr::Value(ValueExpr::IntLit(9))),
+                        reuse_token: None,
+                    }],
+                    tail: Box::new(CompExpr::Value(ValueExpr::Var("ys".to_string()))),
+                }),
+            },
+        };
+        let rewritten = insert_reuse(decl, &owned);
+        let ir = fmt_ir(&IrModule {
+            decls: vec![rewritten],
+        });
+        // Outer ListLit gives Header(1) at level 0; inner element is
+        // `Var(xs)` which `value_alloc_size_or_cell` rejects, so level 1
+        // is `_`. The Owned-param passthrough must NOT leak into the
+        // recursive element analysis.
+        assert!(
+            ir.contains("@reuse(__perceus_reuse_token_0, levels=[Header(1), _])"),
+            "shared inner Var(xs) must not promote to Header(1) at level 1:\n{ir}"
         );
     }
 }
