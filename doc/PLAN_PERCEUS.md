@@ -1478,10 +1478,25 @@ chunk-level reuse) are sequenced as follows. Step 5 (`stdlib/goby/list.gb`
    - *Rationale:* this is the §M5 deferred item the PLAN already
      reserves under Step 7. It is left until 7-b confirms necessity so
      the work order matches measured impact.
+   - **Status (2026-04-26): superseded by measurement.** Header reuse
+     firing plus `iters=0` measurement showed the remaining ~149 MiB
+     was not the AssignIndex hot loop. The actual blockers were
+     `build 0 4096 []` (`[k, ..acc]` tail-recursive prepend
+     accumulator) and `xor_fold` (`[x, ..rest]` tail pattern). The
+     accepted fix keeps the measurement-driven intent of Step 7-c but
+     targets the real allocation sources: GeneralLower now lowers the
+     build shape through a builder-backed loop and lowers the
+     self-recursive list-case integer fold through `ListFold`. The
+     benchmark now reports `total_bytes=108704 peak_bytes=108704
+     free_list_hits=0 reuse_hits=5000`, below the 200 KiB budget.
 
 4. **Step 7-d — Un-ignore the `total_bytes < 200 * 1024` assertion.**
    Only after 7-a (and 7-c if needed) bring the benchmark below
    budget.
+   - **Status (2026-04-26): done.**
+     `wasm_exports_and_smoke.rs::refcount_reuse_loop_example_compiles`
+     now executes the example with debug alloc stats and asserts
+     `total_bytes < 200 * 1024`.
 
 5. **Step 5 (`stdlib/goby/list.gb` `set` rewrite) deferred until
    post-acceptance.** Although Step 5 sits before Step 7 in the

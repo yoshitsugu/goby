@@ -1274,7 +1274,7 @@ fn lower_aux_decl(
         return Ok(Err(GeneralLowerUnsupportedReason::HandlerRewriteFailed));
     };
     let lowered = if decl_annotation_returns_int(type_annotation) {
-        match lower::lower_supported_self_recursive_int_scan(
+        match lower::lower_supported_self_recursive_int_list_fold(
             name,
             &body,
             &param_names,
@@ -1282,17 +1282,27 @@ fn lower_aux_decl(
             lambda_decls,
         ) {
             Ok(Some(instrs)) => Ok(instrs),
-            Ok(None) => lower::lower_comp_collecting_lambdas_with_params(
+            Ok(None) => match lower::lower_supported_self_recursive_int_scan(
+                name,
                 &body,
                 &param_names,
                 known_decls,
-                reuse_decls,
                 lambda_decls,
-            ),
+            ) {
+                Ok(Some(instrs)) => Ok(instrs),
+                Ok(None) => lower::lower_comp_collecting_lambdas_with_params(
+                    &body,
+                    &param_names,
+                    known_decls,
+                    reuse_decls,
+                    lambda_decls,
+                ),
+                Err(err) => Err(err),
+            },
             Err(err) => Err(err),
         }
     } else if decl_annotation_returns_list(type_annotation) {
-        match lower::lower_supported_self_recursive_list_spread_builder(
+        match lower::lower_supported_tail_recursive_list_prepend_acc_builder(
             name,
             &body,
             &param_names,
@@ -1300,13 +1310,23 @@ fn lower_aux_decl(
             lambda_decls,
         ) {
             Ok(Some(instrs)) => Ok(instrs),
-            Ok(None) => lower::lower_comp_collecting_lambdas_with_params(
+            Ok(None) => match lower::lower_supported_self_recursive_list_spread_builder(
+                name,
                 &body,
                 &param_names,
                 known_decls,
-                reuse_decls,
                 lambda_decls,
-            ),
+            ) {
+                Ok(Some(instrs)) => Ok(instrs),
+                Ok(None) => lower::lower_comp_collecting_lambdas_with_params(
+                    &body,
+                    &param_names,
+                    known_decls,
+                    reuse_decls,
+                    lambda_decls,
+                ),
+                Err(err) => Err(err),
+            },
             Err(err) => Err(err),
         }
     } else {

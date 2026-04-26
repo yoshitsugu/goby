@@ -10,7 +10,10 @@ use goby_core::closure_capture::{
     BindingRepr, CallableEnv, CallableEnvSlotKind, ClosureBindingEnv,
     analyze_lambda_callable_env_for_params, binding_repr_for_let_mut, has_mutable_write_capture_of,
 };
-use goby_core::ir::{AllocInit, CompExpr, IrBinOp, IrInterpPart, ValueExpr};
+use goby_core::ir::{
+    AllocInit, CompExpr, IrBinOp, IrCasePattern, IrInterpPart, IrListPatternItem,
+    IrListPatternTail, ValueExpr,
+};
 use goby_core::size_class::SizeClass;
 
 use crate::gen_lower::backend_ir::{
@@ -233,6 +236,98 @@ pub(crate) fn lower_supported_self_recursive_int_scan(
     Ok(Some(decl_instrs))
 }
 
+pub(crate) fn lower_supported_self_recursive_int_list_fold(
+    decl_name: &str,
+    comp: &CompExpr,
+    decl_params: &[String],
+    known_decls: &HashSet<String>,
+    lambda_decls: &mut Vec<LambdaAuxDecl>,
+) -> Result<Option<Vec<WasmBackendInstr>>, LowerError> {
+    let CompExpr::Case { scrutinee, arms } = comp else {
+        return Ok(None);
+    };
+    let ValueExpr::Var(list_param) = scrutinee.as_ref() else {
+        return Ok(None);
+    };
+    let Some(acc_param) = decl_params.iter().find(|param| *param != list_param) else {
+        return Ok(None);
+    };
+    if decl_params.len() != 2 || arms.len() != 2 {
+        return Ok(None);
+    }
+
+    let mut empty_arm_body = None;
+    let mut cons_head = None;
+    let mut cons_tail = None;
+    let mut cons_body = None;
+    for arm in arms {
+        match &arm.pattern {
+            IrCasePattern::EmptyList => {
+                empty_arm_body = Some(&arm.body);
+            }
+            IrCasePattern::ListPattern { items, tail } if items.len() == 1 => {
+                let IrListPatternItem::Bind(head) = &items[0] else {
+                    return Ok(None);
+                };
+                let Some(IrListPatternTail::Bind(tail_name)) = tail else {
+                    return Ok(None);
+                };
+                cons_head = Some(head.as_str());
+                cons_tail = Some(tail_name.as_str());
+                cons_body = Some(&arm.body);
+            }
+            _ => return Ok(None),
+        }
+    }
+    if !matches!(empty_arm_body, Some(CompExpr::Value(ValueExpr::Var(name))) if name == acc_param) {
+        return Ok(None);
+    }
+    let Some(head_name) = cons_head else {
+        return Ok(None);
+    };
+    let Some(tail_name) = cons_tail else {
+        return Ok(None);
+    };
+    let Some(CompExpr::Call { callee, args, .. }) = cons_body else {
+        return Ok(None);
+    };
+    if !is_self_decl_callee(callee, decl_name) || args.len() != 2 {
+        return Ok(None);
+    }
+    if !matches!(&args[0], ValueExpr::Var(name) if name == tail_name) {
+        return Ok(None);
+    }
+    if value_expr_mentions_var(&args[1], tail_name) {
+        return Ok(None);
+    }
+
+    let cb_acc = acc_param.clone();
+    let cb_head = head_name.to_string();
+    let cb_bindings = ClosureBindingEnv::with_decl_params([cb_acc.as_str(), cb_head.as_str()]);
+    let cb_instrs = lower_value_ctx(&args[1], &HashMap::new(), &cb_bindings, known_decls)?;
+    let n = LAMBDA_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+    let cb_name = format!("__lambda_{n}");
+    lambda_decls.push(LambdaAuxDecl {
+        decl_name: cb_name.clone(),
+        param_names: vec![cb_acc.clone(), cb_head],
+        env: CallableEnv::default(),
+        instrs: cb_instrs,
+    });
+
+    Ok(Some(vec![
+        WasmBackendInstr::LoadLocal {
+            name: list_param.clone(),
+        },
+        WasmBackendInstr::LoadLocal {
+            name: acc_param.clone(),
+        },
+        WasmBackendInstr::PushFuncHandle { decl_name: cb_name },
+        WasmBackendInstr::Intrinsic {
+            intrinsic: BackendIntrinsic::ListFold,
+        },
+    ]))
+}
+
 pub(crate) fn lower_supported_self_recursive_list_spread_builder(
     decl_name: &str,
     comp: &CompExpr,
@@ -309,6 +404,85 @@ pub(crate) fn lower_supported_self_recursive_list_spread_builder(
         n_chunks_local: "__rr4_list_n_chunks".to_string(),
         chunk_ptr_local: "__rr4_list_chunk_ptr".to_string(),
         total_len_local: "__rr4_list_total_len".to_string(),
+        initial_capacity: 4,
+    });
+    decl_instrs.push(WasmBackendInstr::Loop { body_instrs });
+    Ok(Some(decl_instrs))
+}
+
+pub(crate) fn lower_supported_tail_recursive_list_prepend_acc_builder(
+    decl_name: &str,
+    comp: &CompExpr,
+    decl_params: &[String],
+    known_decls: &HashSet<String>,
+    _lambda_decls: &mut Vec<LambdaAuxDecl>,
+) -> Result<Option<Vec<WasmBackendInstr>>, LowerError> {
+    let CompExpr::If { cond, then_, else_ } = comp else {
+        return Ok(None);
+    };
+    let CompExpr::Value(ValueExpr::Var(acc_param)) = then_.as_ref() else {
+        return Ok(None);
+    };
+    let Some(acc_idx) = decl_params.iter().position(|param| param == acc_param) else {
+        return Ok(None);
+    };
+    let CompExpr::Call { callee, args, .. } = else_.as_ref() else {
+        return Ok(None);
+    };
+    if !is_self_decl_callee(callee, decl_name) || args.len() != decl_params.len() {
+        return Ok(None);
+    };
+    let ValueExpr::ListLit { elements, spread } = &args[acc_idx] else {
+        return Ok(None);
+    };
+    let Some(spread) = spread.as_deref() else {
+        return Ok(None);
+    };
+    if !matches!(spread, ValueExpr::Var(name) if name == acc_param) {
+        return Ok(None);
+    }
+
+    let bindings = ClosureBindingEnv::with_decl_params(decl_params.iter().map(String::as_str));
+    let mut decls: HashSet<String> = [
+        "__rr4_tail_list_header_ptr".to_string(),
+        "__rr4_tail_list_header_cap".to_string(),
+        "__rr4_tail_list_n_chunks".to_string(),
+        "__rr4_tail_list_chunk_ptr".to_string(),
+        "__rr4_tail_list_total_len".to_string(),
+        "__rr4_tail_item".to_string(),
+    ]
+    .into();
+    let mut recur_temp_counter = 0usize;
+    let body_instrs = lower_tail_recursive_list_prepend_acc_loop_body(
+        cond,
+        elements,
+        acc_param,
+        acc_idx,
+        decl_params,
+        args,
+        &bindings,
+        known_decls,
+        &mut decls,
+        &mut recur_temp_counter,
+    )?;
+
+    let mut decl_instrs: Vec<WasmBackendInstr> = decls
+        .into_iter()
+        .map(|name| WasmBackendInstr::DeclareLocal { name })
+        .collect();
+    decl_instrs.sort_by(|left, right| match (left, right) {
+        (
+            WasmBackendInstr::DeclareLocal { name: left },
+            WasmBackendInstr::DeclareLocal { name: right },
+        ) => left.cmp(right),
+        _ => std::cmp::Ordering::Equal,
+    });
+    decl_instrs.push(WasmBackendInstr::ListBuilderNew {
+        header_ptr_local: "__rr4_tail_list_header_ptr".to_string(),
+        header_cap_local: "__rr4_tail_list_header_cap".to_string(),
+        n_chunks_local: "__rr4_tail_list_n_chunks".to_string(),
+        chunk_ptr_local: "__rr4_tail_list_chunk_ptr".to_string(),
+        total_len_local: "__rr4_tail_list_total_len".to_string(),
         initial_capacity: 4,
     });
     decl_instrs.push(WasmBackendInstr::Loop { body_instrs });
@@ -1372,6 +1546,97 @@ fn lower_self_recursive_list_spread_loop_body(
         });
     }
     for (param, temp_name) in decl_params.iter().zip(temp_names.iter()) {
+        else_instrs.push(WasmBackendInstr::LoadLocal {
+            name: temp_name.clone(),
+        });
+        else_instrs.push(WasmBackendInstr::StoreLocal {
+            name: param.clone(),
+        });
+    }
+    else_instrs.push(WasmBackendInstr::ContinueLoop { relative_depth: 1 });
+
+    let mut instrs = lower_value_ctx(cond, &HashMap::new(), bindings, known_decls)?;
+    instrs.push(WasmBackendInstr::If {
+        then_instrs: std::mem::take(&mut then_instrs),
+        else_instrs,
+    });
+    Ok(instrs)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_tail_recursive_list_prepend_acc_loop_body(
+    cond: &ValueExpr,
+    elements: &[ValueExpr],
+    acc_param: &str,
+    acc_idx: usize,
+    decl_params: &[String],
+    next_args: &[ValueExpr],
+    bindings: &ClosureBindingEnv,
+    known_decls: &HashSet<String>,
+    decls: &mut HashSet<String>,
+    recur_temp_counter: &mut usize,
+) -> Result<Vec<WasmBackendInstr>, LowerError> {
+    let mut then_instrs = vec![
+        WasmBackendInstr::ListReverseFoldPrepend {
+            list_instrs: vec![WasmBackendInstr::ListBuilderFinish {
+                header_ptr_local: "__rr4_tail_list_header_ptr".to_string(),
+                n_chunks_local: "__rr4_tail_list_n_chunks".to_string(),
+                total_len_local: "__rr4_tail_list_total_len".to_string(),
+            }],
+            item_local: "__rr4_tail_item".to_string(),
+            prefix_element_instrs: vec![vec![WasmBackendInstr::LoadLocal {
+                name: "__rr4_tail_item".to_string(),
+            }]],
+        },
+        WasmBackendInstr::LoadLocal {
+            name: acc_param.to_string(),
+        },
+        WasmBackendInstr::Intrinsic {
+            intrinsic: BackendIntrinsic::ListConcat,
+        },
+    ];
+
+    let mut else_instrs = Vec::new();
+    for elem in elements {
+        else_instrs.push(WasmBackendInstr::ListBuilderPush {
+            header_ptr_local: "__rr4_tail_list_header_ptr".to_string(),
+            header_cap_local: "__rr4_tail_list_header_cap".to_string(),
+            n_chunks_local: "__rr4_tail_list_n_chunks".to_string(),
+            chunk_ptr_local: "__rr4_tail_list_chunk_ptr".to_string(),
+            total_len_local: "__rr4_tail_list_total_len".to_string(),
+            value_instrs: lower_value_ctx(elem, &HashMap::new(), bindings, known_decls)?,
+        });
+    }
+
+    let mut temp_names = Vec::with_capacity(decl_params.len());
+    for (idx, param) in decl_params.iter().enumerate() {
+        if idx == acc_idx {
+            temp_names.push(String::new());
+            continue;
+        }
+        let temp_name = format!("__rr4_tail_next_{}_{}", param, *recur_temp_counter);
+        *recur_temp_counter += 1;
+        decls.insert(temp_name.clone());
+        temp_names.push(temp_name);
+    }
+    for (idx, (arg, temp_name)) in next_args.iter().zip(temp_names.iter()).enumerate() {
+        if idx == acc_idx {
+            continue;
+        }
+        else_instrs.extend(lower_value_ctx(
+            arg,
+            &HashMap::new(),
+            bindings,
+            known_decls,
+        )?);
+        else_instrs.push(WasmBackendInstr::StoreLocal {
+            name: temp_name.clone(),
+        });
+    }
+    for (idx, (param, temp_name)) in decl_params.iter().zip(temp_names.iter()).enumerate() {
+        if idx == acc_idx {
+            continue;
+        }
         else_instrs.push(WasmBackendInstr::LoadLocal {
             name: temp_name.clone(),
         });

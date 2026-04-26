@@ -3,8 +3,9 @@ use std::sync::Mutex;
 
 use goby_core::parse_module;
 use goby_wasm::{
-    RuntimeIoExecutionKind, compile_module, execute_module_with_stdin,
-    execute_runtime_module_with_stdin, runtime_io_execution_kind,
+    CompileOptions, RuntimeIoExecutionKind, compile_module, execute_module_with_stdin,
+    execute_runtime_module_with_stdin,
+    execute_runtime_module_with_stdin_config_and_options_captured, runtime_io_execution_kind,
 };
 use wasmparser::Validator;
 
@@ -27,6 +28,15 @@ fn read_example(name: &str) -> String {
     path.push("examples");
     path.push(name);
     std::fs::read_to_string(path).expect("example file should exist")
+}
+
+fn parse_alloc_stats_field(stderr: &str, field: &str) -> u64 {
+    stderr
+        .split_whitespace()
+        .find_map(|part| part.strip_prefix(&format!("{field}=")))
+        .unwrap_or_else(|| panic!("missing {field} field in alloc stats: {stderr}"))
+        .parse()
+        .unwrap_or_else(|e| panic!("invalid {field} field in alloc stats: {e}: {stderr}"))
 }
 
 /// Return the payload bytes of the first Wasm section with the given id, or `None`.
@@ -864,6 +874,22 @@ fn refcount_reuse_loop_example_compiles() {
     let module = parse_module(source).expect("refcount_reuse_loop.gb should parse");
     let wasm = compile_module(&module).expect("refcount_reuse_loop.gb should compile");
     assert_valid_wasm_module(&wasm);
+    let output = execute_runtime_module_with_stdin_config_and_options_captured(
+        &module,
+        Some(String::new()),
+        None,
+        CompileOptions {
+            debug_alloc_stats: true,
+        },
+    )
+    .expect("refcount_reuse_loop.gb should execute")
+    .expect("refcount_reuse_loop.gb should use runtime-owned Wasm");
+    let total_bytes = parse_alloc_stats_field(&output.stderr, "total_bytes");
+    assert!(
+        total_bytes < 200 * 1024,
+        "refcount_reuse_loop.gb should stay under 200 KiB; stderr:\n{}",
+        output.stderr
+    );
 }
 
 #[test]

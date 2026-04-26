@@ -1828,6 +1828,14 @@ fn refcount_reuse_loop_owned_param_seed_reuses_assign_index() {
         dump.contains("RefCountDropReuse"),
         "refcount loop AssignIndex should lower with reuse: {dump}"
     );
+    assert!(
+        dump.contains("ListBuilderNew"),
+        "tail-recursive build should lower to builder-backed loop: {dump}"
+    );
+    assert!(
+        dump.contains("ListFold"),
+        "xor_fold should lower to allocation-free ListFold traversal: {dump}"
+    );
     let output = execute_runtime_module_with_stdin_config_and_options_captured(
         &module,
         Some(String::new()),
@@ -1839,9 +1847,15 @@ fn refcount_reuse_loop_owned_param_seed_reuses_assign_index() {
     .expect("refcount loop should execute")
     .expect("sample should run on runtime-owned Wasm");
     let reuse_hits = parse_alloc_stats_field(&output.stderr, "reuse_hits");
+    let total_bytes = parse_alloc_stats_field(&output.stderr, "total_bytes");
     assert!(
         reuse_hits > 0,
         "refcount loop should hit owned-param AssignIndex reuse; stderr:\n{}",
+        output.stderr
+    );
+    assert!(
+        total_bytes < 200 * 1024,
+        "refcount loop should stay under the Perceus acceptance budget; stderr:\n{}",
         output.stderr
     );
 }

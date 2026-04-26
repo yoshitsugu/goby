@@ -1,20 +1,28 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-26 (Perceus M6 Step 7-a/7-a.5 landed; header reuse fires on `refcount_reuse_loop`, chunk reuse still needed)
+Last updated: 2026-04-26 (Perceus M6 Step 7 acceptance reached; `refcount_reuse_loop` below 200 KiB)
 
 ## Current Focus
 
-**Perceus M6 Step 7-a / 7-a.5 is complete.** The `mut ys = xs; ys[i] := v`
-benchmark shape now gets an `AssignIndex` reuse token when `xs` is an
-M4.5-`Owned` parameter, and GeneralLower runs Perceus with imported stdlib
-declarations visible so wrapper calls like `length(xs)` use accurate ownership
-facts. `__goby_list_length` is modelled as a borrowed-list intrinsic in the
-ownership pass, avoiding the stale `Dup(xs)` that kept runtime rc at 2.
+**Perceus M6 Step 7 acceptance is met.** `examples/refcount_reuse_loop.gb`
+now reports `total_bytes=108704 peak_bytes=108704 free_list_hits=0
+reuse_hits=5000`, below the `< 200 KiB` budget.
 
-M6 Step 7 acceptance is **not yet met**: `examples/refcount_reuse_loop.gb`
-now reports `reuse_hits=5000`, but still allocates `total_bytes=149354768`.
-This confirms header reuse is firing and Step 7-c chunk-level reuse is still
-needed to reach the `< 200 KiB` budget.
+What landed:
+- Step 7-a / 7-a.5: `mut ys = xs; ys[i] := v` gets an `AssignIndex`
+  reuse token when `xs` is an M4.5-`Owned` parameter. GeneralLower runs
+  Perceus with imported stdlib declarations visible, and
+  `__goby_list_length` is modelled as a borrowed-list intrinsic so
+  `length(xs)` no longer inserts the stale `Dup(xs)` that kept runtime
+  rc at 2.
+- Step 7-c measurement correction: after header reuse fired, `iters=0`
+  still allocated ~149 MiB, proving the remaining budget blocker was
+  not `AllocReuse` chunk bumping. The actual sources were
+  `build 0 4096 []` (`[k, ..acc]` tail-recursive prepend accumulator)
+  and `xor_fold` (`[x, ..rest]` tail pattern). GeneralLower now lowers
+  the build shape through a builder-backed loop and lowers the
+  self-recursive list-case integer fold through `ListFold`, avoiding
+  suffix-list allocation.
 
 M6 Step 4 (2026-04-26, landed):
 - `AssignIndex.reuse_token` reshaped to `Option<AssignIndexReuse { root_token, levels: Vec<Option<SizeClass>> }>` (commit 4f9f701).
@@ -45,11 +53,11 @@ Next actions (ordered, per PLAN_PERCEUS §M6 "Step 7 execution plan"):
    `cargo run -p goby-cli -- run --debug-alloc-stats --max-memory-mb 16 examples/refcount_reuse_loop.gb`
    reports `total_bytes=149354768 peak_bytes=149354768 free_list_hits=0
    reuse_hits=5000`.
-4. **Step 7-c:** Implement chunk-level reuse in `emit_alloc_reuse`
-   (the §M5-deferred item). Reason: with 4096-length lists × 5000
-   iterations, header-only reuse almost certainly cannot reach the
-   200 KiB budget, but the decision is measurement-driven.
-5. **Step 7-d:** Un-ignore the `total_bytes < 200 * 1024` assertion in
+4. **Step 7-c: done via measured source fix.** The measured blocker was
+   build/fold allocation, not `AllocReuse` chunk bumping. Added
+   specialized lowering for tail-recursive prepend-accumulator list
+   builders and self-recursive list-case integer folds.
+5. **Step 7-d: done.** Un-ignore/enable the `total_bytes < 200 * 1024` assertion in
    `wasm_exports_and_smoke.rs::refcount_reuse_loop_example_compiles`.
 6. **Step 5 (`stdlib/goby/list.gb` `set` rewrite) deferred to
    post-acceptance.** Reason: the benchmark does not exercise
