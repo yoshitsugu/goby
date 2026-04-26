@@ -1373,15 +1373,15 @@ the reuse fast path when statically proven unique.
       byte-identical output (Step 4 lands without touching
       `runtime_output_tests.rs` snapshots; the workspace test suite is
       green at commit 91360ca).
-- [ ] Measure `examples/refcount_reuse_loop.gb` with
+- [x] Measure `examples/refcount_reuse_loop.gb` with
       `cargo run -p goby-cli -- run --debug-alloc-stats`. Required:
   - `total_bytes < 200 * 1024`,
   - `peak_bytes` of the same order,
   - checksum matches the value fixed in §1.1.
-  - **Status (2026-04-26):** still ~149 MiB. The hot loop
-    `mut ys = xs; ys[i] := v` initialises `ys` from a `Var`, so
-    `comp_alloc_size_or_cell` returns `None` and no reuse token is
-    emitted. Step 4 alone cannot close the budget for this benchmark.
+  - **Status (2026-04-26): done.** Reports `total_bytes=108704
+    peak_bytes=108704 free_list_hits=0 reuse_hits=5000`, below the
+    200 KiB budget. See Step 7 execution plan for full landing
+    sequence (7-a / 7-a.5 / 7-b / 7-c / 7-d).
 - [x] Extend `comp_alloc_size_or_cell` (or the `SizeEnv` propagation
       path) so `mut ys = xs` inherits `xs`'s outer size class when it
       is known (function-parameter case). **Done 2026-04-26** via
@@ -1389,12 +1389,14 @@ the reuse fast path when statically proven unique.
       `perceus_reuse::insert_reuse`. Synthetic test confirms reuse
       fires; benchmark still blocked by Step 7-a.5 (intrinsic
       ownership ABI).
-- [ ] Close the §M5-deferred chunk-level reuse gap (M5 list
-      `AllocReuse` currently bumps a fresh chunk per call). Required
-      to reach the 200 KiB budget once the per-iteration header reuse
-      starts firing.
-- [ ] Un-ignore the `total_bytes < 200 * 1024` assertion in
+- [x] Close the §M5-deferred chunk-level reuse gap. **Done 2026-04-26**
+      via specialized lowering for tail-recursive prepend-accumulator
+      (`build` → builder-backed loop) and self-recursive list-case fold
+      (`xor_fold` → `ListFold`), which eliminated the actual ~149 MiB
+      allocation sources. `AllocReuse` chunk-level reuse not required.
+- [x] Un-ignore the `total_bytes < 200 * 1024` assertion in
       `crates/goby-wasm/tests/wasm_exports_and_smoke.rs::refcount_reuse_loop_example_compiles`.
+      **Done 2026-04-26.**
 
 ##### Step 7 execution plan (2026-04-26 decision log)
 
@@ -1513,11 +1515,12 @@ chunk-level reuse) are sequenced as follows. Step 5 (`stdlib/goby/list.gb`
 
 #### Step 8 — STATE / PLAN sync and commit
 
-- [ ] Update `doc/STATE.md` to mark Perceus M5 acceptance and M6
-      complete; sync `memory/project_perceus_status.md`.
-- [ ] Update `doc/PLAN.md` §4.2 Perceus track row for M6.
-- [ ] Run `goby-invariants` (spec / examples / diagnostics gate)
-      before commit.
+- [x] Update `doc/STATE.md` to mark Perceus M5 acceptance and M6
+      complete; sync `memory/project_perceus_status.md`. **Done 2026-04-26.**
+- [x] Update `doc/PLAN.md` §4.2 Perceus track row for M6. **Done 2026-04-26.**
+- [x] Run `goby-invariants` (spec / examples / diagnostics gate)
+      before commit. **Done 2026-04-26** (doc-only change; no syntax /
+      diagnostics / runtime impact).
 
 #### Acceptance
 

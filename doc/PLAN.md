@@ -577,9 +577,14 @@ Output format: human-readable (default) and JSON lines (`--json`).
   The two wasm reuse-path tests use `Tuple(2)` rather than list lits so
   the assertion is not confounded by the per-allocation chunk bump that
   M5 list `AllocReuse` still performs (§7.0).
-- Next: M6 (`mut` lowering through reuse) so that
-  `examples/refcount_reuse_loop.gb` actually exercises the reuse path and
-  Step 11 acceptance (`total_bytes < 200 KiB`) becomes reachable.
+- M6 complete (2026-04-26): `mut ys = xs; ys[i] := v` AssignIndex reuse
+  lands end-to-end. `examples/refcount_reuse_loop.gb` now reports
+  `total_bytes=108704 reuse_hits=5000`, below the `< 200 KiB` budget.
+  Steps 7-a / 7-a.5 (Owned-param seed + borrowed intrinsic model),
+  7-b (re-measure), 7-c (build/fold specialized lowering), and 7-d
+  (assertion un-ignore) all landed. `doc/PLAN_PERCEUS.md` §M6 is closed.
+- Next: M7 (remove bump-only fallback; update documentation to reflect
+  refcount + free-list model as the steady state).
 
 #### 4.2.1 Perceus M1 prerequisite: bitwise XOR (`^`) operator — complete
 
