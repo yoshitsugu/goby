@@ -1817,6 +1817,36 @@ main =
 }
 
 #[test]
+fn refcount_reuse_loop_owned_param_seed_reuses_assign_index() {
+    let source = include_str!("../../../examples/refcount_reuse_loop.gb");
+    let module = parse_module(source).expect("source should parse");
+    let (instrs, aux) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should succeed")
+        .expect("sample should use general lowering");
+    let dump = format!("{instrs:?} {aux:?}");
+    assert!(
+        dump.contains("RefCountDropReuse"),
+        "refcount loop AssignIndex should lower with reuse: {dump}"
+    );
+    let output = execute_runtime_module_with_stdin_config_and_options_captured(
+        &module,
+        Some(String::new()),
+        None,
+        CompileOptions {
+            debug_alloc_stats: true,
+        },
+    )
+    .expect("refcount loop should execute")
+    .expect("sample should run on runtime-owned Wasm");
+    let reuse_hits = parse_alloc_stats_field(&output.stderr, "reuse_hits");
+    assert!(
+        reuse_hits > 0,
+        "refcount loop should hit owned-param AssignIndex reuse; stderr:\n{}",
+        output.stderr
+    );
+}
+
+#[test]
 fn compile_module_routes_echo_read_line_println_through_dynamic_wasi_io_classification() {
     let source = r#"
 main : Unit -> Unit can Print, Read

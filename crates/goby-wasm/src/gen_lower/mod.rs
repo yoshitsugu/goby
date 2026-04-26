@@ -1535,6 +1535,9 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
     assert_general_lower_perceus_pipeline();
     let handler_legality = analyze_module_handler_legality(module)?;
     let allow_safe_handler_lowering = handler_legality.all_one_shot_tail_resumptive();
+    let stdlib_resolver = StdlibResolver::new(resolve_stdlib_root());
+    let stdlib_export_map = build_stdlib_export_map(module, &stdlib_resolver);
+
     let ir_module = match goby_core::ir_lower::lower_module(module) {
         Ok(ir_module) => ir_module,
         Err(_) => {
@@ -1549,7 +1552,33 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
             return Ok(Err(GeneralLowerUnsupportedReason::NoIrDecl));
         }
     };
-    let ir_module = goby_core::perceus::run_perceus_passes(&ir_module);
+    let user_ir_decl_names: HashSet<String> = ir_module
+        .decls
+        .iter()
+        .map(|decl| decl.name.clone())
+        .collect();
+    let mut perceus_input = ir_module.clone();
+    for (_, goby_decl) in stdlib_export_map.values() {
+        if let Ok(aux_ir_decl) = goby_core::ir_lower::lower_declaration(goby_decl) {
+            perceus_input.decls.push(aux_ir_decl);
+        }
+    }
+    let perceus_output = goby_core::perceus::run_perceus_passes(&perceus_input);
+    let mut perceus_stdlib_decls: HashMap<String, goby_core::ir::IrDecl> = HashMap::new();
+    let ir_module = goby_core::ir::IrModule {
+        decls: perceus_output
+            .decls
+            .into_iter()
+            .filter_map(|decl| {
+                if user_ir_decl_names.contains(&decl.name) {
+                    Some(decl)
+                } else {
+                    perceus_stdlib_decls.insert(decl.name.clone(), decl);
+                    None
+                }
+            })
+            .collect(),
+    };
     let reuse_decls: HashSet<String> = ir_module
         .decls
         .iter()
@@ -1611,9 +1640,6 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
 
     // Resolve stdlib exports once; reused for both known_decls population and the
     // transitive-closure loop below.
-    let stdlib_resolver = StdlibResolver::new(resolve_stdlib_root());
-    let stdlib_export_map = build_stdlib_export_map(module, &stdlib_resolver);
-
     // Collect names of all non-main top-level declarations so callee `Var(name)` can be
     // recognised as a DeclCall during lowering.
     let mut known_decls: std::collections::HashSet<String> = module
@@ -1737,22 +1763,23 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
                     aux_added.insert(name.clone());
                     continue;
                 };
-                let aux_ir_decl = match goby_core::ir_lower::lower_declaration(goby_decl) {
-                    Ok(d) => d,
-                    Err(_) => {
-                        return Ok(Err(
-                            GeneralLowerUnsupportedReason::StdlibDeclIrLoweringFailed,
-                        ));
-                    }
+                let aux_ir_decl = match perceus_stdlib_decls.get(name) {
+                    Some(decl) => decl.clone(),
+                    None => match goby_core::ir_lower::lower_declaration(goby_decl) {
+                        Ok(d) => goby_core::perceus::run_perceus_passes(&goby_core::ir::IrModule {
+                            decls: vec![d],
+                        })
+                        .decls
+                        .into_iter()
+                        .next()
+                        .expect("single-decl perceus rewrite must preserve decl"),
+                        Err(_) => {
+                            return Ok(Err(
+                                GeneralLowerUnsupportedReason::StdlibDeclIrLoweringFailed,
+                            ));
+                        }
+                    },
                 };
-                let aux_ir_decl =
-                    goby_core::perceus::run_perceus_passes(&goby_core::ir::IrModule {
-                        decls: vec![aux_ir_decl],
-                    })
-                    .decls
-                    .into_iter()
-                    .next()
-                    .expect("single-decl perceus rewrite must preserve decl");
                 if let Some(shape) = fold_prepend_callback_shape(&aux_ir_decl) {
                     fold_prepend_callback_shapes.insert(aux_ir_decl.name.clone(), shape);
                 }

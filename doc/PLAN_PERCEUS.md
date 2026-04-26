@@ -1432,8 +1432,8 @@ chunk-level reuse) are sequenced as follows. Step 5 (`stdlib/goby/list.gb`
      `reuse_hits=5`. The benchmark itself is **still 0** —
      `length(xs)` is the blocker; see Step 7-a.5 below.
 
-1.5. **Step 7-a.5 — Make read-only list intrinsics actually consume
-   their `Owned` argument.** Discovered while measuring Step 7-a:
+1.5. **Step 7-a.5 — Model read-only list intrinsics as borrowed.
+   Status (2026-04-26): landed.** Discovered while measuring Step 7-a:
    `__goby_list_length` (and likely other read-only intrinsics) is
    classified by the ownership pass as `Owned`-arg, so `drop_insert`
    emits `Dup(xs); length(xs)` to keep `xs` live past the call. But
@@ -1445,19 +1445,14 @@ chunk-level reuse) are sequenced as follows. Step 5 (`stdlib/goby/list.gb`
    `RefCountDropReuse`, taking the cold path and never incrementing
    `reuse_hits`.
 
-   Two equivalent fixes:
-   - (a) Append a `goby_drop` to the emit of every read-only intrinsic
-     that takes an `Owned` heap arg (length, etc.).
-   - (b) Add an "intrinsic param ownership table" to the ownership
-     pass so these calls treat their list arg as `Borrowed` (no Dup,
-     no consume). drop_insert then keeps the caller's natural rc
-     accounting.
-
-   (b) is preferred — it removes a runtime drop-then-keep round-trip
-   and is closer to the spec's notion of these intrinsics as "pure
-   reads". This step is a precondition for 7-b's measurement, since
-   without it `reuse_hits` stays at 0 on the benchmark and the
-   chunk-reuse decision cannot be data-driven.
+   The selected fix is an intrinsic param ownership table in the
+   ownership pass: `__goby_list_length` argument 0 is treated as
+   `Borrowed`, and `drop_insert` consults the same table when deciding
+   whether a call consumes an owned value. GeneralLower also runs
+   Perceus with imported stdlib declarations in the module, so user
+   calls to `length(xs)` can see the wrapper's borrowed argument facts.
+   This removes the runtime drop-then-keep round-trip and matches the
+   spec's notion of length as a pure read.
 
 2. **Step 7-b — Re-measure and decide on chunk-level reuse.** With
    header reuse firing, re-run the benchmark. `length=4096` over 5000
@@ -1469,6 +1464,12 @@ chunk-level reuse) are sequenced as follows. Step 5 (`stdlib/goby/list.gb`
      contribution of each mechanism observable in `total_bytes` /
      `reuse_hits` deltas. If 7-a unexpectedly suffices, 7-b becomes a
      pure cleanup task instead of an acceptance blocker.
+   - **Status (2026-04-26): measured.**
+     `cargo run -p goby-cli -- run --debug-alloc-stats --max-memory-mb 16
+     examples/refcount_reuse_loop.gb` reports
+     `total_bytes=149354768 peak_bytes=149354768 free_list_hits=0
+     reuse_hits=5000`. Header reuse is firing; chunk-level reuse remains
+     required for the `< 200 KiB` budget.
 
 3. **Step 7-c — Implement chunk-level reuse if 7-b shows it is
    needed.** Extend `emit_alloc_reuse` so the chunk payload is taken

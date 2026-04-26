@@ -478,15 +478,26 @@ fn classify_call_args(
 ) {
     let callee_params = callee_param_classes(callee, module_params);
     for (idx, arg) in args.iter().enumerate() {
-        if callee_params
-            .and_then(|params| params.get(idx))
-            .is_some_and(|class| *class == OwnershipClass::Borrowed)
+        if intrinsic_arg_is_borrowed(callee, idx)
+            || callee_params
+                .and_then(|params| params.get(idx))
+                .is_some_and(|class| *class == OwnershipClass::Borrowed)
         {
             classify_borrowed_value(arg, classes, params, aliases);
         } else {
             classify_consumed_value(arg, classes, params, aliases);
         }
     }
+}
+
+fn intrinsic_arg_is_borrowed(callee: &ValueExpr, idx: usize) -> bool {
+    matches!(
+        (callee, idx),
+        (
+            ValueExpr::GlobalRef { name, .. } | ValueExpr::Var(name),
+            0
+        ) if name == "__goby_list_length"
+    )
 }
 
 fn callee_param_classes<'a>(
@@ -1645,6 +1656,9 @@ fn callee_arg_is_borrowed(
     module_ownership: &HashMap<String, HashMap<String, OwnershipClass>>,
     param_order: &HashMap<String, Vec<String>>,
 ) -> bool {
+    if intrinsic_arg_is_borrowed(callee, idx) {
+        return true;
+    }
     let decl_name = match callee {
         ValueExpr::GlobalRef { name, .. } => name,
         _ => return false,
@@ -3015,6 +3029,78 @@ mod tests {
         assert!(
             ir_str.contains("@reuse("),
             "Owned-param `mut ys = xs` must seed AssignIndex reuse:\n{ir_str}"
+        );
+    }
+
+    #[test]
+    fn list_length_wrapper_keeps_step_param_unique_for_assignindex_reuse() {
+        let module = IrModule {
+            decls: vec![
+                IrDecl {
+                    name: "length".to_string(),
+                    params: vec![("xs".to_string(), IrType::Unknown)],
+                    result_ty: IrType::Int,
+                    residual_effects: vec![],
+                    reuse_param: None,
+                    body: CompExpr::Call {
+                        callee: Box::new(ValueExpr::GlobalRef {
+                            module: "".to_string(),
+                            name: "__goby_list_length".to_string(),
+                        }),
+                        args: vec![ValueExpr::Var("xs".to_string())],
+                        reuse_token: None,
+                    },
+                },
+                IrDecl {
+                    name: "step".to_string(),
+                    params: vec![("xs".to_string(), IrType::Unknown)],
+                    result_ty: IrType::Unknown,
+                    residual_effects: vec![],
+                    reuse_param: None,
+                    body: CompExpr::If {
+                        cond: Box::new(ValueExpr::BoolLit(false)),
+                        then_: Box::new(CompExpr::Value(ValueExpr::Var("xs".to_string()))),
+                        else_: Box::new(CompExpr::Let {
+                            name: "n".to_string(),
+                            ty: IrType::Int,
+                            value: Box::new(CompExpr::Call {
+                                callee: Box::new(ValueExpr::GlobalRef {
+                                    module: "".to_string(),
+                                    name: "length".to_string(),
+                                }),
+                                args: vec![ValueExpr::Var("xs".to_string())],
+                                reuse_token: None,
+                            }),
+                            body: Box::new(CompExpr::LetMut {
+                                name: "ys".to_string(),
+                                ty: IrType::Unknown,
+                                value: Box::new(CompExpr::Value(ValueExpr::Var("xs".to_string()))),
+                                body: Box::new(CompExpr::Seq {
+                                    stmts: vec![CompExpr::AssignIndex {
+                                        root: "ys".to_string(),
+                                        path: vec![ValueExpr::Var("n".to_string())],
+                                        value: Box::new(CompExpr::Value(ValueExpr::IntLit(7))),
+                                        reuse_token: None,
+                                    }],
+                                    tail: Box::new(CompExpr::Value(ValueExpr::Var(
+                                        "ys".to_string(),
+                                    ))),
+                                }),
+                            }),
+                        }),
+                    },
+                },
+            ],
+        };
+        let rewritten = run_perceus_passes(&module);
+        let ir_str = fmt_ir(&rewritten);
+        assert!(
+            !ir_str.contains("dup xs"),
+            "borrowed length wrapper must not increase xs refcount before reuse:\n{ir_str}"
+        );
+        assert!(
+            ir_str.contains("@reuse("),
+            "length borrow should preserve owned-param AssignIndex reuse:\n{ir_str}"
         );
     }
 }

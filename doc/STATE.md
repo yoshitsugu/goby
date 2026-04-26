@@ -1,16 +1,20 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-26 (Perceus M6 Step 4 backend per-level reuse landed; Step 7 acceptance gated on additional `mut ys = xs` shape support)
+Last updated: 2026-04-26 (Perceus M6 Step 7-a/7-a.5 landed; header reuse fires on `refcount_reuse_loop`, chunk reuse still needed)
 
 ## Current Focus
 
-**Perceus M6 Step 4 (per-level reuse for nested `AssignIndex`) backend is complete.** Static `FreshList` proof in `perceus_reuse` plus the "first None stops reuse" rule in the backend now lower a fresh nested literal (`[[seed, 2], [3, 4]]`) with `ListSetInPlace` at every level, while shared/aliased inner lists keep copy-on-write `ListSet`.
+**Perceus M6 Step 7-a / 7-a.5 is complete.** The `mut ys = xs; ys[i] := v`
+benchmark shape now gets an `AssignIndex` reuse token when `xs` is an
+M4.5-`Owned` parameter, and GeneralLower runs Perceus with imported stdlib
+declarations visible so wrapper calls like `length(xs)` use accurate ownership
+facts. `__goby_list_length` is modelled as a borrowed-list intrinsic in the
+ownership pass, avoiding the stale `Dup(xs)` that kept runtime rc at 2.
 
-M6 Step 7 acceptance is **not yet met**: `examples/refcount_reuse_loop.gb` still allocates ~149 MiB because its hot loop is `mut ys = xs; ys[i] := v` — i.e. the binding is initialised from a `Var`, not a fresh literal, so `comp_alloc_size_or_cell` returns `None` and no reuse token is emitted. Closing the budget needs either:
-- propagating the parameter's size class into `mut ys = xs` (so the reuse pass can seed `ys`'s shape from `xs`'s outer class), and/or
-- the M5-deferred chunk-level reuse work the PLAN already reserves under Step 7.
-
-These are follow-ups; M6 Step 4 itself (per-level inner reuse) is landed and tested.
+M6 Step 7 acceptance is **not yet met**: `examples/refcount_reuse_loop.gb`
+now reports `reuse_hits=5000`, but still allocates `total_bytes=149354768`.
+This confirms header reuse is firing and Step 7-c chunk-level reuse is still
+needed to reach the `< 200 KiB` budget.
 
 M6 Step 4 (2026-04-26, landed):
 - `AssignIndex.reuse_token` reshaped to `Option<AssignIndexReuse { root_token, levels: Vec<Option<SizeClass>> }>` (commit 4f9f701).
@@ -27,22 +31,27 @@ Verification:
 
 Next actions (ordered, per PLAN_PERCEUS §M6 "Step 7 execution plan"):
 
-1. **Step 7-a:** Seed `mut ys = xs` from the parameter's outer size class
+1. **Step 7-a: done.** Seed `mut ys = xs` from the parameter's outer size class
    in `comp_alloc_size_or_cell`, **gated on M4.5 `Owned` classification
    only**. Reason: smallest precondition for reuse to fire on the
    benchmark; restricting to `Owned` keeps the §3.4 uniqueness invariant
    intact. Verify `reuse_hits > 0` on `refcount_reuse_loop.gb` (do not
    expect `total_bytes` to clear 200 KiB yet).
-2. **Step 7-b:** Re-measure. Reason: keep 7-a and 7-c independently
-   bisectable; chunk reuse is committed only if measurement shows it is
-   still required.
-3. **Step 7-c:** Implement chunk-level reuse in `emit_alloc_reuse`
+2. **Step 7-a.5: done.** Model `__goby_list_length` as a borrowed-list
+   intrinsic and run Perceus with imported stdlib declarations visible in
+   GeneralLower, so `length(xs)` no longer inserts `Dup(xs)` before the
+   reuse site.
+3. **Step 7-b: done.** Re-measured:
+   `cargo run -p goby-cli -- run --debug-alloc-stats --max-memory-mb 16 examples/refcount_reuse_loop.gb`
+   reports `total_bytes=149354768 peak_bytes=149354768 free_list_hits=0
+   reuse_hits=5000`.
+4. **Step 7-c:** Implement chunk-level reuse in `emit_alloc_reuse`
    (the §M5-deferred item). Reason: with 4096-length lists × 5000
    iterations, header-only reuse almost certainly cannot reach the
    200 KiB budget, but the decision is measurement-driven.
-4. **Step 7-d:** Un-ignore the `total_bytes < 200 * 1024` assertion in
+5. **Step 7-d:** Un-ignore the `total_bytes < 200 * 1024` assertion in
    `wasm_exports_and_smoke.rs::refcount_reuse_loop_example_compiles`.
-5. **Step 5 (`stdlib/goby/list.gb` `set` rewrite) deferred to
+6. **Step 5 (`stdlib/goby/list.gb` `set` rewrite) deferred to
    post-acceptance.** Reason: the benchmark does not exercise
    `list.set`, and PLAN already states Step 4 alone cannot close the
    budget — i.e. acceptance depends on 7-a/7-c, not Step 5. Deferring
