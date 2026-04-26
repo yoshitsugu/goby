@@ -2,10 +2,10 @@
 
 Last updated: 2026-04-18
 
-This document is the roadmap for replacing Goby's current bump-only allocator
+This document is the roadmap that replaced Goby's previous bump-only allocator
 with a principled memory management scheme based on **Perceus-style reference
 counting with reuse analysis** (Reinking, Xie, de Moura, Leijen; PLDI 2021, as
-used in Koka, Lean 4, and Roc).
+used in Koka, Lean 4, and Roc). M0–M7 are complete as of 2026-04-26.
 
 Related documents:
 
@@ -34,7 +34,7 @@ Goby programs that update an aggregate value in a tail-recursive loop must run
 **without per-iteration allocation growth** when the aggregate is uniquely
 owned at that program point. Shared values fall back to copy-on-write. Dead
 allocations are reclaimed when the last reference is dropped, not "never" as
-under the current bump allocator.
+under the previous bump-only allocator.
 
 The success criterion is a self-contained program that lives **in this
 repository** so the acceptance shape is reviewable long after this plan
@@ -1533,19 +1533,30 @@ chunk-level reuse) are sequenced as follows. Step 5 (`stdlib/goby/list.gb`
 
 ### M7 — Remove the bump-only fallback; document
 
-- [ ] `emit.rs` header comment rewritten to describe refcount +
-      free-list model.
-- [ ] `host_bump_cursor` / `heap_floor` redefined as "free-list miss
-      backing" only.
-- [ ] `doc/PLAN.md`, `doc/PLAN_IR.md`, `AGENTS.md` updated to reflect
-      the new invariant: heap values are refcounted; last-use drop is
-      the norm; reuse is the fast path for unique updates.
-- [ ] `doc/STATE.md` records §1 goal as satisfied with the measured
-      numbers.
-- [ ] **Acceptance:** no surviving documentation reference to
-      "bump-only allocator, no free"; the goal program runs under its
-      budget; `tests/alloc_baseline.txt` re-verified, any deltas
-      explained in the commit message.
+- [x] `emit.rs` chunk layout design-constraint comment rewritten to
+      describe refcount + free-list model (chunk free-list on last drop;
+      Large / oversized falls back to bump on miss). **Done 2026-04-26.**
+- [x] `host_bump_cursor` / `heap_floor` role confirmed: `heap_floor` is
+      a function-local cursor for the current allocation frame (not
+      bump-only); `host_bump_cursor` backs host-side string/list writes.
+      No redefinition needed — naming already reflects "backing" role.
+      **Confirmed 2026-04-26.**
+- [x] `doc/PLAN.md` §4.2 updated: Perceus track row now records M7
+      complete; "bump-only allocator" in section intro changed to past
+      tense. `doc/PLAN_IR.md` ListLit/TupleLit/RecordLit rows updated to
+      reflect refcount-tracked model (chunks free-listed; headers and
+      Tuple/Record bump-backed, no free-list slot). `AGENTS.md` had no
+      bump-only references. **Done 2026-04-26.**
+- [x] `doc/LANGUAGE_SPEC.md` performance note updated from "current bump
+      allocator" to "refcount-tracked heap, free-list backed allocator
+      (chunks recycled; headers bump-backed)".
+      **Done 2026-04-26.**
+- [x] `doc/STATE.md` records §1 goal as satisfied with measured numbers
+      (`total_bytes=108704 reuse_hits=5000`). **Done 2026-04-26.**
+- [x] **Acceptance (2026-04-26):** no active documentation reference to
+      "bump-only allocator, no free" remains; goal program runs under
+      200 KiB budget; `cargo test --workspace` green; alloc_baseline
+      unchanged (comment-only diff, no code path changed).
 
 ---
 

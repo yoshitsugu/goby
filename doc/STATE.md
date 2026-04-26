@@ -1,12 +1,16 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-26 (Perceus M6 Step 7 acceptance reached; `refcount_reuse_loop` below 200 KiB)
+Last updated: 2026-04-26 (Perceus M7 complete; §1 goal satisfied)
 
 ## Current Focus
 
-**Perceus M6 Step 7 acceptance is met.** `examples/refcount_reuse_loop.gb`
-now reports `total_bytes=108704 peak_bytes=108704 free_list_hits=0
-reuse_hits=5000`, below the `< 200 KiB` budget.
+**Perceus M0–M7 complete. §1 goal satisfied.**
+
+`examples/refcount_reuse_loop.gb` reports `total_bytes=108704
+peak_bytes=108704 free_list_hits=0 reuse_hits=5000`, below the
+`< 200 KiB` budget. The bump-only allocator has been replaced by a
+refcount + free-list model; all active documentation updated to reflect
+this. M7 closes the Perceus roadmap.
 
 What landed:
 - Step 7-a / 7-a.5: `mut ys = xs; ys[i] := v` gets an `AssignIndex`
@@ -476,6 +480,6 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 | Typechecker | Stable (`^`: Int × Int → Int) |
 | IR (`ir.rs`) | Stable (`IrBinOp::BitXor` present) |
 | IR lowering (`ir_lower.rs`) | Stable |
-| Wasm backend | memory64 complete; Perceus M1 + M2 + M3 complete; M4 runtime helpers (`Dup`/`Drop` lowering, `__goby_dup`) present |
+| Wasm backend | memory64 complete; Perceus M0–M7 complete; refcount + chunk-free-list + reuse pipeline live |
 | Effect handlers | Non-tail / multi-resume still produces `BackendLimitation` |
-| GC / reclamation | Bump allocator + refcount + free-list + `__goby_drop`; Perceus M4 conservative drop-insertion pass live; parameter last-use + branch balancing + loop residency gate reopened under M4.5 |
+| GC / reclamation | Refcount + chunk free-list + `__goby_drop`; top-of-heap bump remains as backing allocation path for large/variable-size values (headers, Tuple, Record); Perceus M0–M7 complete; §1 goal program runs under 200 KiB |

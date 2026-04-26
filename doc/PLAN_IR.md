@@ -323,9 +323,9 @@ language-expansion item, not a backend-convergence item. Do not add them here.
 |-----------|-------------|-------|
 | `CompExpr::Case` — `IntLit` / `BoolLit` / `StringLit` / `Wildcard` patterns | `if/else` chain comparing tagged i64 | No `br_table` needed for small arities |
 | `CompExpr::Case` — `EmptyList` / `ListPattern` patterns | extract tag bits from tagged i64; nil sentinel check; head/tail pointer extraction | Reuse existing list ABI from completed grapheme backend support |
-| `ValueExpr::ListLit` | bump-alloc one cell per element + tagged pointer | Extend existing bump allocator from completed grapheme backend support |
-| `ValueExpr::TupleLit` | bump-alloc + store fields; tagged i64 pointer | Uniform tagged i64 ABI — no multi-value optimisation. ABI uniformity takes precedence over local performance; optimisation is deferred until the ABI is proved stable. |
-| `ValueExpr::RecordLit` | bump-alloc + store fields in IR field order; constructor tag at offset 0; tagged i64 pointer | Constructor identity = index into module-level constructor table |
+| `ValueExpr::ListLit` | alloc list header + chunks (refcount-tracked; chunks recycled via free-list on last drop; header bump-backed) + tagged pointer | Completed; Perceus M2–M6 landed refcount + chunk-free-list model. |
+| `ValueExpr::TupleLit` | alloc + store fields (refcount-tracked; bump-backed, no free-list slot); tagged i64 pointer | Uniform tagged i64 ABI — no multi-value optimisation. ABI uniformity takes precedence over local performance; optimisation is deferred until the ABI is proved stable. |
+| `ValueExpr::RecordLit` | alloc + store fields in IR field order (refcount-tracked; bump-backed, no free-list slot); constructor tag at offset 0; tagged i64 pointer | Constructor identity = index into module-level constructor table |
 
 **Milestones:**
 

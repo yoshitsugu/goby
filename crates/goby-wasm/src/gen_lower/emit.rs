@@ -119,7 +119,9 @@ const HS_ITER: u32 = 10; // copy or match index
 //   [chunk + 4 + item_idx*8]          : i64  item[item_idx]  (tagged value)
 //
 // Design constraints:
-//   - Bump allocator only (no free). No structural sharing.
+//   - Refcount-tracked. Chunks are recycled via the Chunk free-list on last drop.
+//     List headers and variable-size values are not free-listed; they fall back
+//     to top-of-heap bump allocation. No structural sharing.
 //   - Chunk allocations must be 8-byte aligned so that item I64Load/Store
 //     instructions with align:3 are valid.
 //   - CHUNK_SIZE is a named constant, not a magic number.

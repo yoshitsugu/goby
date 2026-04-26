@@ -543,8 +543,8 @@ Output format: human-readable (default) and JSON lines (`--json`).
 
 ### 4.2 Active Track E: Perceus memory management
 
-- `doc/PLAN_PERCEUS.md` is the execution plan for replacing the current
-  bump-only allocator with refcount + reuse.
+- `doc/PLAN_PERCEUS.md` is the execution plan that replaced the bump-only
+  allocator with refcount + reuse. M0–M7 are complete.
 - M0 is complete as of 2026-04-18:
   - memory64 migration is complete,
   - `doc/BUGS.md` has no open allocator/tag-layout blockers,
@@ -583,8 +583,10 @@ Output format: human-readable (default) and JSON lines (`--json`).
   Steps 7-a / 7-a.5 (Owned-param seed + borrowed intrinsic model),
   7-b (re-measure), 7-c (build/fold specialized lowering), and 7-d
   (assertion un-ignore) all landed. `doc/PLAN_PERCEUS.md` §M6 is closed.
-- Next: M7 (remove bump-only fallback; update documentation to reflect
-  refcount + free-list model as the steady state).
+- M7 complete (2026-04-26): documentation and code comments updated to
+  reflect the refcount + free-list model as the steady state. "bump-only
+  allocator" wording removed from active descriptions. `doc/PLAN_PERCEUS.md`
+  §M7 closed.
 
 #### 4.2.1 Perceus M1 prerequisite: bitwise XOR (`^`) operator — complete
 

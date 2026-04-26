@@ -68,7 +68,7 @@ syntax/semantics.
   - honest performance framing for current chunked representation:
     - repeated head-tail extraction (`[x, ..rest]`) is amortized O(1) per step;
     - chunk-boundary steps can cost O(n/CHUNK_SIZE) due to header-copy work
-      under the current bump allocator;
+      (refcount-tracked heap; chunks recycled via free-list, headers bump-backed);
     - repeated decomposition is therefore not promised as strict O(1) worst-case.
 - List literal spread (expression side):
   - `[a, b, ..xs]` (zero or more prefix elements + one trailing spread segment)
