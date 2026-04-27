@@ -1357,6 +1357,35 @@ the reuse fast path when statically proven unique.
       path. Either outcome is acceptable provided example outputs are
       byte-identical.
 
+**Investigation note (2026-04-27):** Surface form rewrite is blocked by
+two interdependent issues and is deferred:
+
+1. `backend_intrinsic_for("list", "set")` short-circuits every
+   `list.set` call to `BackendIntrinsic::ListSet` before the stdlib
+   body is reached. Removing this entry routes calls through the stdlib
+   body, but exposes issue 2.
+
+2. `lower_assign_index_reuse` emits `ListSetInPlace` unconditionally
+   (even when rc != 1). The guard relies on the static uniqueness proof
+   from `perceus_reuse` (`reuse_token` is only attached when the root
+   is statically owned). For `set xs i v`, `xs` is classified as
+   `Owned` only if the ownership pass propagates the `LetMut`
+   alias (`mut ys = xs`). Adding `bind_alias` to `LetMut` in
+   `perceus.rs` achieves this, but it causes alias-safety violations:
+   when the caller uses `xs` after `set xs 0 v`, `drop_insert` emits
+   `Dup(xs)` (rc:1→2), then `RefCountDropReuse(ys)` decrements to rc==1
+   and `ListSetInPlace` mutates the shared chunk — corrupting the
+   caller's `xs`.
+
+   The correct fix requires `lower_assign_index_reuse` to fall back to
+   copy-on-write `ListSet` when the `RefCountDropReuse` token is null
+   (rc was != 1), which is a non-trivial change to the hot lowering path.
+
+Current state: `set xs i v = __goby_list_set xs i v` is unchanged.
+`__goby_list_set` continues to route through the copy-on-write `ListSet`
+intrinsic for all calls. The reuse benefit is not realised for this
+function until the `lower_assign_index_reuse` fallback is implemented.
+
 #### Step 6 — Codex code review
 
 - Send the Step 1, 3, 4, 5 diffs to Codex. Focus areas:
