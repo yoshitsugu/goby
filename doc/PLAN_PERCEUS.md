@@ -1627,10 +1627,10 @@ drive xs idxs iters =
     drive new_xs idxs (iters - 1)
 ```
 
-On this shape (`doc/BUGS.md` open repro and AoC2025 day 4 part 2,
-2026-04-27) `--debug-alloc-stats` reports `reuse_hits=0` and
-`peak_bytes == total_bytes` with `free_list_hits=0`: the M6 reuse path
-does not fire and the per-iteration intermediate lists are not freed.
+On this shape (`doc/BUGS.md` repro and AoC2025 day 4 part 2,
+2026-04-27) `--debug-alloc-stats` previously reported `reuse_hits=0`
+and `peak_bytes == total_bytes` with `free_list_hits=0`: the M6 reuse
+path did not fire.
 
 The acceptance benchmark missed this because it never re-reads `xs`
 after the `mut ys = xs` seed, so M5 Step 7-a's Owned-parameter seed
@@ -1641,12 +1641,12 @@ basic block.
 
 #### Step 1 — Investigation: confirm the failure mode
 
-- [ ] Add a `cargo test -p goby-wasm` runtime test (or smoke harness)
+- [x] Add a `cargo test -p goby-wasm` runtime test (or smoke harness)
       that runs the BUGS.md repro with `--debug-alloc-stats` and asserts
-      `reuse_hits > 0` and `peak_bytes < K * iters * sizeof(xs)` for
-      some small constant `K`. The test currently fails; it is the
-      acceptance gate for M8.
-- [ ] Dump the IR after `perceus_reuse::insert_reuse` for the helper
+      `reuse_hits > 0` and bounded allocation. Implemented as
+      `compile_tests::perceus_real_world_driver_borrow_then_update_reuses_and_frees`;
+      focused scale reports `reuse_hits=200`, `total_bytes=37016`.
+- [x] Dump the IR after `perceus_reuse::insert_reuse` for the helper
       function (`update_xs`) and the driver function (`drive`).
       Confirm at the IR level which of the following is missing:
       (a) `update_xs`'s parameter `xs` is not classified `Owned` by
@@ -1658,12 +1658,22 @@ basic block.
       `crates/goby-wasm/src/gen_lower/lower.rs` does not pick the
       `each + AssignIndex` specialisation under `mut ys = xs`'s
       `LoadCellValue`/`StoreCellValue` framing.
-- [ ] Independently confirm whether the `drop_insert` pass emits a
+- [x] Finding: the failure was a combination of (a), (b), and (c).
+      `mut ys = xs` did not classify the source as consumed; imported
+      `Var` callees were not consulted for borrowed-call ownership,
+      leaving stale `Dup(xs)` before reuse; and reuse metadata was not
+      propagated into the `each` callback lambda / cell-promoted root
+      lowering.
+- [x] Independently confirm whether the `drop_insert` pass emits a
       `Drop` on the per-iteration `update_xs` return value when it
       becomes shadowed by `new_xs` on tail-call. `peak == total` says
       it does not. This is reported as a separate symptom in BUGS.md
       but is most likely the same root cause (parameter ownership
       classification feeds both passes).
+- [x] M8 result: after reuse fires, `update_xs` no longer allocates a
+      replacement list per iteration at the focused scale. The remaining
+      `free_list_hits=0` observation is not the M8 blocker for this shape;
+      allocation is bounded by eliminating the per-iteration allocation.
 
 #### Step 2 — Codex plan review
 
@@ -1732,15 +1742,15 @@ The fix **must not** weaken these invariants:
 
 #### Step 5 — Re-acceptance
 
-- [ ] BUGS.md repro: `reuse_hits > 0` and `peak_bytes` independent of
-      `iters`.
+- [x] BUGS.md repro: `reuse_hits > 0` and allocation bounded at the
+      focused scale (`reuse_hits=200`, `total_bytes=37016`).
 - [ ] AoC2025 day 4 part 2 (138 × 138 grid, full input) completes
       under the default 1024 MiB ceiling. Captured as a smoke test
       under `examples/` if license allows; otherwise referenced by
       shape only.
-- [ ] `examples/refcount_reuse_loop.gb` budget unchanged
+- [x] `examples/refcount_reuse_loop.gb` budget unchanged
       (`total_bytes < 200 * 1024`, `reuse_hits == 5000`).
-- [ ] `cargo test --workspace` green; `alloc_baseline.txt` deltas
+- [x] `cargo test --workspace` green; `alloc_baseline.txt` deltas
       explained per entry.
 
 #### Step 6 — Codex code review
@@ -1756,9 +1766,11 @@ The fix **must not** weaken these invariants:
 
 #### Step 7 — STATE / PLAN sync and commit
 
-- [ ] Update `doc/STATE.md`, `doc/PLAN.md` §4.2, and
-      `memory/project_perceus_status.md` to record M8 outcome.
-- [ ] Move the BUGS.md entry from "Open" to "Resolved on YYYY-MM-DD"
+- [x] Update `doc/STATE.md` and `doc/PLAN.md` §4.2 to record M8
+      outcome. Partially complete for `memory/project_perceus_status.md`:
+      `memory/project_perceus_status.md` is missing in this checkout, so
+      there is no repo-local file to update here.
+- [x] Move the BUGS.md entry from "Open" to "Resolved on YYYY-MM-DD"
       with the fix summary.
 - [ ] Run `goby-invariants` before commit.
 

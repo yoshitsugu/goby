@@ -4,6 +4,10 @@ This document tracks confirmed, reproducible bugs in the current Goby toolchain.
 
 Open bugs:
 
+- None currently tracked.
+
+Resolved on 2026-04-27:
+
 - `goby run` exhausts the 1 GiB Wasm memory limit on a tail-recursive
   driver that updates a list through `mut ys = xs; each idxs (fn k -> ys[k] := v; ())`
   inside a helper, when the same list is also borrowed in the driver
@@ -76,17 +80,20 @@ Open bugs:
   goby run --debug-alloc-stats repro.gb
   ```
 
-  Current result (small scale, completes):
+  Previous result (small scale, completes):
 
   ```text
   alloc-stats: total_bytes=37016 peak_bytes=37016 free_list_hits=0 reuse_hits=0
   475
   ```
 
-  Expected: `reuse_hits` proportional to `iters` (one per `update_xs`
-  call), and `peak_bytes` bounded by a small multiple of the live
-  working set (one `xs`, one `idxs`, one stack frame), not by
-  `iters * sizeof(xs)`.
+  Fixed result: the focused runtime test
+  `compile_tests::perceus_real_world_driver_borrow_then_update_reuses_and_frees`
+  reports `reuse_hits=200` and `total_bytes=37016` for the same scale.
+  The fix classifies last-use `mut ys = xs` sources as consumed without
+  adding a `LetMut` alias, resolves known `Var` callees for borrowed-call
+  ownership, propagates reuse metadata into lambda callback bodies, and
+  wraps cell-promoted `each` roots in `drop_reuse` / `alloc_reuse(Retain)`.
 
   Notes:
   - At larger scales (e.g. `xs` of 19 000 elements with several hundred
@@ -105,9 +112,8 @@ Open bugs:
     parameter ownership classification used by `drop_insert` is the
     same input the reuse pass reads), tracked together with the reuse
     miss.
-  - The fix lives in the reuse plumbing, not in the `each + AssignIndex`
-    pattern recogniser (commit from 2026-04-14) which is already in
-    place and works in isolation. Tracked as Perceus M8 in
+  - The fix lives in the reuse plumbing and the `each + AssignIndex`
+    cell-root reuse wrapper. Tracked as Perceus M8 in
     `doc/PLAN_PERCEUS.md`.
 
 Resolved on 2026-04-14:

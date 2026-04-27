@@ -27,6 +27,15 @@ enum SizeOrCell {
     },
     /// Binding is heap-cell promoted (captured mut). Reuse must be skipped.
     CellPromoted,
+    /// Binding is heap-cell promoted, but its current value came from a
+    /// statically owned source. Direct AssignIndex lowering still treats the
+    /// cell conservatively; `each` lowering can use the shape to wrap the fold
+    /// in drop_reuse/alloc_reuse while the callback mutates the cell value.
+    CellPromotedOwned(Box<SizeOrCell>),
+    /// Same proof as `CellPromotedOwned`, but not active in the current
+    /// non-lambda scope. It becomes active only while rewriting a lambda body
+    /// that captures the mutable cell.
+    CellPromotedOwnedInactive(Box<SizeOrCell>),
 }
 
 impl SizeOrCell {
@@ -36,6 +45,8 @@ impl SizeOrCell {
             SizeOrCell::Size(c) => Some(*c),
             SizeOrCell::FreshList { outer, .. } => Some(*outer),
             SizeOrCell::CellPromoted => None,
+            SizeOrCell::CellPromotedOwned(shape) => shape.outer_class(),
+            SizeOrCell::CellPromotedOwnedInactive(_) => None,
         }
     }
 
@@ -45,6 +56,7 @@ impl SizeOrCell {
     fn step_in(&self) -> Option<&SizeOrCell> {
         match self {
             SizeOrCell::FreshList { inner, .. } => Some(inner),
+            SizeOrCell::CellPromotedOwned(shape) => shape.step_in(),
             _ => None,
         }
     }
@@ -131,7 +143,14 @@ fn insert_reuse_comp(
             let (value, next_token) = insert_reuse_comp(*value, sizes, next_token, owned_params);
             let mut body_sizes = sizes.clone();
             if is_cell {
-                body_sizes.insert(name.clone(), SizeOrCell::CellPromoted);
+                if let Some(shape) = init_shape {
+                    body_sizes.insert(
+                        name.clone(),
+                        SizeOrCell::CellPromotedOwnedInactive(Box::new(shape)),
+                    );
+                } else {
+                    body_sizes.insert(name.clone(), SizeOrCell::CellPromoted);
+                }
             } else if let Some(shape) = init_shape {
                 // Register the initial shape so AssignIndex can identify
                 // reuse candidates within the LetMut body. `FreshList`
@@ -274,14 +293,212 @@ fn insert_reuse_comp(
                 next_token,
             )
         }
-        CompExpr::Value(_)
-        | CompExpr::Call { .. }
-        | CompExpr::Dup { .. }
-        | CompExpr::Drop { .. }
-        | CompExpr::DropReuse { .. }
-        | CompExpr::AllocReuse { .. }
-        | CompExpr::PerformEffect { .. }
-        | CompExpr::Resume { .. } => (comp, next_token),
+        CompExpr::Value(value) => {
+            let (value, next_token) = insert_reuse_value(value, sizes, next_token, owned_params);
+            (CompExpr::Value(value), next_token)
+        }
+        CompExpr::Call {
+            callee,
+            args,
+            reuse_token,
+        } => {
+            let (callee, next_token) = insert_reuse_value(*callee, sizes, next_token, owned_params);
+            let mut next = next_token;
+            let args = args
+                .into_iter()
+                .map(|arg| {
+                    let (arg, updated) = insert_reuse_value(arg, sizes, next, owned_params);
+                    next = updated;
+                    arg
+                })
+                .collect();
+            (
+                CompExpr::Call {
+                    callee: Box::new(callee),
+                    args,
+                    reuse_token,
+                },
+                next,
+            )
+        }
+        CompExpr::Dup { value } => {
+            let (value, next_token) = insert_reuse_value(*value, sizes, next_token, owned_params);
+            (
+                CompExpr::Dup {
+                    value: Box::new(value),
+                },
+                next_token,
+            )
+        }
+        CompExpr::Drop { value } => {
+            let (value, next_token) = insert_reuse_value(*value, sizes, next_token, owned_params);
+            (
+                CompExpr::Drop {
+                    value: Box::new(value),
+                },
+                next_token,
+            )
+        }
+        CompExpr::DropReuse { value, bind } => {
+            let (value, next_token) = insert_reuse_value(*value, sizes, next_token, owned_params);
+            (
+                CompExpr::DropReuse {
+                    value: Box::new(value),
+                    bind,
+                },
+                next_token,
+            )
+        }
+        CompExpr::PerformEffect { effect, op, args } => {
+            let mut next = next_token;
+            let args = args
+                .into_iter()
+                .map(|arg| {
+                    let (arg, updated) = insert_reuse_value(arg, sizes, next, owned_params);
+                    next = updated;
+                    arg
+                })
+                .collect();
+            (CompExpr::PerformEffect { effect, op, args }, next)
+        }
+        CompExpr::Resume { value } => {
+            let (value, next_token) = insert_reuse_value(*value, sizes, next_token, owned_params);
+            (
+                CompExpr::Resume {
+                    value: Box::new(value),
+                },
+                next_token,
+            )
+        }
+        CompExpr::AllocReuse { .. } => (comp, next_token),
+    }
+}
+
+fn insert_reuse_value(
+    value: ValueExpr,
+    sizes: &SizeEnv,
+    next_token: usize,
+    owned_params: &HashSet<String>,
+) -> (ValueExpr, usize) {
+    match value {
+        ValueExpr::Lambda { param, body } => {
+            let mut body_sizes = sizes.clone();
+            body_sizes.remove(&param);
+            activate_cell_promoted_owned_shapes(&mut body_sizes);
+            let (body, next_token) =
+                insert_reuse_comp(*body, &body_sizes, next_token, owned_params);
+            (
+                ValueExpr::Lambda {
+                    param,
+                    body: Box::new(body),
+                },
+                next_token,
+            )
+        }
+        ValueExpr::ListLit { elements, spread } => {
+            let mut next = next_token;
+            let elements = elements
+                .into_iter()
+                .map(|element| {
+                    let (element, updated) = insert_reuse_value(element, sizes, next, owned_params);
+                    next = updated;
+                    element
+                })
+                .collect();
+            let spread = spread.map(|spread| {
+                let (spread, updated) = insert_reuse_value(*spread, sizes, next, owned_params);
+                next = updated;
+                Box::new(spread)
+            });
+            (ValueExpr::ListLit { elements, spread }, next)
+        }
+        ValueExpr::TupleLit(items) => {
+            let mut next = next_token;
+            let items = items
+                .into_iter()
+                .map(|item| {
+                    let (item, updated) = insert_reuse_value(item, sizes, next, owned_params);
+                    next = updated;
+                    item
+                })
+                .collect();
+            (ValueExpr::TupleLit(items), next)
+        }
+        ValueExpr::RecordLit {
+            constructor,
+            fields,
+        } => {
+            let mut next = next_token;
+            let fields = fields
+                .into_iter()
+                .map(|(name, field)| {
+                    let (field, updated) = insert_reuse_value(field, sizes, next, owned_params);
+                    next = updated;
+                    (name, field)
+                })
+                .collect();
+            (
+                ValueExpr::RecordLit {
+                    constructor,
+                    fields,
+                },
+                next,
+            )
+        }
+        ValueExpr::Interp(parts) => {
+            let mut next = next_token;
+            let parts = parts
+                .into_iter()
+                .map(|part| match part {
+                    crate::ir::IrInterpPart::Text(text) => crate::ir::IrInterpPart::Text(text),
+                    crate::ir::IrInterpPart::Expr(value) => {
+                        let (value, updated) = insert_reuse_value(value, sizes, next, owned_params);
+                        next = updated;
+                        crate::ir::IrInterpPart::Expr(value)
+                    }
+                })
+                .collect();
+            (ValueExpr::Interp(parts), next)
+        }
+        ValueExpr::BinOp { op, left, right } => {
+            let (left, next_token) = insert_reuse_value(*left, sizes, next_token, owned_params);
+            let (right, next_token) = insert_reuse_value(*right, sizes, next_token, owned_params);
+            (
+                ValueExpr::BinOp {
+                    op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                },
+                next_token,
+            )
+        }
+        ValueExpr::TupleProject { tuple, index } => {
+            let (tuple, next_token) = insert_reuse_value(*tuple, sizes, next_token, owned_params);
+            (
+                ValueExpr::TupleProject {
+                    tuple: Box::new(tuple),
+                    index,
+                },
+                next_token,
+            )
+        }
+        ValueExpr::ListGet { list, index } => {
+            let (list, next_token) = insert_reuse_value(*list, sizes, next_token, owned_params);
+            let (index, next_token) = insert_reuse_value(*index, sizes, next_token, owned_params);
+            (
+                ValueExpr::ListGet {
+                    list: Box::new(list),
+                    index: Box::new(index),
+                },
+                next_token,
+            )
+        }
+        ValueExpr::IntLit(_)
+        | ValueExpr::BoolLit(_)
+        | ValueExpr::StrLit(_)
+        | ValueExpr::Var(_)
+        | ValueExpr::GlobalRef { .. }
+        | ValueExpr::Unit => (value, next_token),
     }
 }
 
@@ -537,6 +754,22 @@ fn is_list_shape(shape: &SizeOrCell) -> bool {
         SizeOrCell::Size(c) => matches!(c, SizeClass::Header(_)),
         SizeOrCell::FreshList { .. } => true,
         SizeOrCell::CellPromoted => false,
+        SizeOrCell::CellPromotedOwned(shape) => is_list_shape(shape),
+        SizeOrCell::CellPromotedOwnedInactive(_) => false,
+    }
+}
+
+fn activate_cell_promoted_owned_shapes(sizes: &mut SizeEnv) {
+    for shape in sizes.values_mut() {
+        let replacement = match shape {
+            SizeOrCell::CellPromotedOwnedInactive(inner) if is_list_shape(inner) => {
+                Some(SizeOrCell::CellPromotedOwned(inner.clone()))
+            }
+            _ => None,
+        };
+        if let Some(replacement) = replacement {
+            *shape = replacement;
+        }
     }
 }
 

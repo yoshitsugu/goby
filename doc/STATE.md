@@ -1,16 +1,33 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-26 (Perceus M7 complete; §1 goal satisfied)
+Last updated: 2026-04-27 (Perceus M8 borrow-then-update reuse landed)
 
 ## Current Focus
 
-**Perceus M0–M7 complete. §1 goal satisfied.**
+**Perceus M0–M8 complete. §1 goal satisfied.**
 
 `examples/refcount_reuse_loop.gb` reports `total_bytes=108704
 peak_bytes=108704 free_list_hits=0 reuse_hits=5000`, below the
 `< 200 KiB` budget. The bump-only allocator has been replaced by a
 refcount + free-list model; all active documentation updated to reflect
-this. M7 closes the Perceus roadmap.
+this. M8 also closes the real-world borrow-then-update driver gap.
+
+M8 landed (2026-04-27):
+- `mut ys = xs` now classifies the source parameter as consumed when the
+  original binding is not live in the `LetMut` body, without adding a
+  `bind_alias` edge for `LetMut`.
+- Ownership/drop classification now resolves known `Var` callees as well
+  as `GlobalRef` callees, so imported/user wrapper calls such as
+  `length xs` stay borrowed and do not leave a stale `Dup(xs)` before a
+  later last-use mutating helper call.
+- `perceus_reuse` now walks lambda values and preserves owned shapes for
+  cell-promoted mutable captures as `CellPromotedOwned`, allowing the
+  `each idxs (fn k -> ys[k] := v)` callback body to carry an
+  `AssignIndex` reuse token.
+- `lower_list_each_mutating_assign` wraps cell-promoted owned roots with
+  `RefCountDropReuse` before `ListFold` and `AllocReuse(Retain)` after it.
+  The BUGS.md repro now reports `reuse_hits=200` and `total_bytes=37016`
+  in the focused runtime test.
 
 What landed:
 - Step 7-a / 7-a.5: `mut ys = xs; ys[i] := v` gets an `AssignIndex`

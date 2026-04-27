@@ -302,6 +302,7 @@ fn classify_comp(
             name, value, body, ..
         } => {
             classify_bound_comp(value, classes, params, module_params, aliases);
+            classify_consumed_let_mut_source(value, body, classes, params, aliases);
             classes.insert(name.clone(), OwnershipClass::Borrowed);
             let previous_alias = aliases.remove(name);
             classify_comp(body, classes, params, module_params, aliases);
@@ -490,6 +491,22 @@ fn classify_call_args(
     }
 }
 
+fn classify_consumed_let_mut_source(
+    value: &CompExpr,
+    body: &CompExpr,
+    classes: &mut HashMap<String, OwnershipClass>,
+    params: &HashSet<String>,
+    aliases: &HashMap<String, String>,
+) {
+    let CompExpr::Value(ValueExpr::Var(source)) = value else {
+        return;
+    };
+    let owner = aliases.get(source).map_or(source, |root| root);
+    if params.contains(owner) && !collect_live_vars(body).contains(owner) {
+        demote_param(owner, classes, params);
+    }
+}
+
 fn intrinsic_arg_is_borrowed(callee: &ValueExpr, idx: usize) -> bool {
     matches!(
         (callee, idx),
@@ -505,7 +522,9 @@ fn callee_param_classes<'a>(
     module_params: &'a HashMap<String, Vec<OwnershipClass>>,
 ) -> Option<&'a [OwnershipClass]> {
     match callee {
-        ValueExpr::GlobalRef { name, .. } => module_params.get(name).map(Vec::as_slice),
+        ValueExpr::GlobalRef { name, .. } | ValueExpr::Var(name) => {
+            module_params.get(name).map(Vec::as_slice)
+        }
         _ => None,
     }
 }
@@ -1660,7 +1679,7 @@ fn callee_arg_is_borrowed(
         return true;
     }
     let decl_name = match callee {
-        ValueExpr::GlobalRef { name, .. } => name,
+        ValueExpr::GlobalRef { name, .. } | ValueExpr::Var(name) => name,
         _ => return false,
     };
     module_ownership
@@ -3101,6 +3120,126 @@ mod tests {
         assert!(
             ir_str.contains("@reuse("),
             "length borrow should preserve owned-param AssignIndex reuse:\n{ir_str}"
+        );
+    }
+
+    #[test]
+    fn mut_helper_param_seed_survives_prior_borrow_in_driver() {
+        let module = IrModule {
+            decls: vec![
+                IrDecl {
+                    name: "count".to_string(),
+                    params: vec![("xs".to_string(), IrType::Unknown)],
+                    result_ty: IrType::Int,
+                    residual_effects: vec![],
+                    reuse_param: None,
+                    body: CompExpr::Value(ValueExpr::ListGet {
+                        list: Box::new(ValueExpr::Var("xs".to_string())),
+                        index: Box::new(ValueExpr::IntLit(0)),
+                    }),
+                },
+                IrDecl {
+                    name: "update_xs".to_string(),
+                    params: vec![("xs".to_string(), IrType::Unknown)],
+                    result_ty: IrType::Unknown,
+                    residual_effects: vec![],
+                    reuse_param: None,
+                    body: CompExpr::LetMut {
+                        name: "ys".to_string(),
+                        ty: IrType::Unknown,
+                        value: Box::new(CompExpr::Value(ValueExpr::Var("xs".to_string()))),
+                        body: Box::new(CompExpr::Seq {
+                            stmts: vec![CompExpr::AssignIndex {
+                                root: "ys".to_string(),
+                                path: vec![ValueExpr::IntLit(0)],
+                                value: Box::new(CompExpr::Value(ValueExpr::IntLit(7))),
+                                reuse_token: None,
+                            }],
+                            tail: Box::new(CompExpr::Value(ValueExpr::Var("ys".to_string()))),
+                        }),
+                    },
+                },
+                IrDecl {
+                    name: "drive".to_string(),
+                    params: vec![("xs".to_string(), IrType::Unknown)],
+                    result_ty: IrType::Unknown,
+                    residual_effects: vec![],
+                    reuse_param: None,
+                    body: CompExpr::Let {
+                        name: "c".to_string(),
+                        ty: IrType::Int,
+                        value: Box::new(CompExpr::Call {
+                            callee: Box::new(ValueExpr::GlobalRef {
+                                module: "".to_string(),
+                                name: "count".to_string(),
+                            }),
+                            args: vec![ValueExpr::Var("xs".to_string())],
+                            reuse_token: None,
+                        }),
+                        body: Box::new(CompExpr::Let {
+                            name: "new_xs".to_string(),
+                            ty: IrType::Unknown,
+                            value: Box::new(CompExpr::Call {
+                                callee: Box::new(ValueExpr::GlobalRef {
+                                    module: "".to_string(),
+                                    name: "update_xs".to_string(),
+                                }),
+                                args: vec![ValueExpr::Var("xs".to_string())],
+                                reuse_token: None,
+                            }),
+                            body: Box::new(CompExpr::Value(ValueExpr::Var("new_xs".to_string()))),
+                        }),
+                    },
+                },
+            ],
+        };
+
+        let rewritten = run_perceus_passes(&module);
+        let ir_str = fmt_ir(&rewritten);
+        assert!(
+            ir_str.contains("@reuse("),
+            "mutating helper must seed AssignIndex reuse even when caller borrowed first:\n{ir_str}"
+        );
+        assert!(
+            !ir_str.contains("dup xs"),
+            "prior borrowed call must not force a Dup before last-use update_xs(xs):\n{ir_str}"
+        );
+    }
+
+    #[test]
+    fn let_mut_source_used_after_seed_does_not_authorize_reuse() {
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "bad".to_string(),
+                params: vec![("xs".to_string(), IrType::Unknown)],
+                result_ty: IrType::Unknown,
+                residual_effects: vec![],
+                reuse_param: None,
+                body: CompExpr::LetMut {
+                    name: "ys".to_string(),
+                    ty: IrType::Unknown,
+                    value: Box::new(CompExpr::Value(ValueExpr::Var("xs".to_string()))),
+                    body: Box::new(CompExpr::Seq {
+                        stmts: vec![CompExpr::AssignIndex {
+                            root: "ys".to_string(),
+                            path: vec![ValueExpr::IntLit(0)],
+                            value: Box::new(CompExpr::Value(ValueExpr::IntLit(7))),
+                            reuse_token: None,
+                        }],
+                        tail: Box::new(CompExpr::Value(ValueExpr::ListGet {
+                            list: Box::new(ValueExpr::Var("xs".to_string())),
+                            index: Box::new(ValueExpr::IntLit(0)),
+                        })),
+                    }),
+                },
+            }],
+        };
+
+        let rewritten = run_perceus_passes(&module);
+        let ir_str = fmt_ir(&rewritten);
+        assert!(
+            !ir_str.contains("@reuse("),
+            "source binding is still live, so mut ys = xs must not seed reuse:\n{ir_str}"
         );
     }
 }

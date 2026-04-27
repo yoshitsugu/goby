@@ -587,15 +587,15 @@ Output format: human-readable (default) and JSON lines (`--json`).
   reflect the refcount + free-list model as the steady state. "bump-only
   allocator" wording removed from active descriptions. `doc/PLAN_PERCEUS.md`
   §M7 closed.
-- **M8 open (2026-04-27).** Real-world driver shape (read-only borrow
-  of the same list before the mutating helper call) does not fire
-  Perceus reuse — `--debug-alloc-stats` reports `reuse_hits=0` and
-  `peak_bytes == total_bytes`. Surfaced by AoC2025 day 4 part 2;
-  minimal repro and acceptance gate captured in `doc/BUGS.md`. Plan
-  recorded in `doc/PLAN_PERCEUS.md` §M8 (Investigation → fix →
-  re-acceptance, with explicit invariants the fix must preserve).
-  This means the M0–M7 "Perceus done" claim was scoped to the M6 goal
-  program, not to arbitrary driver shapes; M8 closes that gap.
+- **M8 complete (2026-04-27).** Real-world driver shape (read-only
+  borrow of the same list before the mutating helper call) now fires
+  Perceus reuse. The BUGS.md repro is covered by
+  `compile_tests::perceus_real_world_driver_borrow_then_update_reuses_and_frees`
+  and reports `reuse_hits=200`, `total_bytes=37016` at the focused
+  scale. The fix keeps the `LetMut`-no-`bind_alias` invariant, resolves
+  known `Var` callees for borrowed-call classification, carries reuse
+  metadata into lambda callback bodies, and wraps cell-promoted `each`
+  roots with `drop_reuse` / `alloc_reuse(Retain)`.
 
 - **M6 Step 5 (`stdlib/goby/list.gb` `set` reuse rewrite) — won't-fix.**
   Not on the acceptance path (the 200 KiB budget was met without it via

@@ -1861,6 +1861,96 @@ fn refcount_reuse_loop_owned_param_seed_reuses_assign_index() {
 }
 
 #[test]
+fn perceus_real_world_driver_borrow_then_update_reuses_and_frees() {
+    let source = r#"
+import goby/list (length, each)
+import goby/stdio
+
+count_marks : List Int -> Int -> Int -> Int
+count_marks xs i acc =
+  n = length xs
+  if i == n
+    acc
+  else
+    if xs[i] == 1
+      count_marks xs (i + 1) (acc + 1)
+    else
+      count_marks xs (i + 1) acc
+
+update_xs : List Int -> List Int -> List Int
+update_xs xs idxs =
+  mut ys = xs
+  each idxs (fn k ->
+    ys[k] := 0
+    ()
+  )
+  ys
+
+build : Int -> Int -> List Int -> List Int
+build k n acc =
+  if k == n
+    acc
+  else
+    build (k + 1) n [k % 2, ..acc]
+
+build_idxs : Int -> Int -> List Int -> List Int
+build_idxs k n acc =
+  if k == n
+    acc
+  else
+    build_idxs (k + 1) n [k, ..acc]
+
+drive : List Int -> List Int -> Int -> Int
+drive xs idxs iters =
+  if iters == 0
+    count_marks xs 0 0
+  else
+    c = count_marks xs 0 0
+    new_xs = update_xs xs idxs
+    drive new_xs idxs (iters - 1)
+
+main : Unit -> Unit can Print
+main =
+  xs = build 0 1000 []
+  idxs = build_idxs 0 50 []
+  result = drive xs idxs 200
+  println "${result}"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (instrs, aux) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should succeed")
+        .expect("sample should use general lowering");
+    let dump = format!("{instrs:?} {aux:?}");
+    assert!(
+        dump.contains("RefCountDropReuse"),
+        "borrow-then-update driver should lower update_xs with reuse: {dump}"
+    );
+    let output = execute_runtime_module_with_stdin_config_and_options_captured(
+        &module,
+        Some(String::new()),
+        None,
+        CompileOptions {
+            debug_alloc_stats: true,
+        },
+    )
+    .expect("borrow-then-update driver should execute")
+    .expect("sample should run on runtime-owned Wasm");
+    assert_eq!(output.stdout, "475\n");
+    let reuse_hits = parse_alloc_stats_field(&output.stderr, "reuse_hits");
+    let total_bytes = parse_alloc_stats_field(&output.stderr, "total_bytes");
+    assert_eq!(
+        reuse_hits, 200,
+        "borrow-then-update driver should reuse once per update_xs call; stderr:\n{}",
+        output.stderr
+    );
+    assert!(
+        total_bytes < 64 * 1024,
+        "borrow-then-update driver should stay bounded after reuse fires; stderr:\n{}",
+        output.stderr
+    );
+}
+
+#[test]
 fn compile_module_routes_echo_read_line_println_through_dynamic_wasi_io_classification() {
     let source = r#"
 main : Unit -> Unit can Print, Read
