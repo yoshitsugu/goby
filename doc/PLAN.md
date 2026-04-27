@@ -587,6 +587,20 @@ Output format: human-readable (default) and JSON lines (`--json`).
   reflect the refcount + free-list model as the steady state. "bump-only
   allocator" wording removed from active descriptions. `doc/PLAN_PERCEUS.md`
   §M7 closed.
+- **M6 Step 5 (`stdlib/goby/list.gb` `set` reuse rewrite) — won't-fix.**
+  Not on the acceptance path (the 200 KiB budget was met without it via
+  Step 7-a/7-c). Re-open only if `list.set` becomes a measured hotspot,
+  or if `WasmBackendInstr` gains an if/else control-flow primitive for an
+  unrelated reason. Re-opening requires:
+  (1) `lower_assign_index_reuse` to branch at runtime on the
+  `RefCountDropReuse` token (token != 0 → current `ListSetInPlace` +
+  `AllocReuse(Retain)`; token == 0 → `ListSet` path-copy);
+  (2) redefining `BackendAllocInit::Retain` so the token == 0 fallback
+  path either copies the payload or is statically excluded;
+  (3) keeping the `LetMut`-no-`bind_alias` invariant (`perceus.rs:306`)
+  intact — adding `bind_alias` to `LetMut` lights up reuse on shared
+  `xs`, which the current static rc==1 proof cannot guarantee for
+  `set xs i v` callers.
 
 #### 4.2.1 Perceus M1 prerequisite: bitwise XOR (`^`) operator — complete
 

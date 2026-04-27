@@ -1,11 +1,24 @@
 # Goby Memory Management Plan — Perceus Refcount with Reuse
 
-Last updated: 2026-04-18
+Last updated: 2026-04-27
 
 This document is the roadmap that replaced Goby's previous bump-only allocator
 with a principled memory management scheme based on **Perceus-style reference
 counting with reuse analysis** (Reinking, Xie, de Moura, Leijen; PLDI 2021, as
 used in Koka, Lean 4, and Roc). M0–M7 are complete as of 2026-04-26.
+
+**Status (2026-04-27): roadmap closed.** Two checkboxes remain unchecked
+because the work behind them is intentionally not shipping:
+
+- M4 residency test `perceus_loop_residency` — won't-fix; superseded by
+  the M3 proxy plus the M6 acceptance test (see §M4 entry).
+- M6 Step 5 (`stdlib/goby/list.gb` `set` reuse rewrite) — won't-fix;
+  not on the acceptance path. Re-open conditions and the required ABI
+  changes are mirrored in `doc/PLAN.md` §4.2 so they survive once this
+  document is deleted.
+
+This document is scheduled for deletion. Anything that needs to outlive
+it lives in `doc/PLAN.md` §4.2.
 
 Related documents:
 
@@ -981,14 +994,19 @@ The Perceus algorithm proper, with the closure and handler rules from
       `closure_captures_heap_values_outer_scope_does_not_drop`,
       `case_heap_bound_pattern_drops_unused_bindings`,
       `multi_resume_captured_list_state_preserved_across_resumes`.
-- [ ] Residency test `perceus_loop_residency` — **deferred to M4.5.**
-      Driving `free_list_hits >= 999` from a real tail-recursive
-      `build 1000` loop requires parameter Dup/Drop and If/Case branch
-      balancing that the M4 conservative slice intentionally omits
-      (see "M4 as-shipped" below). M3 already ships
-      `drop_frees_unique_list_and_subsequent_alloc_gets_free_list_hit`
-      as a residency proxy; that test remains the M4 proof-of-life for
-      the `__goby_drop` → free-list path.
+- [~] Residency test `perceus_loop_residency` — **won't-fix (2026-04-27).**
+      Originally scoped to drive `free_list_hits >= 999` from a real
+      tail-recursive `build 1000` loop. By M6 acceptance the benchmark
+      `examples/refcount_reuse_loop.gb` reports
+      `free_list_hits=0 reuse_hits=5000`: the budget is met through the
+      reuse-token path (M5/M6 `RefCountDropReuse` + `ListSetInPlace`),
+      not through `__goby_drop` → free-list cycling. The `free_list_hits`
+      counter therefore no longer tracks the benchmark's hot loop, and
+      a dedicated full-loop residency assertion would only re-prove what
+      the M3 proxy
+      (`drop_frees_unique_list_and_subsequent_alloc_gets_free_list_hit`)
+      already covers. The M3 proxy stays as the single point of evidence
+      for the `__goby_drop` → free-list path.
 - [x] **Acceptance (as-shipped):** all correctness tests pass;
       `cargo test --workspace` green; M3 residency proxy remains
       green; real-loop residency gate reopens under M4.5.
@@ -1242,14 +1260,13 @@ M5 code work is complete (intra-block `reuse_pair`, tail-position
 cross-call ABI, inline `__goby_alloc_reuse` / `__goby_drop_reuse`,
 correctness tests). Two items remain and ride alongside M6:
 
-- [ ] Un-ignore the M1 integration test for
+- [x] Un-ignore the M1 integration test for
       `examples/refcount_reuse_loop.gb` and add an assertion that
-      `total_bytes < 200 * 1024`. With M5 alone the example still
-      allocates ~149 MiB because chunk reuse and `xs[i] := v`-driven
-      reuse are M6 territory.
-- [ ] **Acceptance:** the M1 test passes under `goby run
-      --max-memory-mb 16` with `total_bytes < 200 KiB` and the
-      recorded checksum. Closed by M6 Step 7.
+      `total_bytes < 200 * 1024`. **Done 2026-04-26** in
+      `goby-wasm/tests/wasm_exports_and_smoke.rs::refcount_reuse_loop_example_compiles`.
+- [x] **Acceptance:** the M1 test passes with `total_bytes < 200 KiB`.
+      **Closed 2026-04-26** by M6 Step 7-d (final report:
+      `total_bytes=108704 reuse_hits=5000`).
 
 Notes carried into M6:
 
@@ -1347,44 +1364,46 @@ the reuse fast path when statically proven unique.
   - IR-level: `lower_assign_index_two_levels_uniform_inner_reuses_all_levels`,
     `lower_assign_index_two_levels_inner_none_after_outer_reuse_uses_listset`.
 
-#### Step 5 — `stdlib/goby/list.gb` `set` rewrite
+#### Step 5 — `stdlib/goby/list.gb` `set` rewrite — won't-fix (2026-04-27)
 
-- [ ] Rewrite `set xs i v` as the immutable-update surface form so it
-      benefits from reuse automatically (`mut ys = xs; ys[i] := v; ys`
-      or equivalent if expressible at surface level). If the surface
-      form cannot reach the same intrinsic, leave `__goby_list_set` in
-      place but reroute its backend lowering through the Step 3 / 4
-      path. Either outcome is acceptable provided example outputs are
-      byte-identical.
+- [~] Originally scoped: rewrite `set xs i v` to the immutable-update
+      surface form so it picks up reuse automatically. **Closed as
+      won't-fix.** Not on the acceptance path (M6 Step 7-a/7-c met the
+      200 KiB budget without it). Re-open conditions and the required
+      ABI changes are recorded in `doc/PLAN.md` §4.2 so they survive
+      this document's eventual deletion.
 
-**Investigation note (2026-04-27):** Surface form rewrite is blocked by
-two interdependent issues and is deferred:
+**Investigation summary (2026-04-27, retained for the record).** Two
+interdependent blockers prevent a drop-in rewrite:
 
 1. `backend_intrinsic_for("list", "set")` short-circuits every
-   `list.set` call to `BackendIntrinsic::ListSet` before the stdlib
-   body is reached. Removing this entry routes calls through the stdlib
-   body, but exposes issue 2.
+   `list.set` call to `BackendIntrinsic::ListSet` before the stdlib body
+   is reached. Removing the entry routes calls through the stdlib body
+   but exposes issue 2.
 
 2. `lower_assign_index_reuse` emits `ListSetInPlace` unconditionally
-   (even when rc != 1). The guard relies on the static uniqueness proof
-   from `perceus_reuse` (`reuse_token` is only attached when the root
-   is statically owned). For `set xs i v`, `xs` is classified as
-   `Owned` only if the ownership pass propagates the `LetMut`
-   alias (`mut ys = xs`). Adding `bind_alias` to `LetMut` in
-   `perceus.rs` achieves this, but it causes alias-safety violations:
-   when the caller uses `xs` after `set xs 0 v`, `drop_insert` emits
-   `Dup(xs)` (rc:1→2), then `RefCountDropReuse(ys)` decrements to rc==1
-   and `ListSetInPlace` mutates the shared chunk — corrupting the
-   caller's `xs`.
+   even when the runtime token returned by `RefCountDropReuse` is null
+   (rc was != 1). The guard relies on the static uniqueness proof from
+   `perceus_reuse`: `reuse_token` is only attached when the root is
+   statically owned. For `set xs i v`, `xs` is `Owned` only if the
+   ownership pass propagates the `LetMut` alias (`mut ys = xs`). Adding
+   `bind_alias` to `LetMut` in `perceus.rs` lights up the reuse, but
+   when the caller still references `xs` after `set xs 0 v` the inserted
+   `Dup(xs)` (rc:1→2) followed by `RefCountDropReuse(ys)` (rc:2→1)
+   leaves a shared chunk that `ListSetInPlace` then mutates —
+   corrupting the caller's `xs`.
 
-   The correct fix requires `lower_assign_index_reuse` to fall back to
-   copy-on-write `ListSet` when the `RefCountDropReuse` token is null
-   (rc was != 1), which is a non-trivial change to the hot lowering path.
+The correct fix is a runtime branch in `lower_assign_index_reuse`:
+`token != 0` keeps the current `ListSetInPlace` + `AllocReuse(Retain)`
+path; `token == 0` falls back to copy-on-write `ListSet`. This requires
+introducing if/else control flow at the `WasmBackendInstr` layer and
+redefining `BackendAllocInit::Retain` so the `token == 0` branch either
+copies the payload or is statically excluded. The effort is larger than
+M6 itself and produces no measurable benefit on current workloads, so
+the change is deferred indefinitely.
 
-Current state: `set xs i v = __goby_list_set xs i v` is unchanged.
-`__goby_list_set` continues to route through the copy-on-write `ListSet`
-intrinsic for all calls. The reuse benefit is not realised for this
-function until the `lower_assign_index_reuse` fallback is implemented.
+Current state (frozen): `set xs i v = __goby_list_set xs i v`, lowered
+through the copy-on-write `ListSet` intrinsic for every call.
 
 #### Step 6 — Codex code review
 
