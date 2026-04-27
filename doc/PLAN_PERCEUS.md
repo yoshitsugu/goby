@@ -1608,6 +1608,172 @@ chunk-level reuse) are sequenced as follows. Step 5 (`stdlib/goby/list.gb`
 
 ---
 
+### M8 — Reuse and drop on real-world driver shapes
+
+M0–M7 declared "Perceus done" against `examples/refcount_reuse_loop.gb`,
+which is a single-call driver: each iteration immediately consumes the
+parameter via `mut ys = xs; ys[i] := v; step ys ...`. Real programs
+write a slightly less linear shape — the driver borrows the same list
+for a read-only traversal *before* handing it to the mutating helper,
+e.g.
+
+```gb
+drive xs idxs iters =
+  if iters == 0
+    summarize xs                       -- borrow only
+  else
+    c = summarize xs                   -- borrow xs
+    new_xs = update_xs xs idxs         -- consume xs (mut ys = xs; each ...)
+    drive new_xs idxs (iters - 1)
+```
+
+On this shape (`doc/BUGS.md` open repro and AoC2025 day 4 part 2,
+2026-04-27) `--debug-alloc-stats` reports `reuse_hits=0` and
+`peak_bytes == total_bytes` with `free_list_hits=0`: the M6 reuse path
+does not fire and the per-iteration intermediate lists are not freed.
+
+The acceptance benchmark missed this because it never re-reads `xs`
+after the `mut ys = xs` seed, so M5 Step 7-a's Owned-parameter seed
+condition is trivially satisfied. M8 widens the proof so the reuse
+path fires whenever the parameter is statically last-used at the
+mutating call site, regardless of earlier read-only uses in the same
+basic block.
+
+#### Step 1 — Investigation: confirm the failure mode
+
+- [ ] Add a `cargo test -p goby-wasm` runtime test (or smoke harness)
+      that runs the BUGS.md repro with `--debug-alloc-stats` and asserts
+      `reuse_hits > 0` and `peak_bytes < K * iters * sizeof(xs)` for
+      some small constant `K`. The test currently fails; it is the
+      acceptance gate for M8.
+- [ ] Dump the IR after `perceus_reuse::insert_reuse` for the helper
+      function (`update_xs`) and the driver function (`drive`).
+      Confirm at the IR level which of the following is missing:
+      (a) `update_xs`'s parameter `xs` is not classified `Owned` by
+      `crates/goby-core/src/perceus.rs::classify_call_args`; or
+      (b) `xs` *is* `Owned` but `LetMut` does not propagate the
+      Owned-parameter `SizeEnv` seed introduced in M6 Step 7-a; or
+      (c) the seed is propagated and `AssignIndex` carries a
+      `reuse_token`, but the lowering in
+      `crates/goby-wasm/src/gen_lower/lower.rs` does not pick the
+      `each + AssignIndex` specialisation under `mut ys = xs`'s
+      `LoadCellValue`/`StoreCellValue` framing.
+- [ ] Independently confirm whether the `drop_insert` pass emits a
+      `Drop` on the per-iteration `update_xs` return value when it
+      becomes shadowed by `new_xs` on tail-call. `peak == total` says
+      it does not. This is reported as a separate symptom in BUGS.md
+      but is most likely the same root cause (parameter ownership
+      classification feeds both passes).
+
+#### Step 2 — Codex plan review
+
+- [ ] Send Step 1's IR dumps and the chosen narrowing of the failure
+      mode (a / b / c above) to Codex. The questions for review:
+  - Does the proposed widening of Owned-parameter classification
+    preserve §3.4 (no in-place write under shared cells)?
+  - Is the widening expressible without breaking the "LetMut has no
+    `bind_alias`" invariant at `perceus.rs:306`, which M6 Step 5
+    deliberately preserves?
+  - Are there shapes the widening would mis-classify as Owned and
+    silently corrupt? In particular, what happens when the read-only
+    use after the mutating call is on the *original* binding rather
+    than the new one (i.e. the call is *not* a last-use on the
+    parameter's lexical name)?
+
+#### Step 3 — Fix the classification or the seed
+
+Exact wording deferred to Step 1's findings, but the design space is
+narrow:
+
+- **3a.** If `classify_call_args` is the gap: extend it so that a
+  parameter passed to a callee whose corresponding formal parameter is
+  later consumed by `mut ys = formal; ...` is classified `Owned` at
+  the call site, provided the actual argument is itself not used after
+  the call inside the same basic block. The "later consumed" property
+  must be derived from the callee's IR, not assumed; cache it on
+  `IrDecl` alongside `reuse_param`.
+- **3b.** If the `SizeEnv` seed is the gap: extend `peek_binding_shape`
+  (or the equivalent in `perceus_reuse.rs`) so that a `mut ys = xs`
+  inherits `xs`'s class whenever `xs` is `Owned` *or* the function's
+  Owned-parameter set explicitly lists `xs`. Step 7-a's introduction
+  of the per-decl `Owned`-param `HashSet<String>` already exists; M8
+  audits whether every entry point to `insert_reuse` actually uses it.
+- **3c.** If lowering is the gap: extend
+  `lower_list_each_mutating_assign` (and / or
+  `lower_supported_inline_list_fold_mutating_each`) to recognise the
+  `LoadCellValue`-framed root that `LetMut` introduces, instead of
+  bailing out to copy-on-write `ListSet`.
+
+In every variant, the acceptance test from Step 1 is the gate.
+
+The fix **must not** weaken these invariants:
+
+- `LetMut` does not call `bind_alias` (`perceus.rs:306`). The repro
+  must work without aliasing the original `xs` into the new `mut ys`,
+  because shared-cell `mut` capture must keep observing path-copy.
+- `lower_assign_index_reuse` only emits `ListSetInPlace` when the
+  static uniqueness proof has held since allocation (`perceus_reuse`
+  attaches `reuse_token` only on statically Owned roots — see M6 Step
+  5's Investigation summary for why a runtime token-null branch is
+  not free).
+- The `alloc_baseline.txt` regression gate must stay green for every
+  existing example, including the M6 goal program. M8 is allowed to
+  *improve* allocations on existing entries; widening must not
+  re-introduce per-iteration allocations elsewhere.
+
+#### Step 4 — Drop insertion audit
+
+- [ ] Inspect `drop_insert` for the same call shape and confirm the
+      per-iteration `update_xs` return value is `Drop`-emitted at the
+      right point, so `free_list_hits` becomes positive. If the same
+      ownership widening fixes both, document the link explicitly.
+- [ ] Add an alloc-baseline entry for the BUGS.md repro so future
+      regressions are caught.
+
+#### Step 5 — Re-acceptance
+
+- [ ] BUGS.md repro: `reuse_hits > 0` and `peak_bytes` independent of
+      `iters`.
+- [ ] AoC2025 day 4 part 2 (138 × 138 grid, full input) completes
+      under the default 1024 MiB ceiling. Captured as a smoke test
+      under `examples/` if license allows; otherwise referenced by
+      shape only.
+- [ ] `examples/refcount_reuse_loop.gb` budget unchanged
+      (`total_bytes < 200 * 1024`, `reuse_hits == 5000`).
+- [ ] `cargo test --workspace` green; `alloc_baseline.txt` deltas
+      explained per entry.
+
+#### Step 6 — Codex code review
+
+- [ ] Send the Step 3 / Step 4 diffs. Focus areas:
+  - the widened ownership classification has no holes that admit
+    a shared root into `ListSetInPlace`;
+  - drop insertion changes do not double-free under effect handlers
+    (`reuse_not_across_perform_effect` / `reuse_not_across_with_handler`
+    must remain green);
+  - the BUGS.md repro and the AoC shape both pass; the M6 goal program
+    is unchanged.
+
+#### Step 7 — STATE / PLAN sync and commit
+
+- [ ] Update `doc/STATE.md`, `doc/PLAN.md` §4.2, and
+      `memory/project_perceus_status.md` to record M8 outcome.
+- [ ] Move the BUGS.md entry from "Open" to "Resolved on YYYY-MM-DD"
+      with the fix summary.
+- [ ] Run `goby-invariants` before commit.
+
+#### Out of scope for M8
+
+- Reuse across `perform`/`with_handler` boundaries (still §3.5 / M5
+  invariant: a conservative abort at handler boundaries).
+- Reuse on `set xs i v` (the stdlib `list.set` surface form). Step 5's
+  re-open conditions in §M6 Step 5 still stand.
+- Inter-procedural reuse beyond the existing tail-call rule (§3.7.1).
+  M8 only widens the *intra*-procedural last-use proof so the
+  parameter-passing chain that already exists fires correctly.
+
+---
+
 ## 5. Non-Goals
 
 - **Tracing GC.** Not considered. Cycles are disallowed at the language

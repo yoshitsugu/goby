@@ -4,7 +4,111 @@ This document tracks confirmed, reproducible bugs in the current Goby toolchain.
 
 Open bugs:
 
-(none)
+- `goby run` exhausts the 1 GiB Wasm memory limit on a tail-recursive
+  driver that updates a list through `mut ys = xs; each idxs (fn k -> ys[k] := v; ())`
+  inside a helper, when the same list is also borrowed in the driver
+  (e.g. by a read-only traversal) before the helper call. The Perceus
+  reuse path that M6 added (`each + AssignIndex` → `ListSetInPlace`,
+  Owned-parameter `mut ys = xs` seeding) does not fire under this
+  call shape, and `--debug-alloc-stats` reports `reuse_hits=0` with
+  `total_bytes == peak_bytes` (i.e. nothing is freed during the loop).
+
+  Repro:
+
+  ```gb
+  import goby/list (length, each)
+  import goby/stdio
+
+  count_marks : List Int -> Int -> Int -> Int
+  count_marks xs i acc =
+    n = length xs
+    if i == n
+      acc
+    else
+      if xs[i] == 1
+        count_marks xs (i + 1) (acc + 1)
+      else
+        count_marks xs (i + 1) acc
+
+  update_xs : List Int -> List Int -> List Int
+  update_xs xs idxs =
+    mut ys = xs
+    each idxs (fn k ->
+      ys[k] := 0
+      ()
+    )
+    ys
+
+  build : Int -> Int -> List Int -> List Int
+  build k n acc =
+    if k == n
+      acc
+    else
+      build (k + 1) n [k % 2, ..acc]
+
+  build_idxs : Int -> Int -> List Int -> List Int
+  build_idxs k n acc =
+    if k == n
+      acc
+    else
+      build_idxs (k + 1) n [k, ..acc]
+
+  drive : List Int -> List Int -> Int -> Int
+  drive xs idxs iters =
+    if iters == 0
+      count_marks xs 0 0
+    else
+      c = count_marks xs 0 0
+      new_xs = update_xs xs idxs
+      drive new_xs idxs (iters - 1)
+
+  main : Unit -> Unit can Print
+  main =
+    xs = build 0 1000 []
+    idxs = build_idxs 0 50 []
+    result = drive xs idxs 200
+    println "${result}"
+  ```
+
+  Run:
+
+  ```sh
+  goby run --debug-alloc-stats repro.gb
+  ```
+
+  Current result (small scale, completes):
+
+  ```text
+  alloc-stats: total_bytes=37016 peak_bytes=37016 free_list_hits=0 reuse_hits=0
+  475
+  ```
+
+  Expected: `reuse_hits` proportional to `iters` (one per `update_xs`
+  call), and `peak_bytes` bounded by a small multiple of the live
+  working set (one `xs`, one `idxs`, one stack frame), not by
+  `iters * sizeof(xs)`.
+
+  Notes:
+  - At larger scales (e.g. `xs` of 19 000 elements with several hundred
+    iterations — the AoC2025 day 4 part 2 shape that surfaced this) the
+    same program runs out of memory under the default 1024 MiB ceiling.
+  - Removing the `count_marks xs ...` borrow before the `update_xs xs ...`
+    call routes the program through a different lowering path (not
+    `GeneralLowered`) and `--debug-alloc-stats` is not applicable, so
+    the borrow is the load-bearing part of the repro: the `mut ys = xs`
+    seed in `update_xs` only re-uses the parameter's chunk when the
+    caller has not already taken a Borrowed reference to it earlier in
+    the same basic block.
+  - `peak_bytes == total_bytes` and `free_list_hits == 0` together
+    indicate that drop is not running on the per-iteration intermediate
+    lists either. This is a second symptom (likely related: the
+    parameter ownership classification used by `drop_insert` is the
+    same input the reuse pass reads), tracked together with the reuse
+    miss.
+  - The fix lives in the reuse plumbing, not in the `each + AssignIndex`
+    pattern recogniser (commit from 2026-04-14) which is already in
+    place and works in isolation. Tracked as Perceus M8 in
+    `doc/PLAN_PERCEUS.md`.
 
 Resolved on 2026-04-14:
 
