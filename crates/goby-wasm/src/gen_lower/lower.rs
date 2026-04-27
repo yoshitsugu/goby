@@ -5927,7 +5927,7 @@ build n =
             value: Box::new(CompExpr::Value(ValueExpr::IntLit(42))),
             reuse_token: Some(goby_core::ir::AssignIndexReuse {
                 root_token: "__perceus_reuse_token_0".to_string(),
-                levels: vec![Some(SizeClass::for_list_header(1)), None],
+                levels: vec![Some(SizeClass::Header(1)), None],
             }),
         };
         let instrs = lower_comp(&comp).expect("nested AssignIndex reuse should lower");
@@ -5999,8 +5999,8 @@ build n =
             reuse_token: Some(goby_core::ir::AssignIndexReuse {
                 root_token: "__perceus_reuse_token_0".to_string(),
                 levels: vec![
-                    Some(SizeClass::for_list_header(1)),
-                    Some(SizeClass::for_list_header(1)),
+                    Some(SizeClass::Header(1)),
+                    Some(SizeClass::Header(1)),
                 ],
             }),
         };
@@ -6066,7 +6066,7 @@ build n =
             value: Box::new(CompExpr::Value(ValueExpr::IntLit(42))),
             reuse_token: Some(goby_core::ir::AssignIndexReuse {
                 root_token: "__perceus_reuse_token_0".to_string(),
-                levels: vec![Some(SizeClass::for_list_header(1)), None],
+                levels: vec![Some(SizeClass::Header(1)), None],
             }),
         };
         let instrs = lower_comp(&comp).expect("first-none AssignIndex should lower");

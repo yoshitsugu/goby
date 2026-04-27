@@ -167,18 +167,6 @@ pub(crate) fn run_wasm_bytes_with_stdin_for_tests(
     run_wasm_bytes_with_stdin_and_config(wasm, stdin, memory_config)
 }
 
-/// Execute Wasm bytes and return `(stdout, stderr)`.
-/// Only for tests that need to inspect alloc-stats or other stderr output.
-#[cfg(test)]
-pub(crate) fn run_wasm_bytes_capturing_stderr(
-    wasm: &[u8],
-    stdin: Option<&str>,
-    memory_config: crate::memory_config::WasmMemoryConfig,
-) -> Result<(String, String), String> {
-    let captured = run_wasm_bytes_with_stdin_and_config_captured(wasm, stdin, memory_config)?;
-    Ok((captured.stdout, captured.stderr))
-}
-
 #[cfg_attr(not(test), allow(dead_code))]
 fn run_wasm_bytes_with_stdin_and_config(
     wasm: &[u8],

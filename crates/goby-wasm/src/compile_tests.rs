@@ -3047,7 +3047,7 @@ fn cross_call_reuse_hidden_param_increments_reuse_hits() {
     use wasmtime_wasi::p1::{self, WasiP1Ctx};
     use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 
-    let sc = SizeClass::for_list_header(1);
+    let sc = SizeClass::Header(1);
     let zero_tok = "__zero_tok".to_string();
     let acc = "__acc".to_string();
     let tok = "__tok".to_string();
@@ -3176,7 +3176,7 @@ fn reuse_fires_on_unique_list_update() {
     use wasmtime_wasi::p1::{self, WasiP1Ctx};
     use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 
-    let sc = SizeClass::for_tuple(2);
+    let sc = SizeClass::Tuple(2);
     let zero_tok = "__zero_tok".to_string();
     let acc = "__acc".to_string();
     let tok = "__tok".to_string();
@@ -3308,7 +3308,7 @@ fn reuse_falls_through_when_shared() {
     use wasmtime_wasi::p1::{self, WasiP1Ctx};
     use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 
-    let sc = SizeClass::for_tuple(2);
+    let sc = SizeClass::Tuple(2);
     let zero_tok = "__zero_tok".to_string();
     let acc_orig = "__acc_orig".to_string();
     let acc_new = "__acc_new".to_string();
@@ -3470,7 +3470,7 @@ fn tail_call_reuse_passes_token() {
     use wasmtime_wasi::p1::{self, WasiP1Ctx};
     use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 
-    let sc = SizeClass::for_list_header(1);
+    let sc = SizeClass::Header(1);
     let zero_tok = "__zero_tok".to_string();
     let acc = "__acc".to_string();
     let tok = "__tok".to_string();

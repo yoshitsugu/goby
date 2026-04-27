@@ -89,62 +89,6 @@ impl SizeClass {
         }
     }
 
-    /// Infer size class from payload byte size and the object tag.
-    /// `payload_bytes` is the payload size *excluding* the 8-byte refcount header.
-    pub(crate) fn for_chunk(pw: PtrWidth) -> SizeClass {
-        let _ = pw;
-        SizeClass::Chunk
-    }
-
-    pub(crate) fn for_list_header(n_chunks: u32) -> SizeClass {
-        match n_chunks {
-            1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 => SizeClass::Header(n_chunks),
-            _ => SizeClass::Large,
-        }
-    }
-
-    pub(crate) fn for_tuple(arity: u32) -> SizeClass {
-        if (1..=8).contains(&arity) {
-            SizeClass::Tuple(arity)
-        } else {
-            SizeClass::Large
-        }
-    }
-
-    pub(crate) fn for_record(arity: u32) -> SizeClass {
-        if (1..=8).contains(&arity) {
-            SizeClass::Record(arity)
-        } else {
-            SizeClass::Large
-        }
-    }
-
-    pub(crate) fn for_closure(slots: u32) -> SizeClass {
-        if slots <= 8 {
-            SizeClass::Closure(slots)
-        } else {
-            SizeClass::Large
-        }
-    }
-
-    pub(crate) fn for_cell() -> SizeClass {
-        SizeClass::Cell
-    }
-
-    pub(crate) fn for_string(byte_len: u32) -> SizeClass {
-        if byte_len <= 512 {
-            // Round up to the next bucket boundary.
-            let bucket = [8u32, 16, 32, 64, 128, 256, 512]
-                .iter()
-                .copied()
-                .find(|&b| b >= byte_len)
-                .unwrap_or(512);
-            SizeClass::String(bucket)
-        } else {
-            SizeClass::Large
-        }
-    }
-
     /// Payload byte size (excluding 8-byte refcount header) for this size class.
     /// Returns `None` for `Large` (variable size).
     pub(crate) fn payload_bytes(self, pw: PtrWidth) -> Option<u32> {
