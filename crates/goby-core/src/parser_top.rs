@@ -292,6 +292,17 @@ mod tests {
     use crate::parser::parse_module;
     use crate::parser_test_support::read_example;
 
+    fn read_parser_fixture(name: &str) -> String {
+        let mut path = crate::path_util::workspace_root();
+        path.push("crates");
+        path.push("goby-core");
+        path.push("tests");
+        path.push("fixtures");
+        path.push("parser");
+        path.push(name);
+        std::fs::read_to_string(path).expect("parser fixture should exist")
+    }
+
     fn parse_single_declaration(source: &str) -> DeclarationParts {
         let module = parse_module(source).expect("source should parse");
         assert_eq!(module.declarations.len(), 1);
@@ -647,11 +658,10 @@ main = 1
 
     #[test]
     fn allows_mixed_tabs_and_spaces_in_same_block() {
-        let declaration = parse_single_declaration(
-            "main : Unit -> Unit can Print\nmain =\n  greeting = \"hello\"\n\tprint greeting\n",
-        );
-        assert!(declaration.body.contains("greeting = \"hello\""));
-        assert!(declaration.body.contains("print greeting"));
+        let source = read_parser_fixture("mixed_indent.gb");
+        let declaration = parse_single_declaration(&source);
+        assert!(declaration.body.contains("greeting = \"Hello\""));
+        assert!(declaration.body.contains("println greeting"));
     }
 
     #[test]

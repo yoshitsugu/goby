@@ -13,7 +13,7 @@ Repository-level summary for quick orientation.
 - `crates/goby-cli` (17 files): CLI entrypoints and command wiring
 - `crates/goby-lsp` (2 files): Language server
 - `stdlib/goby` (7 files): Stdlib surface modules
-- `examples` (56 files): Language behavior samples/regressions
+- `examples` (34 tracked files): User-facing language samples
 - `doc` (8 files): Spec, plans, state
 - `tooling` (28 files): Editor syntax/tool integrations
 

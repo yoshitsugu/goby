@@ -6,13 +6,20 @@ use goby_wasm::{
     execute_runtime_module_with_stdin_config_and_options_captured, runtime_io_execution_kind,
 };
 
-fn read_example(name: &str) -> String {
+fn read_program(name: &str) -> String {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("..");
-    path.push("..");
-    path.push("examples");
-    path.push(name);
-    std::fs::read_to_string(path).expect("example file should exist")
+    if name.contains('/') {
+        path.push("tests");
+        path.push("fixtures");
+        path.push(name);
+    } else {
+        path.push("..");
+        path.push("..");
+        path.push("examples");
+        path.push(name);
+        return std::fs::read_to_string(path).expect("example file should exist");
+    }
+    std::fs::read_to_string(path).expect("baseline program should exist")
 }
 
 fn parse_stats_total(stderr: &str) -> u64 {
@@ -55,13 +62,13 @@ fn baseline_entries() -> Vec<(&'static str, u64)> {
 #[test]
 fn alloc_baseline() {
     let mut observed = Vec::new();
-    for (example, _max_total) in baseline_entries() {
-        let source = read_example(example);
+    for (program, _max_total) in baseline_entries() {
+        let source = read_program(program);
         let module = parse_module(&source).expect("baseline example should parse");
         assert_eq!(
             runtime_io_execution_kind(&module).expect("execution kind should classify"),
             RuntimeIoExecutionKind::GeneralLowered,
-            "{example} must stay on the GeneralLowered path for alloc stats"
+            "{program} must stay on the GeneralLowered path for alloc stats"
         );
         let output = execute_runtime_module_with_stdin_config_and_options_captured(
             &module,
@@ -74,12 +81,12 @@ fn alloc_baseline() {
         .expect("baseline example should execute")
         .expect("baseline example should use runtime-owned Wasm");
         let total = parse_stats_total(&output.stderr);
-        observed.push((example, total));
+        observed.push((program, total));
 
         #[cfg(not(feature = "alloc_baseline_record"))]
         assert!(
             total <= _max_total,
-            "{example} allocated {total} bytes, above baseline budget {_max_total}; stderr:\n{}",
+            "{program} allocated {total} bytes, above baseline budget {_max_total}; stderr:\n{}",
             output.stderr
         );
     }

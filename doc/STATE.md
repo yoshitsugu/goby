@@ -6,7 +6,7 @@ Last updated: 2026-04-27 (Perceus M8 borrow-then-update reuse landed)
 
 **Perceus M0–M8 complete. §1 goal satisfied.**
 
-`examples/refcount_reuse_loop.gb` reports `total_bytes=108704
+`crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` reports `total_bytes=108704
 peak_bytes=108704 free_list_hits=0 reuse_hits=5000`, below the
 `< 200 KiB` budget. The bump-only allocator has been replaced by a
 refcount + free-list model; all active documentation updated to reflect
@@ -71,7 +71,7 @@ Next actions (ordered, per PLAN_PERCEUS §M6 "Step 7 execution plan"):
    GeneralLower, so `length(xs)` no longer inserts `Dup(xs)` before the
    reuse site.
 3. **Step 7-b: done.** Re-measured:
-   `cargo run -p goby-cli -- run --debug-alloc-stats --max-memory-mb 16 examples/refcount_reuse_loop.gb`
+   `cargo run -p goby-cli -- run --debug-alloc-stats --max-memory-mb 16 crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb`
    reports `total_bytes=149354768 peak_bytes=149354768 free_list_hits=0
    reuse_hits=5000`.
 4. **Step 7-c: done via measured source fix.** The measured blocker was
@@ -279,7 +279,7 @@ and the M5 section for the current step-by-step progress.
     decl through the mutually recursive caller.
   - `crates/goby-wasm/tests/alloc_baseline.rs` and
     `alloc_baseline.txt` add the M4.5 allocation regression gate for the
-    currently GeneralLowered examples `fold.gb`, `hof_fold_print.gb`, and
+    currently GeneralLowered programs `fold.gb`, `hof_fold_print.gb`, and
     `refcount_reuse_loop.gb`. `list_case.gb` is currently `NotRuntimeIo`, so
     it is excluded until it can emit debug alloc stats.
   - focused Perceus tests grew from 18 to 22.
@@ -357,7 +357,7 @@ landed the structural pieces for M1:
 - `crates/goby-wasm/src/gen_lower/lower.rs` — detects closed literals in a
   `Value` position and emits `WasmBackendInstr::PushStaticHeap` instead of
   per-call allocation.
-- `examples/refcount_reuse_loop.gb` — normative goal program per
+- `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` — normative goal program per
   `doc/PLAN_PERCEUS.md` §1.1 (length 4096, 5000 iterations).
 - `crates/goby-wasm/tests/wasm_exports_and_smoke.rs` — two integration tests:
   `refcount_reuse_loop_example_parses` (active) and
@@ -439,7 +439,7 @@ would attempt to evaluate `step initial 0 5000` at compile time).
 
 - `cargo test -p goby-wasm --lib reuse_hits` — pass
   (`drop_reuse_unique_increments_reuse_hits` + `cross_call_reuse_hidden_param_increments_reuse_hits`).
-- `cargo run -p goby-cli -- run --debug-alloc-stats examples/refcount_reuse_loop.gb`
+- `cargo run -p goby-cli -- run --debug-alloc-stats crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb`
   → `total_bytes=155954768 peak_bytes=155954768 free_list_hits=0 reuse_hits=0`
   (intentional: normative `step` body needs M6 `mut` lowering to reach reuse path).
 - alloc baseline 更新は Step 11 acceptance まで保留。

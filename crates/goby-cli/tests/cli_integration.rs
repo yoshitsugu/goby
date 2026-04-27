@@ -504,23 +504,30 @@ main =
 
 #[test]
 #[cfg(unix)]
-fn run_command_executes_helper_closure_capture_program() {
+fn run_command_executes_runtime_read_regression_fixtures() {
     let root = repo_root();
-    let input = root.join("examples/bugs/runtime_read_captured_lambda.gb");
+    let cases = [
+        ("runtime_read_captured_lambda.gb", "hello world\n"),
+        ("runtime_read_list_length_codegen.gb", "ok\n"),
+        ("runtime_read_map_graphemes_length_trap.gb", "ok\n"),
+        ("runtime_read_non_value_binop_operand.gb", "ok\n"),
+        ("runtime_read_tuple_member.gb", "1\n"),
+    ];
 
-    let output = run_goby_with_stdin(&root, &input, b"");
+    for (name, expected) in cases {
+        let input = root
+            .join("crates/goby-cli/tests/fixtures/runtime-read")
+            .join(name);
+        let output = run_goby_with_stdin(&root, &input, b"");
 
-    assert!(
-        output.status.success(),
-        "expected successful execution, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(
-        stdout.as_ref(),
-        "hello world\n",
-        "expected 'hello world' output"
-    );
+        assert!(
+            output.status.success(),
+            "expected successful execution for {name}, stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(stdout.as_ref(), expected, "unexpected stdout for {name}");
+    }
 }
 
 #[test]
@@ -611,7 +618,7 @@ fn run_command_executes_closure_mut_example() {
 #[cfg(unix)]
 fn run_command_executes_closure_mut_list_example() {
     let root = repo_root();
-    let input = root.join("examples/closure_mut_list.gb");
+    let input = root.join("crates/goby-cli/tests/fixtures/mutable-captures/closure_mut_list.gb");
 
     let output = run_goby_with_stdin(&root, &input, b"");
 
@@ -632,7 +639,8 @@ fn run_command_executes_closure_mut_list_example() {
 #[cfg(unix)]
 fn run_command_executes_closure_mut_nested_list_example() {
     let root = repo_root();
-    let input = root.join("examples/closure_mut_nested_list.gb");
+    let input =
+        root.join("crates/goby-cli/tests/fixtures/mutable-captures/closure_mut_nested_list.gb");
 
     let output = run_goby_with_stdin(&root, &input, b"");
 
@@ -2049,17 +2057,18 @@ fn fmt_rewrites_file_in_place() {
 fn run_command_hof_fold_print_acceptance_gate() {
     // End-to-end acceptance gate for the higher-order callback track.
     // Verifies:
-    //   - stdout matches examples/hof_fold_print.out exactly
+    //   - stdout matches the locked fixture output exactly
     //   - stdout does not contain diagnostic messages (those go to stderr)
     let root = repo_root();
-    let expected = fs::read_to_string(root.join("examples/hof_fold_print.out"))
+    let fixture_dir = root.join("crates/goby-wasm/tests/fixtures/acceptance");
+    let expected = fs::read_to_string(fixture_dir.join("hof_fold_print.out"))
         .expect("hof_fold_print.out should be readable");
-    let stdin_bytes = fs::read(root.join("examples/hof_fold_print.in"))
+    let stdin_bytes = fs::read(fixture_dir.join("hof_fold_print.in"))
         .expect("hof_fold_print.in should be readable");
 
     let mut child = command_for_goby_cli()
         .arg("run")
-        .arg("examples/hof_fold_print.gb")
+        .arg(fixture_dir.join("hof_fold_print.gb"))
         .current_dir(&root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -2086,7 +2095,7 @@ fn run_command_hof_fold_print_acceptance_gate() {
     assert_eq!(
         stdout.as_ref(),
         expected.as_str(),
-        "stdout must match examples/hof_fold_print.out exactly"
+        "stdout must match hof_fold_print.out exactly"
     );
     assert!(
         !stdout.contains("parsed and typechecked"),

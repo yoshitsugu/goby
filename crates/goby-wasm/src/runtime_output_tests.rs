@@ -19,13 +19,13 @@ fn read_example(name: &str) -> String {
     std::fs::read_to_string(path).expect("example file should exist")
 }
 
-fn read_example_io(name: &str) -> String {
+fn read_acceptance_fixture(name: &str) -> String {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("..");
-    path.push("..");
-    path.push("examples");
+    path.push("tests");
+    path.push("fixtures");
+    path.push("acceptance");
     path.push(name);
-    std::fs::read_to_string(path).expect("example fixture should exist")
+    std::fs::read_to_string(path).expect("acceptance fixture should exist")
 }
 
 fn resolve_with_seeded_stdin(module: &Module, stdin: &str) -> Option<String> {
@@ -48,16 +48,16 @@ fn locks_runtime_output_for_function_example() {
 #[test]
 fn executes_hof_fold_print_example_with_locked_stdin_and_stdout() {
     let _guard = ENV_MUTEX.lock().unwrap();
-    let source = read_example("hof_fold_print.gb");
-    let stdin = read_example_io("hof_fold_print.in");
-    let expected = read_example_io("hof_fold_print.out");
-    let module = parse_module(&source).expect("hof_fold_print example should parse");
+    let source = read_acceptance_fixture("hof_fold_print.gb");
+    let stdin = read_acceptance_fixture("hof_fold_print.in");
+    let expected = read_acceptance_fixture("hof_fold_print.out");
+    let module = parse_module(&source).expect("hof_fold_print fixture should parse");
     let output = execute_runtime_module_with_stdin(&module, Some(stdin))
-        .expect("hof_fold_print example should execute");
+        .expect("hof_fold_print fixture should execute");
     assert_eq!(
         output.as_deref(),
         Some(expected.as_str()),
-        "hof_fold_print example must keep the locked acceptance stdout"
+        "hof_fold_print fixture must keep the locked acceptance stdout"
     );
 }
 

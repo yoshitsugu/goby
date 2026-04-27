@@ -578,7 +578,7 @@ Output format: human-readable (default) and JSON lines (`--json`).
   the assertion is not confounded by the per-allocation chunk bump that
   M5 list `AllocReuse` still performs (§7.0).
 - M6 complete (2026-04-26): `mut ys = xs; ys[i] := v` AssignIndex reuse
-  lands end-to-end. `examples/refcount_reuse_loop.gb` now reports
+  lands end-to-end. `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` now reports
   `total_bytes=108704 reuse_hits=5000`, below the `< 200 KiB` budget.
   Steps 7-a / 7-a.5 (Owned-param seed + borrowed intrinsic model),
   7-b (re-measure), 7-c (build/fold specialized lowering), and 7-d
@@ -622,7 +622,7 @@ TODO (tooling follow-up): extend the syntax-highlight definitions under
 Deferred from this slice, which landed only the compiler pipeline; handle
 either alongside Perceus M1 proper or as a standalone tooling slice.
 
-The M1 goal program (`examples/refcount_reuse_loop.gb`, normative per
+The M1 goal program (`crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb`, normative per
 `doc/PLAN_PERCEUS.md` §1.1) uses `acc ^ x` inside `xor_fold`. `^` is
 currently unimplemented end-to-end (no token in the parser, no variant in
 `BinOpKind` / `IrBinOp`, no Wasm emission path). Because the normative

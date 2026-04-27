@@ -131,6 +131,18 @@ mod tests {
         }
     }
 
+    fn read_fixture(parts: &[&str]) -> String {
+        let mut path = crate::path_util::workspace_root();
+        path.push("crates");
+        path.push("goby-core");
+        path.push("tests");
+        path.push("fixtures");
+        for part in parts {
+            path.push(part);
+        }
+        std::fs::read_to_string(path).expect("typecheck fixture should exist")
+    }
+
     #[test]
     fn typechecks_examples() {
         let hello = read_example("hello.gb");
@@ -171,6 +183,13 @@ mod tests {
         typecheck_module(&iterator_unified_module).expect("iterator_unified.gb should typecheck");
         typecheck_module(&list_case_module).expect("list_case should typecheck");
         typecheck_module(&list_index_module).expect("list_index.gb should typecheck");
+    }
+
+    #[test]
+    fn typechecks_list_pattern_multichunk_regression_fixture() {
+        let source = read_fixture(&["list-regressions", "list_pattern_multichunk.gb"]);
+        let module = parse_module(&source).expect("list_pattern_multichunk.gb should parse");
+        typecheck_module(&module).expect("list_pattern_multichunk.gb should typecheck");
     }
 
     #[test]

@@ -71,7 +71,7 @@ flags.
 
 ### 1.1 Goal program (normative)
 
-Authored in M1 as `examples/refcount_reuse_loop.gb`. The following source is
+Authored in M1 as `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb`. The following source is
 normative — implementers must not "equivalent"-rewrite it, because the
 acceptance checksum depends on the exact allocation and assignment pattern.
 
@@ -459,7 +459,7 @@ module-level static slots. Introduce the in-tree goal program.
 - [x] Emit detected literals once at module init into a new static arena
       in `emit.rs`; rewrite the original site to a load from the slot.
       Static-arena slots carry the sentinel refcount from §3.1.
-- [x] Add `examples/refcount_reuse_loop.gb` with the normative source
+- [x] Add `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` with the normative source
       from §1.1.
 - [x] Add integration test in `crates/goby-wasm/tests/` that compiles
       the example and validates the Wasm output. The `goby run` case
@@ -997,7 +997,7 @@ The Perceus algorithm proper, with the closure and handler rules from
 - [~] Residency test `perceus_loop_residency` — **won't-fix (2026-04-27).**
       Originally scoped to drive `free_list_hits >= 999` from a real
       tail-recursive `build 1000` loop. By M6 acceptance the benchmark
-      `examples/refcount_reuse_loop.gb` reports
+      `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` reports
       `free_list_hits=0 reuse_hits=5000`: the budget is met through the
       reuse-token path (M5/M6 `RefCountDropReuse` + `ListSetInPlace`),
       not through `__goby_drop` → free-list cycling. The `free_list_hits`
@@ -1180,7 +1180,7 @@ borrow/consume evidence. Borrow evidence is intentionally conservative for
 `If` conditions, `ListGet`, `TupleProject`, interpolation, and scalar
 operators because source-level parameter types are often erased to `?` in IR.
 The `alloc_baseline` integration gate was added with the currently
-GeneralLowered examples `fold.gb`, `hof_fold_print.gb`, and
+GeneralLowered programs `fold.gb`, `hof_fold_print.gb`, and
 `refcount_reuse_loop.gb`. `list_case.gb` is currently `NotRuntimeIo`, so it is
 not part of the executable alloc-stats baseline until that example moves onto
 the GeneralLowered path.
@@ -1261,7 +1261,7 @@ cross-call ABI, inline `__goby_alloc_reuse` / `__goby_drop_reuse`,
 correctness tests). Two items remain and ride alongside M6:
 
 - [x] Un-ignore the M1 integration test for
-      `examples/refcount_reuse_loop.gb` and add an assertion that
+      `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` and add an assertion that
       `total_bytes < 200 * 1024`. **Done 2026-04-26** in
       `goby-wasm/tests/wasm_exports_and_smoke.rs::refcount_reuse_loop_example_compiles`.
 - [x] **Acceptance:** the M1 test passes with `total_bytes < 200 KiB`.
@@ -1416,12 +1416,13 @@ through the copy-on-write `ListSet` intrinsic for every call.
 
 #### Step 7 — Example output parity and acceptance
 
-- [x] Confirm `examples/mut_list.gb`, `closure_mut.gb`,
-      `closure_mut_list.gb`, `closure_mut_nested_list.gb` produce
+- [x] Confirm `examples/mut_list.gb`, `examples/closure_mut.gb`,
+      `crates/goby-cli/tests/fixtures/mutable-captures/closure_mut_list.gb`,
+      `crates/goby-cli/tests/fixtures/mutable-captures/closure_mut_nested_list.gb` produce
       byte-identical output (Step 4 lands without touching
       `runtime_output_tests.rs` snapshots; the workspace test suite is
       green at commit 91360ca).
-- [x] Measure `examples/refcount_reuse_loop.gb` with
+- [x] Measure `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` with
       `cargo run -p goby-cli -- run --debug-alloc-stats`. Required:
   - `total_bytes < 200 * 1024`,
   - `peak_bytes` of the same order,
@@ -1468,7 +1469,7 @@ chunk-level reuse) are sequenced as follows. Step 5 (`stdlib/goby/list.gb`
      deferred until a concrete second case demands it; YAGNI keeps the
      proof surface narrow.
    - *Verification:* expect `reuse_hits > 0` in
-     `goby run --debug-alloc-stats examples/refcount_reuse_loop.gb`.
+     `goby run --debug-alloc-stats crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb`.
      `total_bytes` is **not** expected to clear 200 KiB yet.
    - **Status (2026-04-26): landed.** `insert_reuse` now takes a
      per-decl `Owned`-param `HashSet<String>` and pre-seeds the
@@ -1516,7 +1517,7 @@ chunk-level reuse) are sequenced as follows. Step 5 (`stdlib/goby/list.gb`
      pure cleanup task instead of an acceptance blocker.
    - **Status (2026-04-26): measured.**
      `cargo run -p goby-cli -- run --debug-alloc-stats --max-memory-mb 16
-     examples/refcount_reuse_loop.gb` reports
+     crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` reports
      `total_bytes=149354768 peak_bytes=149354768 free_list_hits=0
      reuse_hits=5000`. Header reuse is firing; chunk-level reuse remains
      required for the `< 200 KiB` budget.
@@ -1574,7 +1575,7 @@ chunk-level reuse) are sequenced as follows. Step 5 (`stdlib/goby/list.gb`
 
 - `cargo test -p goby-wasm` green.
 - Four `mut` / `closure_mut*` example outputs byte-identical.
-- `examples/refcount_reuse_loop.gb` `total_bytes < 200 KiB` and
+- `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` `total_bytes < 200 KiB` and
   checksum matches §1.1.
 - `tests/alloc_baseline.txt` deltas (if any) explained per entry in
   the commit message.
@@ -1610,7 +1611,7 @@ chunk-level reuse) are sequenced as follows. Step 5 (`stdlib/goby/list.gb`
 
 ### M8 — Reuse and drop on real-world driver shapes
 
-M0–M7 declared "Perceus done" against `examples/refcount_reuse_loop.gb`,
+M0–M7 declared "Perceus done" against `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb`,
 which is a single-call driver: each iteration immediately consumes the
 parameter via `mut ys = xs; ys[i] := v; step ys ...`. Real programs
 write a slightly less linear shape — the driver borrows the same list
@@ -1748,7 +1749,7 @@ The fix **must not** weaken these invariants:
       under the default 1024 MiB ceiling. Captured as a smoke test
       under `examples/` if license allows; otherwise referenced by
       shape only.
-- [x] `examples/refcount_reuse_loop.gb` budget unchanged
+- [x] `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` budget unchanged
       (`total_bytes < 200 * 1024`, `reuse_hits == 5000`).
 - [x] `cargo test --workspace` green; `alloc_baseline.txt` deltas
       explained per entry.

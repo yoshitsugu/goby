@@ -864,13 +864,13 @@ fn emits_valid_wasm_for_print_literal() {
 
 #[test]
 fn refcount_reuse_loop_example_parses() {
-    let source = include_str!("../../../examples/refcount_reuse_loop.gb");
+    let source = include_str!("fixtures/alloc-baseline/refcount_reuse_loop.gb");
     parse_module(source).expect("refcount_reuse_loop.gb should parse");
 }
 
 #[test]
 fn refcount_reuse_loop_example_compiles() {
-    let source = include_str!("../../../examples/refcount_reuse_loop.gb");
+    let source = include_str!("fixtures/alloc-baseline/refcount_reuse_loop.gb");
     let module = parse_module(source).expect("refcount_reuse_loop.gb should parse");
     let wasm = compile_module(&module).expect("refcount_reuse_loop.gb should compile");
     assert_valid_wasm_module(&wasm);

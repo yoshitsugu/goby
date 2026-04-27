@@ -1818,7 +1818,7 @@ main =
 
 #[test]
 fn refcount_reuse_loop_owned_param_seed_reuses_assign_index() {
-    let source = include_str!("../../../examples/refcount_reuse_loop.gb");
+    let source = include_str!("../tests/fixtures/alloc-baseline/refcount_reuse_loop.gb");
     let module = parse_module(source).expect("source should parse");
     let (instrs, aux) = crate::gen_lower::lower_module_to_instrs(&module)
         .expect("lowering should succeed")

@@ -371,7 +371,7 @@ syntax/semantics.
 - **Representative List examples (published M8):**
   - ordinary indexed access: `examples/list_index.gb`
   - functional immutable point update: `examples/list_set.gb`
-  - multi-chunk list-pattern matching: `examples/list_pattern_multichunk.gb`
+  - list-pattern matching: `examples/list_case.gb`
   - iterator/effect traversal style: `examples/list_iterator_effect.gb`
   - update-heavy workload shape using the recommended public update surface:
     `examples/list_set.gb`
