@@ -1801,247 +1801,634 @@ The non-firing surface area, in order of likely impact:
 
 - **Tail-recursive self-call drops.** `check`, `count_valid_roll_acc`,
   `reverse_positions_acc`, `reverse_strings_acc`, and `flatten_acc`
-  all pass an old `rolls` / `acc` / `xs` argument to a recursive call
-  to themselves while another argument carries a freshly-allocated
-  successor. The old binding's last-use `Drop` must fire *before*
-  the tail-call so refcount can fall to zero ahead of the new
-  allocation. `free_list_hits=0` says these drops are not present on
-  the tail-recursion edge; `peak_bytes == total_bytes` says the
-  callee unwind is not returning chunks either.
+  pass an old `rolls` / `acc` / `xs` argument to a recursive call to
+  themselves while another argument carries a freshly-allocated
+  successor. The old binding's last-use `Drop` must fire *before* the
+  tail-call so refcount can fall to zero ahead of the new allocation.
+  `free_list_hits=0` says these drops are not present on the
+  tail-recursion edge.
 - **HOF-laundered last-use.** `flatten_acc` writes its successor with
   `fold row acc (fn a c -> [c, ..a])`; the closure's `a` is the only
-  consumer of `acc`, but the ownership classifier likely treats `fold`
-  as borrowing `acc` because it cannot inspect the closure body at
-  the call site. Same pattern in `check_around_rolls` for the
-  per-call 8-element `around_diffs` literal that `fold` walks.
+  consumer of `acc`, but the ownership classifier treats `fold` as
+  borrowing `acc` because `callee_param_classes` only knows about
+  module-level decls, not the closure-induced ownership of HOF
+  intrinsics. Same pattern in `check_around_rolls` for the per-call
+  8-element `around_diffs` literal that `fold` walks.
 - **Tuple-projected ownership.** `count_valid_roll` returns
   `(List Int, Int)`. The `List Int` half is consumed by
-  `update_rolls`, but it reaches the consumer through `counted.0`
-  / `counted.1`. If projection out of a tuple does not transfer
-  `Owned` to the projected component, `removed_indices` is classified
-  `Borrowed` and never dropped after `update_rolls` returns.
+  `update_rolls`, but it reaches the consumer through `counted.0`.
+  In `crates/goby-core/src/perceus.rs:571` (`classify_return_value`
+  on `ValueExpr::TupleProject`) the tuple is classified
+  *Borrowed*, so the projected list never inherits `Owned`.
 - **`mut ys = xs` reuse vs. an upstream borrow in the same block.**
   In `check` the same `rolls` is borrowed by `count_valid_roll rolls
-  ...` immediately before being consumed by `update_rolls rolls
-  removed_indices`. M8's widening was sized on the minimal
-  `count_marks; update_xs` shape; it is plausibly sound there but
-  not on this nested driver. The BUGS.md observation that
-  `reuse_hits == cells_blanked` rather than scaling per-round is
-  consistent with `update_rolls` itself reusing per-cell *within
-  one call* but the parameter chunk *between* rounds not being
-  recycled (because its drop is missing — see point 1).
+  ...` immediately before being consumed by
+  `update_rolls rolls removed_indices`. Possibly subsumed by 3a + 3c;
+  retain only if Step 1's IR dump still shows reuse missing after 3a
+  / 3c land.
 
-M9 closes all four. The plan order matters: identify which drops are
-actually emitted before guessing at fixes.
+#### Why this section reads like a recipe
 
-#### Step 1 — Investigation: IR dumps before any code change
+M9 must be implementable by a Sonnet-class agent following the
+`codex-reviewed-stepwise-dev-flow` Skill without further architectural
+input. Each Step below is written in the form
+"file → function → exact change → how to verify". Where a fix has
+genuinely-undecided design questions, the Step calls them out and
+sends them to Codex via Step 2 / Step 6 — it does not paper over them.
 
-- [ ] Add an integration-style smoke test that compiles the `doc/BUGS.md`
-      M9 repro with `--debug-alloc-stats` on a small (10×10) input and
-      asserts both `free_list_hits > 0` and
-      `peak_bytes < total_bytes / 2`. The test starts red. Place it
-      next to `perceus_real_world_driver_borrow_then_update_reuses_and_frees`.
-- [ ] Dump the IR after `perceus::run_perceus_passes` for the five
-      tail-recursive functions (`check`, `count_valid_roll_acc`,
-      `reverse_positions_acc`, `reverse_strings_acc`, `flatten_acc`).
-      Record, per function: which parameters are `Owned` vs.
-      `Borrowed`, where `Drop` instructions are inserted, and whether
-      a `Drop` precedes each tail-recursive call.
-- [ ] Dump the IR for `flatten_acc` and `check_around_rolls` to see
-      whether `fold`'s list argument is classified `Owned` at the call
-      site. If `Borrowed`, capture the rule in
-      `crates/goby-core/src/perceus.rs::classify_call_args` (or
-      `intrinsic_arg_is_borrowed` / `callee_param_classes`) responsible.
-- [ ] Dump the IR for `check` around `counted = count_valid_roll ...`
-      to see how the tuple's `.0` projection participates in ownership
-      flow. Record whether `removed_indices` carries `Owned` at the
-      `update_rolls` call site.
-- [ ] Cross-check `reuse_hits` scaling on the BUGS.md repro at two
-      input sizes (e.g. 10×10 and 30×30). Confirm whether `reuse_hits`
-      tracks total cells blanked (current observation) or rounds
-      (M8's intent). If the former, M8's `mut ys = xs` widening is
-      *not* firing per round, only per per-iteration `each` step,
-      which is a different miss than this milestone's headline.
-- [ ] Categorise each missing drop / missing reuse against the four
-      hypotheses in the section preamble. The result of Step 1 is a
-      per-hypothesis verdict, not a fix.
+#### Repro program location
 
-Exit criterion: a written narrative tying each `peak_bytes` /
-`free_list_hits` / `reuse_hits` deviation to a specific IR-level
-cause. Do not start Step 3 without it.
+The full M9 repro is committed in `doc/BUGS.md` ("Open bugs", 2026-04-28
+entry). For Steps that need the source as a string literal, copy from
+that block verbatim — it is self-contained. For runtime testing, save it
+to `crates/goby-wasm/tests/fixtures/alloc-baseline/m9_real_world_driver.gb`
+in Step 4.
+
+#### Step 0 — Sanity baseline
+
+Run before touching any code:
+
+```sh
+cargo test -p goby-wasm --release \
+  refcount_reuse_loop_owned_param_seed_reuses_assign_index \
+  perceus_real_world_driver_borrow_then_update_reuses_and_frees
+cargo test --workspace --release alloc_baseline
+```
+
+All three must pass on `main`. Capture the exact `total_bytes` /
+`reuse_hits` / `free_list_hits` numbers each test prints; M9 will
+compare against these to detect silent regressions.
+
+#### Step 1 — Investigation: red test + IR dumps
+
+**1.1 — Add the failing acceptance test (will start red).**
+
+File: `crates/goby-wasm/src/compile_tests.rs`. Place the new test
+immediately after `perceus_real_world_driver_borrow_then_update_reuses_and_frees`
+(currently around line 1864). Use that test as a structural template:
+the new test is the same shape but loads the BUGS.md repro source.
+
+```rust
+#[test]
+fn perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round() {
+    // Source: see doc/BUGS.md "Open bugs" 2026-04-28 entry. Inline the
+    // entire repro as a raw string literal, exactly as in BUGS.md.
+    let source = r#"
+        ... // copy from BUGS.md
+    "#;
+    // Stdin: a 10x10 grid of '@'/'.'. Generate deterministically rather
+    // than checking in another fixture file:
+    let stdin = (0..10)
+        .map(|y| (0..10).map(|x| if (x + y) % 3 == 0 { '@' } else { '.' }).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let module = parse_module(source).expect("M9 repro should parse");
+    let (_instrs, _aux) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should succeed")
+        .expect("sample should use general lowering");
+    let output = execute_runtime_module_with_stdin_config_and_options_captured(
+        &module,
+        Some(stdin),
+        None,
+        CompileOptions { debug_alloc_stats: true },
+    )
+    .expect("M9 repro should execute")
+    .expect("M9 repro should run on runtime-owned Wasm");
+
+    let total_bytes  = parse_alloc_stats_field(&output.stderr, "total_bytes");
+    let peak_bytes   = parse_alloc_stats_field(&output.stderr, "peak_bytes");
+    let free_list_hits = parse_alloc_stats_field(&output.stderr, "free_list_hits");
+    let reuse_hits     = parse_alloc_stats_field(&output.stderr, "reuse_hits");
+
+    assert!(free_list_hits > 0,
+        "M9: chunks must return to the free-list once per round; got 0. stderr:\n{}", output.stderr);
+    assert!(peak_bytes * 2 < total_bytes,
+        "M9: peak must be < total/2 (working-set bounded). peak={peak_bytes} total={total_bytes}");
+    // reuse must scale with rounds (>= 1 reuse per round); for a 10x10 input,
+    // expect at least 5 rounds, so reuse_hits >= 5 * (cells removed per round).
+    // Tighten this once Step 1 measurements land.
+    assert!(reuse_hits >= 50,
+        "M9: reuse must scale per-round, not per-cell; got reuse_hits={reuse_hits}");
+}
+```
+
+Run only this test from now on for the inner loop:
+
+```sh
+cargo test -p goby-wasm --release \
+  perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round \
+  -- --nocapture
+```
+
+It will fail. Save the failure's `stderr` line to
+`tmp/m9_step1_baseline.txt`.
+
+**1.2 — Dump the IR after Perceus passes for the five tail-recursive
+helpers and for the HOF call sites.**
+
+Add a feature-gated debug print inside
+`crates/goby-core/src/perceus.rs::run_perceus_passes` (line 28),
+guarded on `std::env::var("GOBY_DUMP_PERCEUS_IR").is_ok()`, that
+walks `module.decls` and writes `format!("{decl:#?}")` to stderr. Run:
+
+```sh
+GOBY_DUMP_PERCEUS_IR=1 cargo test -p goby-wasm --release \
+  perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round \
+  -- --nocapture 2> tmp/m9_step1_ir.txt
+```
+
+For each of `check`, `count_valid_roll_acc`, `reverse_positions_acc`,
+`reverse_strings_acc`, `flatten_acc`, record in `tmp/m9_step1_findings.md`:
+
+- Which parameters appear in the decl's `params` and what
+  `OwnershipClass` they hold (look in the
+  `drop_insert_module → drop_ownership` map; you may need to
+  similarly print `drop_ownership[decl.name]`).
+- Whether a `CompExpr::Drop { value: Var(p) }` precedes the recursive
+  `Call { callee: GlobalRef { name: <self> }, .. }`. If absent, that
+  decl is a candidate for fix 3a.
+- For `flatten_acc`'s `fold row acc (fn a c -> [c, ..a])`: at the
+  `Call` to `fold`, what does the second argument (`acc`) classify
+  as? Read by adding `dbg!(callee, idx, &class)` in
+  `classify_call_args` (line 472) gated on the same env var.
+- For `check`'s `counted.0` projection: confirm
+  `removed_indices` is `Borrowed` after Perceus, despite being
+  passed into `update_rolls` (which the IR shows as taking its
+  first formal `removed_indices` as `Owned`).
+
+If 1.2's findings show 3d's preconditions hold (that is, M8's
+widening is *not* firing for `update_rolls`'s `xs` parameter on this
+driver), record that explicitly. Otherwise mark 3d "won't fix in M9".
 
 #### Step 2 — Codex plan review
 
-- [ ] Send Step 1's IR dumps and the per-hypothesis verdicts to
-      Codex. Questions:
-  - For tail-recursive self-call drops: does emitting `Drop(p)`
-    immediately before `TailCall self ...` for any parameter `p`
-    that is statically last-used at that call site preserve
-    refcount's "drop happens *after* the use" invariant? In
-    particular, does it interact safely with the existing
-    tail-call optimisation in `gen_lower::lower`?
-  - For HOF-laundered last-use: is it sound to mark `fold` /
-    `each` / `list.map` arguments as `Owned`-passable when the
-    closure's body provably consumes its corresponding parameter?
-    What happens with closure values that escape (`fold` returning
-    a closure that captures `acc`)?
-  - For tuple-projected ownership: is `Project(tup, i)` already a
-    transfer of `Owned` for the projected slot? If yes, why does
-    the BUGS.md repro see `removed_indices` classified `Borrowed`?
-    If no, what is the safe rule (transfer once; subsequent
-    projections of the same field on the same binding are
-    `Borrowed`)?
-  - Cross-check that the four fixes can land independently — i.e.
-    none silently masks another's regression.
+Use Skill `codex-request`. Send:
 
-#### Step 3 — Fix the gaps in dependency order
+- The Step 1 baseline numbers (`tmp/m9_step1_baseline.txt`).
+- The IR findings narrative (`tmp/m9_step1_findings.md`).
+- This Step 3 plan verbatim.
 
-The exact wording is deferred to Step 1's verdicts, but the design
-space is bounded:
+Required questions for Codex (do not paraphrase — these target known
+risks):
 
-- **3a — Tail-recursive self-call drop.** In
-  `crates/goby-core/src/perceus.rs::drop_insert_comp` (or its
-  tail-call branch), emit `Drop(name)` for every parameter
-  `name` that is (i) `Owned` and (ii) not passed forward in the
-  tail-recursive call's argument list. This closes the per-round
-  leak in `check` (the old `rolls` is shadowed by `new_rolls`) and
-  the per-step leak in the four `*_acc` helpers (the old `acc`
-  tail is shadowed by `[x, ..acc]`'s new cons cell, but the old
-  `xs` head is consumed only when last-use drop fires).
-  Acceptance: `free_list_hits` becomes positive on the BUGS.md
-  repro at the 10×10 scale, and `peak_bytes` no longer scales with
-  recursion depth.
+1. For **3a**: is it sound to drop an `Owned` parameter `p`
+   immediately *before* a tail-recursive `Call self ...` when `p` is
+   not present in the call's `args` and is not live in any other
+   `args[i]`? Specifically: in
+   `gen_lower::lower::CompExpr::Call`, the tail-call optimisation
+   reads parameter slots before writing them — does inserting
+   `RefCountDrop(p)` before the call's argument evaluation interact
+   safely with that, given that `p`'s `local_get` may still be
+   needed transitively by an arg expression?
+2. For **3b**: when a HOF intrinsic (`fold` / `each` / `list.map`)
+   takes a closure `(fn a c -> body)`, treat the outer list/seed
+   argument as `Owned` iff `body` consumes its first formal `a` and
+   `a` does not escape `body`. Does this break any property tested
+   by `reuse_not_across_perform_effect` /
+   `reuse_not_across_with_handler` (i.e. a closure that performs an
+   effect)?
+3. For **3c**: rewriting `TupleProject` from `classify_borrowed_value`
+   to `classify_consumed_value` (line 571 / 638 / 694) sounds blunt.
+   What is the right rule when *both* projections of the same tuple
+   are consumed in the same block (e.g. `counted.0` and `counted.1`
+   both flow into owned positions)? Is it correct to mark each
+   projection's leaf consumed and decrement the tuple's refcount
+   only at *its* last-use?
+4. For **3d**: is M8's widening (per-decl `Owned`-param `HashSet`)
+   already block-scoped, or is it whole-decl? If whole-decl, would
+   restricting it to the basic block containing the consume site
+   break any existing `alloc-baseline` fixture?
 
-- **3b — HOF-laundered last-use.** Extend
-  `classify_call_args` to consult the callee's per-formal
-  ownership class for higher-order list intrinsics (`fold`, `each`,
-  `list.map`) when the closure argument's body is statically
-  available. If the closure consumes its corresponding parameter
-  (e.g. `fold xs acc (fn a c -> [c, ..a])` consumes `a`), the
-  outer `acc` may be passed as `Owned`. The mechanism already
-  exists in `callee_param_classes`; M9 widens it across the HOF
-  boundary. Soundness gate: a closure that escapes (returns or
-  stores `a`) keeps the parameter `Borrowed`.
-  Acceptance: `peak_bytes` on the BUGS.md repro stays bounded
-  even as the per-call `around_diffs` literal is allocated 10⁴+
-  times.
+Block on Codex's response before proceeding to Step 3.
 
-- **3c — Tuple projection transfers `Owned`.** Audit
-  `classify_consumed_value` / `classify_borrowed_value` for the
-  projection case. If a tuple `t` is `Owned` and a single
-  projection `t.i` is consumed at last-use, the projected
-  component inherits `Owned` and `t`'s remaining components are
-  dropped at `t`'s last-use point.
-  Acceptance: `removed_indices` in the BUGS.md repro reaches
-  `update_rolls` as `Owned`, observed in the IR dump and reflected
-  in `reuse_hits` scaling per round.
+#### Step 3 — Implement the fixes
 
-- **3d — `mut ys = xs` upstream-borrow widening.** Only if Step 1
-  shows M8's widening is incomplete on this driver shape. The
-  conservative fix is to run M8's classification per *basic block*
-  (not per *function*), so a borrow earlier in the same block
-  followed by a consume at last-use still seeds the Owned-parameter
-  reuse path. Risk: a borrow that escapes the block (e.g. captured
-  by a closure declared earlier) must keep the parameter
-  `Borrowed`. Test: a closure declared before `mut ys = xs` that
-  later reads the original `xs` must continue to observe the
-  pre-mutation values, i.e. `lower_assign_index_reuse` must still
-  refuse `ListSetInPlace` in that case.
+Each fix is its own commit. Run the Step 1.1 test and the Step 0
+suite after each commit. Land in the order 3c → 3a → 3b → (3d if
+needed).
 
-In every variant the Step 1 smoke test is the gate. Each fix lands
-as its own commit with the alloc-baseline delta explained.
+**3c — Tuple projection transfers `Owned`** *(land first; smallest)*
 
-These invariants must remain unbroken (same as M8 + new):
+File: `crates/goby-core/src/perceus.rs`.
 
-- `LetMut` does not call `bind_alias` (`perceus.rs:306`).
-- `lower_assign_index_reuse` only emits `ListSetInPlace` when the
-  static uniqueness proof has held since allocation.
-- The `alloc_baseline.txt` regression gate stays green for every
-  existing fixture, including `refcount_reuse_loop.gb` (M6 goal
-  program) and the M8 borrow-then-update fixture
-  (`reuse_hits=200`, `total_bytes=37016`).
-- Effect handler boundaries
-  (`reuse_not_across_perform_effect` / `reuse_not_across_with_handler`)
-  stay green.
-- No fix may rely on inter-procedural analysis beyond the existing
-  `IrDecl`-level metadata (M9 still operates within the §3.7.1
-  tail-call rule; cross-decl reuse remains future work).
+Three call sites of `ValueExpr::TupleProject` (lines 571, 638, 694):
+
+```rust
+ValueExpr::TupleProject { tuple, .. } => {
+    classify_borrowed_value(tuple, classes, params, aliases)
+}
+```
+
+In `classify_return_value` (line 532) and `classify_consumed_value`
+(line 654), change `classify_borrowed_value` → `classify_consumed_value`.
+Leave the call site in `classify_borrowed_value` (line 638) as
+`classify_borrowed_value` — projection appearing inside a borrowed
+position stays borrowed (e.g. `counted.0[i]`'s tuple read is just a
+borrow of the tuple).
+
+This makes a tuple flowing into `Owned` position transfer ownership
+to its components. A tuple consumed twice (`counted.0` and
+`counted.1` both in `Owned` position) is handled by the existing
+last-use machinery: each leaf `Var` use demotes its owner via
+`demote_owner` (line 661), and the existing
+`insert_non_last_call_arg_dups` / `count_var_uses` will insert a
+`Dup` at the first projection so the second projection's
+`demote_owner` still triggers.
+
+Verification:
+
+```sh
+cargo test -p goby-core perceus
+cargo test -p goby-wasm --release \
+  refcount_reuse_loop_owned_param_seed_reuses_assign_index \
+  perceus_real_world_driver_borrow_then_update_reuses_and_frees \
+  perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round
+cargo test --workspace --release alloc_baseline
+```
+
+The M9 test may still fail on `free_list_hits` and `peak_bytes` (3a's
+job), but `reuse_hits` should already grow to "rounds × cells per
+round". Capture the new number in `tmp/m9_step3c_after.txt` for the
+commit message.
+
+If `cargo test -p goby-core perceus` regresses, inspect the failing
+test under `crates/goby-core/src/perceus.rs` (search for `#[test]`
+near line 2128). The most likely new failure is a tuple-related test
+asserting `Borrowed` in a position that should now be `Owned` — fix
+the test's expectation if the behaviour change is intentional, do
+not roll back the fix.
+
+**3a — Drop `Owned` parameters not forwarded by a self-tail-call**
+
+File: `crates/goby-core/src/perceus.rs`.
+
+The current `drop_insert_comp` `Call` arm (line 987) emits
+`insert_non_last_call_arg_dups` and otherwise leaves the call alone.
+M9 adds a *parameter drop* prefix when the call is a self-recursive
+tail-call.
+
+Step-by-step:
+
+(a) Add a helper that decides whether a `Call` is the tail-call of
+the current decl. Add to `drop_insert_module` (line 760) a new
+`HashMap<String, &str>` `current_decl_name` lookup, or — simpler —
+thread `decl.name` through `drop_insert_comp` as a new `&str`
+parameter. The latter is more local and consistent with the
+existing parameter-passing style.
+
+(b) Define `tail_call_self_dropped_params`:
+
+```rust
+/// For a tail-call `<self_name>(args)`, return the `Owned`
+/// parameters of the current decl that are *not* mentioned in any
+/// `args[i]` and are still live (i.e. `ownership[p] == Owned`).
+fn tail_call_self_dropped_params<'a>(
+    self_name: &str,
+    callee: &ValueExpr,
+    args: &[ValueExpr],
+    ownership: &'a HashMap<String, OwnershipClass>,
+    self_params: &'a [String],
+) -> Vec<&'a str> {
+    let calling_self = matches!(
+        callee,
+        ValueExpr::GlobalRef { name, .. } | ValueExpr::Var(name) if name == self_name,
+    );
+    if !calling_self { return Vec::new(); }
+
+    let mut mentioned: HashSet<&str> = HashSet::new();
+    for arg in args {
+        collect_var_mentions(arg, &mut mentioned);
+    }
+    self_params
+        .iter()
+        .filter(|p| ownership.get(p.as_str()) == Some(&OwnershipClass::Owned))
+        .filter(|p| !mentioned.contains(p.as_str()))
+        .map(|p| p.as_str())
+        .collect()
+}
+```
+
+`collect_var_mentions` is a strict-subset of the existing
+`collect_owned_var_mentions` (line 1430-ish) that ignores
+`OwnershipClass`; either reuse that helper with a stub
+`HashMap` of `Owned`-only entries or copy it with the
+`ownership` filter removed.
+
+(c) In `drop_insert_comp`'s `Call` arm (line 987), wrap the call:
+
+```rust
+CompExpr::Call { callee, args, reuse_token } => {
+    let call = CompExpr::Call { /* same as today */ };
+    let with_dups = insert_non_last_call_arg_dups(
+        call, ownership, module_ownership, param_order,
+    );
+
+    // M9: drop self-tail-call parameters that are not forwarded.
+    let drops = tail_call_self_dropped_params(
+        self_name, callee, args, ownership, self_params,
+    );
+    let mut prefix: Vec<CompExpr> = drops
+        .into_iter()
+        .map(|p| CompExpr::Drop { value: Box::new(ValueExpr::Var(p.to_string())) })
+        .collect();
+    if prefix.is_empty() {
+        return (with_dups, next_tmp);
+    }
+    (
+        CompExpr::Seq {
+            stmts: prefix,
+            tail: Box::new(with_dups),
+        },
+        next_tmp,
+    )
+}
+```
+
+(d) Soundness gate: a `Drop(p)` emitted here must not run before
+`p` is read by `args[i]`. The mention check in (b) ensures `p`
+isn't textually in any `args[i]`. But aliasing through `Let`
+bindings can still keep `p` live indirectly — that case is
+caught by `comp_consumes_name` already used elsewhere.
+**Defensive rule:** before emitting `Drop(p)`, also check
+`!comp_consumes_name(&CompExpr::Call{..}, p, module_ownership, param_order)`
+on the original (pre-`with_dups`) call. If the check returns
+`true`, skip the drop for that `p` — let downstream last-use
+handle it. Document this in a comment.
+
+Verification: same set as 3c. The M9 test's `free_list_hits` should
+flip from 0 to a number that scales with rounds. If `peak_bytes`
+still does not pass `peak * 2 < total`, run with
+`GOBY_DUMP_PERCEUS_IR=1` again and confirm 3a is firing on all five
+helpers. If a helper is not getting drops, it's because its `Owned`
+classification is missing — go back to Step 1's findings.
+
+**3b — HOF closure-body-aware ownership**
+
+File: `crates/goby-core/src/perceus.rs`.
+
+Goal: when classifying `Call { callee: list.fold, args }`, look at
+`args[2]` (the closure). If its body consumes its parameter and the
+parameter does not escape, treat `args[1]` (the seed/list) as if it
+flows into an `Owned` formal.
+
+Step-by-step:
+
+(a) Add an HOF table next to `intrinsic_arg_is_borrowed` (line 510):
+
+```rust
+/// HOF intrinsics whose closure argument's body governs the
+/// ownership of one of the data arguments.
+///
+/// Format: callee_name -> (data_arg_idx, closure_arg_idx,
+/// closure_param_idx_for_data).
+fn list_hof_closure_signature(name: &str)
+    -> Option<(usize /* data_arg_idx */, usize /* closure_arg_idx */, usize /* closure_param_idx */)> {
+    match name {
+        "__goby_list_fold"  => Some((1, 2, 0)), // fold xs acc f; closure (a, c) — `a` carries seed
+        "__goby_list_each"  => Some((0, 1, 0)), // each xs f; no seed, but xs flows through `a`
+        "__goby_list_map"   => Some((0, 1, 0)),
+        _ => None,
+    }
+}
+```
+
+The exact mangled names (`__goby_list_fold` etc.) — confirm against
+`crates/goby-stdlib/...` or whatever calling convention emits them.
+Grep `fold\|__goby_list_fold` in the codebase to find the
+authoritative names. If the stdlib uses unmangled `fold`, use that.
+
+(b) Add `lambda_consumes_first_param`:
+
+```rust
+/// Returns `true` iff `body` is statically known to consume `param`
+/// at last use and `param` does not appear in any escaping
+/// position (return value, captured by another closure, stored in
+/// a list/tuple/record literal that escapes).
+fn lambda_consumes_first_param(body: &CompExpr, param: &str) -> bool {
+    // Reuse the existing classifier: build a mini-`classes` map
+    // with `param -> Owned`, run `classify_comp` over `body`, and
+    // check whether `param` was demoted (i.e. ended in `classes`
+    // as `Owned` is preserved by `demote_owner` only when
+    // *consumed*; if `body` only borrows `param`, the entry stays
+    // `Owned` *but* `classify_borrowed_value` never demotes it).
+    //
+    // Simpler: walk `body` and answer
+    //   "is there a syntactic position for `param` that is
+    //    `consumed` (per `classify_consumed_value`'s rules)
+    //    and not also live afterwards?".
+    //
+    // For M9, ship the syntactic version: return `true` iff
+    // - `body` mentions `param` exactly once, and
+    // - that mention is in a `ListLit` spread, `TupleLit`,
+    //   `RecordLit`, or as a `Call` argument to a callee whose
+    //   formal is `Owned`.
+    todo!("implement during Step 3b — see comment above for exact criteria")
+}
+```
+
+The "exactly one mention" rule is conservative but correct: more
+than one mention requires a `Dup` and is not a candidate for
+"owned-passable through the HOF". Sonnet should not generalise this.
+
+(c) Extend `classify_call_args` (line 472):
+
+```rust
+fn classify_call_args(
+    callee: &ValueExpr,
+    args: &[ValueExpr],
+    /* ... */
+) {
+    let callee_params = callee_param_classes(callee, module_params);
+
+    // M9 3b: HOF closure-body-aware override.
+    let hof_owned_idx = match callee {
+        ValueExpr::GlobalRef { name, .. } | ValueExpr::Var(name) => {
+            list_hof_closure_signature(name).and_then(|(data_idx, clos_idx, param_idx)| {
+                let ValueExpr::Lambda { param, body } = args.get(clos_idx)? else {
+                    return None;
+                };
+                if param_idx != 0 {
+                    // Multi-param closures use IR's nested Lambda; walk
+                    // `param_idx` levels into `body`. M9 only handles
+                    // `param_idx == 0` because all stdlib HOFs hand the
+                    // data through the first closure arg.
+                    return None;
+                }
+                lambda_consumes_first_param(body, param).then_some(data_idx)
+            })
+        }
+        _ => None,
+    };
+
+    for (idx, arg) in args.iter().enumerate() {
+        let owned_by_hof = Some(idx) == hof_owned_idx;
+        if !owned_by_hof
+            && (intrinsic_arg_is_borrowed(callee, idx)
+                || callee_params
+                    .and_then(|p| p.get(idx))
+                    .is_some_and(|c| *c == OwnershipClass::Borrowed))
+        {
+            classify_borrowed_value(arg, classes, params, aliases);
+        } else {
+            classify_consumed_value(arg, classes, params, aliases);
+        }
+    }
+}
+```
+
+(d) Soundness gate: in `lambda_consumes_first_param`, also reject
+bodies that contain `PerformEffect` or `WithHandler` —
+`reuse_not_across_perform_effect` exists for a reason and HOF
+widening must respect that boundary.
+
+Verification: same set as before. The M9 test's `peak_bytes` should
+now stay bounded under 3b (the `around_diffs` per-call literal
+recycles). If not, the HOF intrinsic name in (a) is wrong — grep
+the IR dump for the actual `Call` callee strings on `flatten_acc` /
+`check_around_rolls`.
+
+**3d — `mut ys = xs` upstream-borrow widening (conditional)**
+
+Skip this fix unless Step 1.2 explicitly recorded that `update_xs`'s
+`xs` is classified `Borrowed` after 3a + 3c land. If it is, file a
+follow-up issue rather than implementing under M9 — the change
+touches `perceus_reuse.rs`'s seed logic and is the riskiest of the
+four. Sonnet **should not** attempt 3d without a Codex code review
+of the IR diff first.
+
+Acceptance for M9 closing without 3d: the M9 test passes, the
+138×138 input completes under 256 MiB, and the IR dump shows
+`update_rolls`'s parameter classified `Owned` (which 3a indirectly
+fixes by dropping `rolls` before `check`'s self-tail-call, removing
+the outstanding `rolls` reference at the `update_rolls` call site).
 
 #### Step 4 — Drop insertion audit on intermediate lists
 
-- [ ] After Step 3's fixes, run the BUGS.md repro at 10×10 and
-      confirm: every `flatten_acc` / `reverse_*_acc` per-step `acc`
-      tail is dropped on tail-call; the per-call `around_diffs`
-      literal is dropped on return from `check_around_rolls`;
-      `removed_indices` is dropped after `update_rolls` returns;
-      and the per-round `rolls` is dropped before `check`'s
-      tail-recursive self-call.
-- [ ] Add an `alloc-baseline` fixture mirroring the BUGS.md repro
-      (input embedded, not file-system dependent — the existing
-      fixture format already supports this) so future regressions
-      are caught on every `cargo test`. Budget: `total_bytes <
-      2 * working_set_bytes`, `free_list_hits > rounds *
-      intermediate_lists_per_round / 2`.
-- [ ] Verify the fix does not regress `refcount_reuse_loop.gb`
-      (`reuse_hits == 5000`, `total_bytes < 200 KiB`).
+After Step 3, with `GOBY_DUMP_PERCEUS_IR=1` set:
+
+(a) Confirm by inspection of the IR dump that:
+- Each `*_acc` helper has `Drop(<param>)` immediately before its
+  recursive `Call` for the parameters not forwarded.
+- `flatten_acc`'s `fold row acc ...` keeps a single allocation
+  for `acc`'s tail; the per-iteration cons cells are reused
+  (look for `RefCountDropReuse` near the `[c, ..a]` lowering).
+- `check_around_rolls` drops `around_diffs` on return; the IR's
+  `result =` binding has a balancing `Drop(around_diffs)` after
+  the `fold` call.
+- `check` drops `rolls` before `check new_rolls ...`'s
+  recursive call.
+
+(b) Add the alloc-baseline fixture and its budget:
+
+```sh
+# Save the BUGS.md repro with a deterministic 10x10 input embedded
+# via `read_lines` patched out — actually, the existing fixture
+# format runs with empty stdin. Use the form that takes the grid
+# as a string literal inside the program:
+mkdir -p crates/goby-wasm/tests/fixtures/alloc-baseline
+# Write doc-derived program to:
+#   crates/goby-wasm/tests/fixtures/alloc-baseline/m9_real_world_driver.gb
+```
+
+The program must not use `read_lines` (the alloc-baseline harness
+runs with empty stdin). Replace `lines = read_lines ()` with a
+hard-coded `lines = ["@.@..", "....@", ...]` — six rows of ten
+characters each is sufficient to exercise multiple rounds. Keep
+the rest of `solve2.gb` byte-for-byte identical to BUGS.md.
+
+Append to `crates/goby-wasm/tests/alloc_baseline.txt`:
+
+```
+alloc-baseline/m9_real_world_driver.gb <total_bytes_observed_after_m9>
+```
+
+Use the *post-fix* `total_bytes` value from the M9 test as the
+baseline. The harness uses `<=` against this, so it acts as a
+ceiling.
+
+(c) Run the full baseline:
+
+```sh
+cargo test --workspace --release alloc_baseline
+```
+
+`refcount_reuse_loop.gb`'s row in `alloc_baseline.txt` must be
+unchanged (the M6 acceptance budget). If it changed, M9 has
+introduced a regression in M6's reuse — debug before proceeding.
 
 #### Step 5 — Re-acceptance
 
-- [ ] BUGS.md repro at 10×10: `free_list_hits > 0`,
-      `peak_bytes < total_bytes / 2`, `reuse_hits` scales with
-      rounds.
-- [ ] AoC2025 day 4 part 2 (138×138 input, the originally-failing
-      shape) completes under the default 1024 MiB ceiling and
-      under a tighter 256 MiB ceiling. The 256 MiB run is the
-      headline acceptance: it asserts the working set, not a
-      generous slack budget.
+- [ ] M9 acceptance test passes (`free_list_hits > 0`,
+      `peak * 2 < total`, `reuse_hits >= rounds * cells_per_round`).
+- [ ] AoC2025 day 4 part 2 (138×138 input) completes under
+      `--max-memory-mb 256`. Run from a private working copy:
+      `goby run --max-memory-mb 256 --debug-alloc-stats solve2.gb < input`.
+      Record final `total_bytes` / `peak_bytes` / `reuse_hits` in
+      `tmp/m9_aoc_acceptance.txt` for the commit message.
 - [ ] `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb`
-      budget unchanged.
-- [ ] `cargo test --workspace` green; `alloc_baseline.txt` deltas
-      explained per entry.
-- [ ] `goby-invariants` clean.
+      budget unchanged in `alloc_baseline.txt`.
+- [ ] `cargo test --workspace --release` green.
+- [ ] Skill `goby-invariants` clean (run before the final commit).
 
 #### Step 6 — Codex code review
 
-- [ ] Send the Step 3 / Step 4 diffs together (one review covers
-      all four fixes; Codex evaluates whether they are
-      genuinely independent). Focus areas:
-  - Tail-call drop: no double-drop on parameters that are also
-    tail-call arguments (`Drop(name)` emitted only when `name`
-    does not appear in the tail-call arg list).
-  - HOF widening: closure escape is detected; closures stored
-    in lists or returned still see `Borrowed`.
-  - Tuple projection: a `Drop(t)` is not emitted while a
-    projected component is still live; `t` is dropped only
-    after the last live projection.
-  - Upstream-borrow widening (3d, if pursued): the basic-block
-    boundary is correctly identified — handler scopes,
-    `case` arm scopes, and lambda bodies all introduce blocks.
+Use Skill `codex-request`. Send the diff for the entire M9 series
+(3c + 3a + 3b + Step 4 fixture in one bundle, even if landed in
+multiple commits) and the Step 5 numbers. Required focus areas:
+
+- **3a tail-call drop** — no double-drop on parameters that are also
+  tail-call arguments. The mention check in
+  `tail_call_self_dropped_params` is the load-bearing line; ask
+  Codex to challenge it with a counter-example (e.g. an arg that
+  is `f(p)` for some pure function `f`).
+- **3b HOF widening** — closure escape detection. Ask Codex to
+  exhibit a closure that returns its parameter or stores it in a
+  list literal, and confirm `lambda_consumes_first_param` rejects it.
+- **3c tuple projection** — that a `Drop(t)` is not emitted while a
+  projected component is still live. Read `count_var_uses` in
+  context to confirm the existing last-use machinery handles the
+  multi-projection case.
+- **Effect handler interaction** — confirm
+  `reuse_not_across_perform_effect` and
+  `reuse_not_across_with_handler` still pass.
 
 #### Step 7 — STATE / PLAN sync, BUGS.md closure, commit
 
-- [ ] Move the BUGS.md M9 entry from "Open" to
-      "Resolved on YYYY-MM-DD" with a one-paragraph fix summary
-      (which of 3a / 3b / 3c / 3d landed; which were unnecessary).
+- [ ] Move the BUGS.md M9 entry from "Open" to "Resolved on
+      YYYY-MM-DD" with a one-paragraph fix summary listing 3a / 3b /
+      3c (and 3d if landed).
 - [ ] Update `doc/STATE.md` and `doc/PLAN.md` §4.2 to record M9
       outcome and re-close Perceus.
 - [ ] Update `memory/project_perceus_status.md` if present in this
       checkout.
-- [ ] Run `goby-invariants` before commit (per `CLAUDE.md` Hard
-      Rules: spec / examples / PLAN updates ship in the same
-      change as semantic changes).
+- [ ] Commit each fix as its own commit with the Step 5 numbers in
+      the message. Final commit message follows the repo style
+      (subject under 70 chars, body explains *why*).
+- [ ] Run Skill `goby-invariants` before the final commit.
+
+#### Invariants the fix must preserve
+
+- `LetMut` does not call `bind_alias` (`perceus.rs:306`).
+- `lower_assign_index_reuse` only emits `ListSetInPlace` when the
+  static uniqueness proof has held since allocation.
+- `alloc_baseline.txt` is monotonically non-increasing for every
+  pre-existing fixture, including `refcount_reuse_loop.gb`.
+- `reuse_not_across_perform_effect` and
+  `reuse_not_across_with_handler` stay green.
+- No fix may rely on inter-procedural analysis beyond `IrDecl`-level
+  metadata. Cross-decl reuse is out of scope.
 
 #### Out of scope for M9
 
 - Reuse across `perform` / `with_handler` boundaries (still §3.5
   / M5 invariant).
 - Reuse on `set xs i v` (M6 Step 5 re-open conditions still stand).
-- Inter-procedural reuse beyond §3.7.1's tail-call rule. M9 widens
-  drop / classification rules within a single decl; cross-decl
-  ownership is out of scope.
-- Stack allocation of short-lived closures. Reuse plus drop
-  recovers the bulk of the cost; closure stack-allocation is a
-  separate future milestone.
+- Inter-procedural reuse beyond §3.7.1's tail-call rule.
+- Stack allocation of short-lived closures.
+- HOFs with `param_idx > 0` (multi-formal closures whose data flows
+  through the second closure parameter). The 3b table only handles
+  `param_idx == 0`.
 
 ---
 
