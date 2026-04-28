@@ -1787,6 +1787,264 @@ The fix **must not** weaken these invariants:
 
 ---
 
+### M9 — Drop on tail-recursive self-calls and HOF-laundered last-use
+
+M8 closed the `mut ys = xs; each idxs (...)` reuse miss for a single
+helper-and-driver shape. The `doc/BUGS.md` repro (2026-04-28, full
+AoC2025 day 4 part 2 program) is a strict superset: it still exhausts
+1024 MiB and `--debug-alloc-stats` on a 10×10 reduction reports
+`peak_bytes == total_bytes`, `free_list_hits=0`, and `reuse_hits=9`
+(matching exactly the number of cells `update_rolls` blanks). M8's
+borrow-update reuse fires; nothing else does.
+
+The non-firing surface area, in order of likely impact:
+
+- **Tail-recursive self-call drops.** `check`, `count_valid_roll_acc`,
+  `reverse_positions_acc`, `reverse_strings_acc`, and `flatten_acc`
+  all pass an old `rolls` / `acc` / `xs` argument to a recursive call
+  to themselves while another argument carries a freshly-allocated
+  successor. The old binding's last-use `Drop` must fire *before*
+  the tail-call so refcount can fall to zero ahead of the new
+  allocation. `free_list_hits=0` says these drops are not present on
+  the tail-recursion edge; `peak_bytes == total_bytes` says the
+  callee unwind is not returning chunks either.
+- **HOF-laundered last-use.** `flatten_acc` writes its successor with
+  `fold row acc (fn a c -> [c, ..a])`; the closure's `a` is the only
+  consumer of `acc`, but the ownership classifier likely treats `fold`
+  as borrowing `acc` because it cannot inspect the closure body at
+  the call site. Same pattern in `check_around_rolls` for the
+  per-call 8-element `around_diffs` literal that `fold` walks.
+- **Tuple-projected ownership.** `count_valid_roll` returns
+  `(List Int, Int)`. The `List Int` half is consumed by
+  `update_rolls`, but it reaches the consumer through `counted.0`
+  / `counted.1`. If projection out of a tuple does not transfer
+  `Owned` to the projected component, `removed_indices` is classified
+  `Borrowed` and never dropped after `update_rolls` returns.
+- **`mut ys = xs` reuse vs. an upstream borrow in the same block.**
+  In `check` the same `rolls` is borrowed by `count_valid_roll rolls
+  ...` immediately before being consumed by `update_rolls rolls
+  removed_indices`. M8's widening was sized on the minimal
+  `count_marks; update_xs` shape; it is plausibly sound there but
+  not on this nested driver. The BUGS.md observation that
+  `reuse_hits == cells_blanked` rather than scaling per-round is
+  consistent with `update_rolls` itself reusing per-cell *within
+  one call* but the parameter chunk *between* rounds not being
+  recycled (because its drop is missing — see point 1).
+
+M9 closes all four. The plan order matters: identify which drops are
+actually emitted before guessing at fixes.
+
+#### Step 1 — Investigation: IR dumps before any code change
+
+- [ ] Add an integration-style smoke test that compiles the `doc/BUGS.md`
+      M9 repro with `--debug-alloc-stats` on a small (10×10) input and
+      asserts both `free_list_hits > 0` and
+      `peak_bytes < total_bytes / 2`. The test starts red. Place it
+      next to `perceus_real_world_driver_borrow_then_update_reuses_and_frees`.
+- [ ] Dump the IR after `perceus::run_perceus_passes` for the five
+      tail-recursive functions (`check`, `count_valid_roll_acc`,
+      `reverse_positions_acc`, `reverse_strings_acc`, `flatten_acc`).
+      Record, per function: which parameters are `Owned` vs.
+      `Borrowed`, where `Drop` instructions are inserted, and whether
+      a `Drop` precedes each tail-recursive call.
+- [ ] Dump the IR for `flatten_acc` and `check_around_rolls` to see
+      whether `fold`'s list argument is classified `Owned` at the call
+      site. If `Borrowed`, capture the rule in
+      `crates/goby-core/src/perceus.rs::classify_call_args` (or
+      `intrinsic_arg_is_borrowed` / `callee_param_classes`) responsible.
+- [ ] Dump the IR for `check` around `counted = count_valid_roll ...`
+      to see how the tuple's `.0` projection participates in ownership
+      flow. Record whether `removed_indices` carries `Owned` at the
+      `update_rolls` call site.
+- [ ] Cross-check `reuse_hits` scaling on the BUGS.md repro at two
+      input sizes (e.g. 10×10 and 30×30). Confirm whether `reuse_hits`
+      tracks total cells blanked (current observation) or rounds
+      (M8's intent). If the former, M8's `mut ys = xs` widening is
+      *not* firing per round, only per per-iteration `each` step,
+      which is a different miss than this milestone's headline.
+- [ ] Categorise each missing drop / missing reuse against the four
+      hypotheses in the section preamble. The result of Step 1 is a
+      per-hypothesis verdict, not a fix.
+
+Exit criterion: a written narrative tying each `peak_bytes` /
+`free_list_hits` / `reuse_hits` deviation to a specific IR-level
+cause. Do not start Step 3 without it.
+
+#### Step 2 — Codex plan review
+
+- [ ] Send Step 1's IR dumps and the per-hypothesis verdicts to
+      Codex. Questions:
+  - For tail-recursive self-call drops: does emitting `Drop(p)`
+    immediately before `TailCall self ...` for any parameter `p`
+    that is statically last-used at that call site preserve
+    refcount's "drop happens *after* the use" invariant? In
+    particular, does it interact safely with the existing
+    tail-call optimisation in `gen_lower::lower`?
+  - For HOF-laundered last-use: is it sound to mark `fold` /
+    `each` / `list.map` arguments as `Owned`-passable when the
+    closure's body provably consumes its corresponding parameter?
+    What happens with closure values that escape (`fold` returning
+    a closure that captures `acc`)?
+  - For tuple-projected ownership: is `Project(tup, i)` already a
+    transfer of `Owned` for the projected slot? If yes, why does
+    the BUGS.md repro see `removed_indices` classified `Borrowed`?
+    If no, what is the safe rule (transfer once; subsequent
+    projections of the same field on the same binding are
+    `Borrowed`)?
+  - Cross-check that the four fixes can land independently — i.e.
+    none silently masks another's regression.
+
+#### Step 3 — Fix the gaps in dependency order
+
+The exact wording is deferred to Step 1's verdicts, but the design
+space is bounded:
+
+- **3a — Tail-recursive self-call drop.** In
+  `crates/goby-core/src/perceus.rs::drop_insert_comp` (or its
+  tail-call branch), emit `Drop(name)` for every parameter
+  `name` that is (i) `Owned` and (ii) not passed forward in the
+  tail-recursive call's argument list. This closes the per-round
+  leak in `check` (the old `rolls` is shadowed by `new_rolls`) and
+  the per-step leak in the four `*_acc` helpers (the old `acc`
+  tail is shadowed by `[x, ..acc]`'s new cons cell, but the old
+  `xs` head is consumed only when last-use drop fires).
+  Acceptance: `free_list_hits` becomes positive on the BUGS.md
+  repro at the 10×10 scale, and `peak_bytes` no longer scales with
+  recursion depth.
+
+- **3b — HOF-laundered last-use.** Extend
+  `classify_call_args` to consult the callee's per-formal
+  ownership class for higher-order list intrinsics (`fold`, `each`,
+  `list.map`) when the closure argument's body is statically
+  available. If the closure consumes its corresponding parameter
+  (e.g. `fold xs acc (fn a c -> [c, ..a])` consumes `a`), the
+  outer `acc` may be passed as `Owned`. The mechanism already
+  exists in `callee_param_classes`; M9 widens it across the HOF
+  boundary. Soundness gate: a closure that escapes (returns or
+  stores `a`) keeps the parameter `Borrowed`.
+  Acceptance: `peak_bytes` on the BUGS.md repro stays bounded
+  even as the per-call `around_diffs` literal is allocated 10⁴+
+  times.
+
+- **3c — Tuple projection transfers `Owned`.** Audit
+  `classify_consumed_value` / `classify_borrowed_value` for the
+  projection case. If a tuple `t` is `Owned` and a single
+  projection `t.i` is consumed at last-use, the projected
+  component inherits `Owned` and `t`'s remaining components are
+  dropped at `t`'s last-use point.
+  Acceptance: `removed_indices` in the BUGS.md repro reaches
+  `update_rolls` as `Owned`, observed in the IR dump and reflected
+  in `reuse_hits` scaling per round.
+
+- **3d — `mut ys = xs` upstream-borrow widening.** Only if Step 1
+  shows M8's widening is incomplete on this driver shape. The
+  conservative fix is to run M8's classification per *basic block*
+  (not per *function*), so a borrow earlier in the same block
+  followed by a consume at last-use still seeds the Owned-parameter
+  reuse path. Risk: a borrow that escapes the block (e.g. captured
+  by a closure declared earlier) must keep the parameter
+  `Borrowed`. Test: a closure declared before `mut ys = xs` that
+  later reads the original `xs` must continue to observe the
+  pre-mutation values, i.e. `lower_assign_index_reuse` must still
+  refuse `ListSetInPlace` in that case.
+
+In every variant the Step 1 smoke test is the gate. Each fix lands
+as its own commit with the alloc-baseline delta explained.
+
+These invariants must remain unbroken (same as M8 + new):
+
+- `LetMut` does not call `bind_alias` (`perceus.rs:306`).
+- `lower_assign_index_reuse` only emits `ListSetInPlace` when the
+  static uniqueness proof has held since allocation.
+- The `alloc_baseline.txt` regression gate stays green for every
+  existing fixture, including `refcount_reuse_loop.gb` (M6 goal
+  program) and the M8 borrow-then-update fixture
+  (`reuse_hits=200`, `total_bytes=37016`).
+- Effect handler boundaries
+  (`reuse_not_across_perform_effect` / `reuse_not_across_with_handler`)
+  stay green.
+- No fix may rely on inter-procedural analysis beyond the existing
+  `IrDecl`-level metadata (M9 still operates within the §3.7.1
+  tail-call rule; cross-decl reuse remains future work).
+
+#### Step 4 — Drop insertion audit on intermediate lists
+
+- [ ] After Step 3's fixes, run the BUGS.md repro at 10×10 and
+      confirm: every `flatten_acc` / `reverse_*_acc` per-step `acc`
+      tail is dropped on tail-call; the per-call `around_diffs`
+      literal is dropped on return from `check_around_rolls`;
+      `removed_indices` is dropped after `update_rolls` returns;
+      and the per-round `rolls` is dropped before `check`'s
+      tail-recursive self-call.
+- [ ] Add an `alloc-baseline` fixture mirroring the BUGS.md repro
+      (input embedded, not file-system dependent — the existing
+      fixture format already supports this) so future regressions
+      are caught on every `cargo test`. Budget: `total_bytes <
+      2 * working_set_bytes`, `free_list_hits > rounds *
+      intermediate_lists_per_round / 2`.
+- [ ] Verify the fix does not regress `refcount_reuse_loop.gb`
+      (`reuse_hits == 5000`, `total_bytes < 200 KiB`).
+
+#### Step 5 — Re-acceptance
+
+- [ ] BUGS.md repro at 10×10: `free_list_hits > 0`,
+      `peak_bytes < total_bytes / 2`, `reuse_hits` scales with
+      rounds.
+- [ ] AoC2025 day 4 part 2 (138×138 input, the originally-failing
+      shape) completes under the default 1024 MiB ceiling and
+      under a tighter 256 MiB ceiling. The 256 MiB run is the
+      headline acceptance: it asserts the working set, not a
+      generous slack budget.
+- [ ] `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb`
+      budget unchanged.
+- [ ] `cargo test --workspace` green; `alloc_baseline.txt` deltas
+      explained per entry.
+- [ ] `goby-invariants` clean.
+
+#### Step 6 — Codex code review
+
+- [ ] Send the Step 3 / Step 4 diffs together (one review covers
+      all four fixes; Codex evaluates whether they are
+      genuinely independent). Focus areas:
+  - Tail-call drop: no double-drop on parameters that are also
+    tail-call arguments (`Drop(name)` emitted only when `name`
+    does not appear in the tail-call arg list).
+  - HOF widening: closure escape is detected; closures stored
+    in lists or returned still see `Borrowed`.
+  - Tuple projection: a `Drop(t)` is not emitted while a
+    projected component is still live; `t` is dropped only
+    after the last live projection.
+  - Upstream-borrow widening (3d, if pursued): the basic-block
+    boundary is correctly identified — handler scopes,
+    `case` arm scopes, and lambda bodies all introduce blocks.
+
+#### Step 7 — STATE / PLAN sync, BUGS.md closure, commit
+
+- [ ] Move the BUGS.md M9 entry from "Open" to
+      "Resolved on YYYY-MM-DD" with a one-paragraph fix summary
+      (which of 3a / 3b / 3c / 3d landed; which were unnecessary).
+- [ ] Update `doc/STATE.md` and `doc/PLAN.md` §4.2 to record M9
+      outcome and re-close Perceus.
+- [ ] Update `memory/project_perceus_status.md` if present in this
+      checkout.
+- [ ] Run `goby-invariants` before commit (per `CLAUDE.md` Hard
+      Rules: spec / examples / PLAN updates ship in the same
+      change as semantic changes).
+
+#### Out of scope for M9
+
+- Reuse across `perform` / `with_handler` boundaries (still §3.5
+  / M5 invariant).
+- Reuse on `set xs i v` (M6 Step 5 re-open conditions still stand).
+- Inter-procedural reuse beyond §3.7.1's tail-call rule. M9 widens
+  drop / classification rules within a single decl; cross-decl
+  ownership is out of scope.
+- Stack allocation of short-lived closures. Reuse plus drop
+  recovers the bulk of the cost; closure stack-allocation is a
+  separate future milestone.
+
+---
+
 ## 5. Non-Goals
 
 - **Tracing GC.** Not considered. Cycles are disallowed at the language
