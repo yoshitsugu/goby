@@ -1951,6 +1951,214 @@ main =
 }
 
 #[test]
+fn perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round() {
+    // Source: doc/BUGS.md "Open bugs" 2026-04-28 entry — full AoC2025 day 4 part 2 repro.
+    let source = r#"
+import goby/list (each, fold, length)
+import goby/string (graphemes)
+import goby/stdio
+
+threshold : Int
+threshold = 4
+
+check_around_rolls : List String -> Int -> Int -> Int -> Int -> Bool can Print
+check_around_rolls rolls x y max_x max_y =
+  if rolls[y * max_x + x] == "@"
+    around_diffs = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+    result =
+      fold around_diffs 0 (fn result d ->
+        diff_y = y + d.1
+        diff_x = x + d.0
+        if 0 <= diff_y && diff_y < max_y && 0 <= diff_x && diff_x < max_x
+          if rolls[diff_y * max_x + diff_x] == "@"
+            result + 1
+          else
+            result
+        else
+          result
+      )
+    result < threshold
+  else
+    False
+
+reverse_positions_acc : List Int -> List Int -> List Int can Print
+reverse_positions_acc xs acc =
+  case xs
+    [] -> acc
+    [x, ..rest] -> reverse_positions_acc rest [x, ..acc]
+
+reverse_positions : List Int -> List Int can Print
+reverse_positions xs =
+  reverse_positions_acc xs []
+
+count_valid_roll_acc : List String -> Int -> Int -> Int -> Int -> List Int -> Int -> (List Int, Int) can Print
+count_valid_roll_acc rolls x y max_x max_y acc count =
+  if y >= max_y
+    (reverse_positions acc, count)
+  else
+    if x >= max_x
+      count_valid_roll_acc rolls 0 (y + 1) max_x max_y acc count
+    else
+      if check_around_rolls rolls x y max_x max_y
+        count_valid_roll_acc rolls (x + 1) y max_x max_y [y * max_x + x, ..acc] (count + 1)
+      else
+        count_valid_roll_acc rolls (x + 1) y max_x max_y acc count
+
+count_valid_roll : List String -> Int -> Int -> Int -> Int -> (List Int, Int) can Print
+count_valid_roll rolls x y max_x max_y =
+  count_valid_roll_acc rolls x y max_x max_y [] 0
+
+update_rolls : List String -> List Int -> List String can Print
+update_rolls rolls removed_indices =
+  mut new_rolls = rolls
+  each removed_indices (fn idx ->
+    new_rolls[idx] := "."
+    ()
+  )
+  new_rolls
+
+flatten_acc : List (List String) -> List String -> List String can Print
+flatten_acc rows acc =
+  case rows
+    [] -> acc
+    [row, ..rest] ->
+      new_acc =
+        fold row acc (fn a c -> [c, ..a])
+      flatten_acc rest new_acc
+
+reverse_strings_acc : List String -> List String -> List String can Print
+reverse_strings_acc xs acc =
+  case xs
+    [] -> acc
+    [x, ..rest] -> reverse_strings_acc rest [x, ..acc]
+
+flatten : List (List String) -> List String can Print
+flatten rows =
+  reversed = flatten_acc rows []
+  reverse_strings_acc reversed []
+
+check : List String -> Int -> Int -> Int -> Int can Print
+check rolls max_x max_y result =
+  counted = count_valid_roll rolls 0 0 max_x max_y
+  removed_indices = counted.0
+  count = counted.1
+  if count > 0
+    new_rolls = update_rolls rolls removed_indices
+    check new_rolls max_x max_y (result + count)
+  else
+    result
+
+main : Unit -> Unit can Print, Read
+main =
+  lines = read_lines ()
+  nlines = length lines
+  rows = list.map lines graphemes
+  max_y = length rows
+  row0 = rows[0]
+  max_x = length row0
+  rolls = flatten rows
+  nrolls = length rolls
+  result = check rolls max_x max_y 0
+  println "${result}"
+"#;
+    // Deterministic 20x20 grid with non-adjacent '@' cells — no fixture file needed.
+    let stdin = (0..20)
+        .map(|y: usize| {
+            (0..20)
+                .map(|x: usize| if x % 2 == 0 && y % 2 == 0 { '@' } else { '.' })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let module = parse_module(source).expect("M9 repro should parse");
+    let (_instrs, _aux) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should succeed")
+        .expect("sample should use general lowering");
+
+    let output = execute_runtime_module_with_stdin_config_and_options_captured(
+        &module,
+        Some(stdin),
+        None,
+        CompileOptions {
+            debug_alloc_stats: true,
+        },
+    )
+    .expect("M9 repro should execute")
+    .expect("M9 repro should run on runtime-owned Wasm");
+
+    let total_bytes = parse_alloc_stats_field(&output.stderr, "total_bytes");
+    let peak_bytes = parse_alloc_stats_field(&output.stderr, "peak_bytes");
+    let free_list_hits = parse_alloc_stats_field(&output.stderr, "free_list_hits");
+    let reuse_hits = parse_alloc_stats_field(&output.stderr, "reuse_hits");
+
+    assert!(
+        free_list_hits > 0,
+        "M9: chunks must return to the free-list once per round; got 0. stderr:\n{}",
+        output.stderr
+    );
+    assert!(
+        peak_bytes * 2 < total_bytes,
+        "M9: peak must be < total/2 (working-set bounded). peak={peak_bytes} total={total_bytes}"
+    );
+    // reuse must scale with the number of in-place removals, not stay at a single
+    // whole-fold reuse hit.
+    assert!(
+        reuse_hits >= 10,
+        "M9: reuse must scale with in-place removals, not stay at one whole-fold hit; got reuse_hits={reuse_hits}"
+    );
+}
+
+// Diagnostic: verify that Drop on a non-empty list increments free_list_hits.
+#[test]
+fn perceus_m9_simple_list_drop_increments_free_list_hits() {
+    let source = r#"
+import goby/list (length)
+
+build_list : Int -> List Int can Print
+build_list n =
+  if n <= 0
+    []
+  else
+    [n, ..build_list (n - 1)]
+
+main : Unit -> Unit can Print
+main =
+  xs = build_list 5
+  println (length xs)
+"#;
+    let module = parse_module(source).expect("should parse");
+    // Dump Wasm binary for inspection
+    if let Ok(wasm) = crate::gen_lower::try_general_lower_module_with_options(
+        &module,
+        crate::gen_lower::emit::EmitOptions {
+            debug_alloc_stats: true,
+            ..crate::gen_lower::emit::EmitOptions::default()
+        },
+    ) {
+        if let Some(wasm) = wasm {
+            let _ = std::fs::write("/tmp/test_drop.wasm", &wasm);
+        }
+    }
+    let output = execute_runtime_module_with_stdin_config_and_options_captured(
+        &module,
+        None,
+        None,
+        CompileOptions {
+            debug_alloc_stats: true,
+        },
+    )
+    .expect("should execute")
+    .expect("should run on runtime Wasm");
+    let free_list_hits = parse_alloc_stats_field(&output.stderr, "free_list_hits");
+    assert!(
+        free_list_hits > 0,
+        "Drop on built list should free chunks; got 0. stderr:\n{}",
+        output.stderr
+    );
+}
+
+#[test]
 fn compile_module_routes_echo_read_line_println_through_dynamic_wasi_io_classification() {
     let source = r#"
 main : Unit -> Unit can Print, Read
@@ -2788,6 +2996,167 @@ main =
         optimized_wasm.len() < 65_536,
         "optimized runtime I/O wasm unexpectedly large: {} bytes",
         optimized_wasm.len()
+    );
+}
+
+/// Diagnostic: drop the result of build_list(5) directly via __test_drop_ptr.
+/// If free_list_hits == 0 the list has no chunks (n_chunks=0).
+#[test]
+fn perceus_m9_build_list_has_chunks_when_dropped() {
+    use wasmtime::{Config, Engine, Linker, Module as WasmModule, Store};
+    use wasmtime_wasi::WasiCtxBuilder;
+    use wasmtime_wasi::p1::{self, WasiP1Ctx};
+    use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
+
+    let source = r#"
+import goby/list (length)
+
+build_list : Int -> List Int can Print
+build_list n =
+  if n <= 0
+    []
+  else
+    [n, ..build_list (n - 1)]
+
+main : Unit -> Unit can Print
+main =
+  xs = build_list 5
+  println (length xs)
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let emit_options = crate::gen_lower::emit::EmitOptions {
+        debug_alloc_stats: false,
+        expose_perceus_test_exports: true,
+        ..crate::gen_lower::emit::EmitOptions::default()
+    };
+    let wasm = crate::gen_lower::try_general_lower_module_with_options(&module, emit_options)
+        .expect("lowering ok")
+        .expect("general lowering");
+    assert_valid_wasm_module(&wasm);
+
+    let mut config = Config::new();
+    config.wasm_memory64(true);
+    let engine = Engine::new(&config).expect("engine");
+    let wasm_module = WasmModule::from_binary(&engine, &wasm).expect("parse wasm");
+
+    let wasi_ctx = WasiCtxBuilder::new()
+        .stdin(MemoryInputPipe::new("".to_owned()))
+        .stdout(MemoryOutputPipe::new(4096))
+        .build_p1();
+    let mut store = Store::new(&engine, wasi_ctx);
+    let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
+    p1::add_to_linker_sync(&mut linker, |t| t).expect("wasi linker");
+    let module_name = crate::host_runtime::HostIntrinsicImport::MODULE;
+    linker
+        .func_wrap(module_name, "__goby_value_to_string", |_: i64| -> i64 { 0 })
+        .ok();
+    linker
+        .func_wrap(
+            module_name,
+            "__goby_string_each_grapheme_count",
+            |_: i64| -> i64 { 0 },
+        )
+        .ok();
+    linker
+        .func_wrap(
+            module_name,
+            "__goby_string_each_grapheme_state",
+            |_: i64, _: i64| -> i64 { 0 },
+        )
+        .ok();
+    linker
+        .func_wrap(
+            module_name,
+            "__goby_string_concat",
+            |_: i64, _: i64| -> i64 { 0 },
+        )
+        .ok();
+    linker
+        .func_wrap(
+            module_name,
+            "__goby_list_join_string",
+            |_: i64, _: i64| -> i64 { 0 },
+        )
+        .ok();
+
+    let instance = linker
+        .instantiate(&mut store, &wasm_module)
+        .expect("instantiate");
+
+    let memory = instance.get_memory(&mut store, "memory").expect("memory");
+
+    // Init globals
+    let heap_bump_init: u64 = crate::layout::HEAP_BASE as u64;
+    let host_bump = heap_bump_init;
+    memory
+        .write(
+            &mut store,
+            crate::layout::GLOBAL_HEAP_CURSOR_OFFSET as usize,
+            &heap_bump_init.to_le_bytes(),
+        )
+        .ok();
+    memory
+        .write(
+            &mut store,
+            crate::layout::GLOBAL_HEAP_FLOOR_OFFSET as usize,
+            &(crate::layout::HEAP_BASE as u64).to_le_bytes(),
+        )
+        .ok();
+    memory
+        .write(
+            &mut store,
+            crate::layout::GLOBAL_HOST_BUMP_CURSOR_OFFSET as usize,
+            &host_bump.to_le_bytes(),
+        )
+        .ok();
+    memory
+        .write(
+            &mut store,
+            crate::layout::GLOBAL_FREE_LIST_HITS_OFFSET as usize,
+            &0u64.to_le_bytes(),
+        )
+        .ok();
+    memory
+        .write(
+            &mut store,
+            crate::layout::GLOBAL_ALLOC_BYTES_TOTAL_OFFSET as usize,
+            &0u64.to_le_bytes(),
+        )
+        .ok();
+    memory
+        .write(
+            &mut store,
+            crate::layout::GLOBAL_FREED_BYTES_OFFSET as usize,
+            &0u64.to_le_bytes(),
+        )
+        .ok();
+
+    // Call build_list(5) and then drop the result
+    let build_list_fn = instance
+        .get_typed_func::<i64, i64>(&mut store, "build_list")
+        .expect("build_list export");
+    let n_tagged = (1i64 << 60) | 5i64; // TAG_INT=1, value=5
+    let xs_tagged = build_list_fn
+        .call(&mut store, n_tagged)
+        .expect("build_list call");
+
+    let drop_fn = instance
+        .get_typed_func::<i64, ()>(&mut store, "__test_drop_ptr")
+        .expect("__test_drop_ptr");
+    drop_fn.call(&mut store, xs_tagged).expect("drop call");
+
+    let mut hits_bytes = [0u8; 8];
+    memory
+        .read(
+            &store,
+            crate::layout::GLOBAL_FREE_LIST_HITS_OFFSET as usize,
+            &mut hits_bytes,
+        )
+        .expect("read hits");
+    let hits = u64::from_le_bytes(hits_bytes);
+    assert!(
+        hits > 0,
+        "dropping build_list(5) result should give free_list_hits>0; got {hits}. xs_tagged={xs_tagged:#x}"
     );
 }
 

@@ -1369,10 +1369,27 @@ fn lower_list_each_mutating_assign(
         root.clone()
     };
     let descent_tmp = |i: usize| format!("__lsip_{}_d{}", root, i);
+    let cell_root_reuse = if root_is_cell {
+        reuse_token.as_ref().and_then(|reuse| {
+            reuse
+                .levels
+                .first()
+                .copied()
+                .flatten()
+                .map(|sc| (reuse.root_token.clone(), sc))
+        })
+    } else {
+        None
+    };
 
     let mut body_instrs: Vec<WasmBackendInstr> = preamble;
 
     if root_is_cell {
+        if let Some((token, _)) = &cell_root_reuse {
+            body_instrs.push(WasmBackendInstr::DeclareLocal {
+                name: token.clone(),
+            });
+        }
         body_instrs.push(WasmBackendInstr::DeclareLocal {
             name: root_local.clone(),
         });
@@ -1385,6 +1402,14 @@ fn lower_list_each_mutating_assign(
         body_instrs.push(WasmBackendInstr::StoreLocal {
             name: root_local.clone(),
         });
+        if let Some((token, _)) = &cell_root_reuse {
+            body_instrs.push(WasmBackendInstr::LoadLocal {
+                name: root_local.clone(),
+            });
+            body_instrs.push(WasmBackendInstr::RefCountDropReuse {
+                token_local: token.clone(),
+            });
+        }
     }
 
     for i in 0..depth.saturating_sub(1) {
@@ -1441,6 +1466,14 @@ fn lower_list_each_mutating_assign(
     });
     // Drop the returned list handle; caller doesn't use it.
     body_instrs.push(WasmBackendInstr::Drop);
+    if let Some((token, sc)) = &cell_root_reuse {
+        body_instrs.push(WasmBackendInstr::AllocReuse {
+            token_local: token.clone(),
+            size_class: (*sc).into(),
+            init: BackendAllocInit::Retain,
+        });
+        body_instrs.push(WasmBackendInstr::Drop);
+    }
 
     // Return accumulator unchanged.
     body_instrs.push(WasmBackendInstr::LoadLocal {
@@ -1456,40 +1489,11 @@ fn lower_list_each_mutating_assign(
         instrs: body_instrs,
     });
 
-    let root_reuse = if root_is_cell {
-        reuse_token.as_ref().and_then(|reuse| {
-            reuse
-                .levels
-                .first()
-                .copied()
-                .flatten()
-                .map(|sc| (reuse.root_token.clone(), sc))
-        })
-    } else {
-        None
-    };
-
-    // Emit: optional drop_reuse(root) | list | unit_acc | callback_handle |
-    // ListFold | optional alloc_reuse(retain). For a cell-promoted root, the
-    // callback mutates the current cell value in place; the surrounding
-    // drop/alloc pair is what makes that mutation participate in the Perceus
-    // reuse accounting without exposing a shared-header path.
+    // Emit: list | unit_acc | callback_handle | ListFold.
+    // For a cell-promoted root, the callback mutates the current cell value in place and
+    // performs its own drop_reuse/alloc_reuse(retain) pair for each visited index.
     let list_instrs = lower_value_as_arg(&args[0], aliases, bindings, known_decls, lambda_decls)?;
     let mut instrs = Vec::new();
-    if let Some((token, _)) = &root_reuse {
-        instrs.push(WasmBackendInstr::DeclareLocal {
-            name: token.clone(),
-        });
-        instrs.extend(lower_value_ctx(
-            &ValueExpr::Var(root.clone()),
-            aliases,
-            bindings,
-            known_decls,
-        )?);
-        instrs.push(WasmBackendInstr::RefCountDropReuse {
-            token_local: token.clone(),
-        });
-    }
     instrs.extend(list_instrs);
     instrs.push(WasmBackendInstr::I64Const(
         crate::gen_lower::value::encode_unit(),
@@ -1525,14 +1529,6 @@ fn lower_list_each_mutating_assign(
     instrs.push(WasmBackendInstr::Intrinsic {
         intrinsic: BackendIntrinsic::ListFold,
     });
-    if let Some((token, sc)) = root_reuse {
-        instrs.push(WasmBackendInstr::AllocReuse {
-            token_local: token,
-            size_class: sc.into(),
-            init: BackendAllocInit::Retain,
-        });
-        instrs.push(WasmBackendInstr::Drop);
-    }
 
     Ok(Some(instrs))
 }

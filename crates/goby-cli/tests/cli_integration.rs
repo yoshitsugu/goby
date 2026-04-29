@@ -2167,9 +2167,14 @@ main =
             total_bytes_val > 0,
             "total_bytes must be positive, got 0; line: {line}"
         );
+        let free_list_hits_val = line
+            .split_whitespace()
+            .find(|p| p.starts_with("free_list_hits="))
+            .and_then(|p| p.trim_start_matches("free_list_hits=").parse::<u64>().ok())
+            .expect("free_list_hits field should parse");
         assert!(
-            line.contains("free_list_hits=0"),
-            "M2 placeholder should expose free_list_hits=0; line: {line}"
+            free_list_hits_val > 0,
+            "debug alloc stats should expose real free-list activity; line: {line}"
         );
     }
 }

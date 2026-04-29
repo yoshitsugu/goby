@@ -27,7 +27,22 @@ pub fn assert_perceus_pipeline_order(pass_names: &[&'static str]) {
 
 pub fn run_perceus_passes(module: &IrModule) -> IrModule {
     let ownership = ownership_classify_module(module);
+    if std::env::var("GOBY_DUMP_PERCEUS_IR").is_ok() {
+        for decl in &module.decls {
+            if let Some(classes) = ownership.get(&decl.name) {
+                eprintln!("=== ownership[{}] ===", decl.name);
+                for (param, _) in &decl.params {
+                    eprintln!("  param {param:?} => {:?}", classes.get(param));
+                }
+            }
+        }
+    }
     let dropped = drop_insert_module(module, &ownership);
+    if std::env::var("GOBY_DUMP_PERCEUS_IR").is_ok() {
+        for decl in &dropped.decls {
+            eprintln!("=== dropped IR[{}] ===\n{:#?}", decl.name, decl.body);
+        }
+    }
     // reuse_pair label covers both intra-block and tail-call cross-call reuse
     let intra = IrModule {
         decls: dropped
@@ -51,7 +66,13 @@ pub fn run_perceus_passes(module: &IrModule) -> IrModule {
             .collect(),
     };
     let mut next_id: usize = 0;
-    insert_tail_reuse_module(intra, &mut next_id)
+    let reused = insert_tail_reuse_module(intra, &mut next_id);
+    if std::env::var("GOBY_DUMP_PERCEUS_IR").is_ok() {
+        for decl in &reused.decls {
+            eprintln!("=== reused IR[{}] ===\n{:#?}", decl.name, decl.body);
+        }
+    }
+    reused
 }
 
 fn ownership_classify_module(
@@ -290,10 +311,16 @@ fn classify_comp(
     match comp {
         CompExpr::Value(value) => classify_return_value(value, classes, params, aliases),
         CompExpr::Let {
-            name, value, body, ..
+            name,
+            ty,
+            value,
+            body,
         } => {
             classify_bound_comp(value, classes, params, module_params, aliases);
-            classes.insert(name.clone(), classify_owned_result(value, classes, aliases));
+            classes.insert(
+                name.clone(),
+                classify_owned_result(value, ty, classes, aliases),
+            );
             let previous_alias = bind_alias(name, value, params, aliases);
             classify_comp(body, classes, params, module_params, aliases);
             restore_alias(name, previous_alias, aliases);
@@ -513,7 +540,7 @@ fn intrinsic_arg_is_borrowed(callee: &ValueExpr, idx: usize) -> bool {
         (
             ValueExpr::GlobalRef { name, .. } | ValueExpr::Var(name),
             0
-        ) if name == "__goby_list_length"
+        ) if matches!(name.as_str(), "__goby_list_length" | "__goby_list_fold")
     )
 }
 
@@ -569,7 +596,9 @@ fn classify_return_value(
             classify_borrowed_value(right, classes, params, aliases);
         }
         ValueExpr::TupleProject { tuple, .. } => {
-            classify_borrowed_value(tuple, classes, params, aliases)
+            // Projecting from a tuple consumes the tuple (ownership transfers to the projection
+            // result), so the source is classified as consumed, not merely borrowed.
+            classify_consumed_value(tuple, classes, params, aliases)
         }
         ValueExpr::ListGet { list, index } => {
             classify_borrowed_value(list, classes, params, aliases);
@@ -722,6 +751,7 @@ fn classify_lambda_capture(
 
 fn classify_owned_result(
     comp: &CompExpr,
+    ty: &crate::ir::IrType,
     classes: &HashMap<String, OwnershipClass>,
     aliases: &HashMap<String, String>,
 ) -> OwnershipClass {
@@ -734,6 +764,20 @@ fn classify_owned_result(
                 .copied()
                 .unwrap_or(OwnershipClass::Borrowed)
         }
+        CompExpr::Value(ValueExpr::TupleProject { tuple, .. }) if type_may_be_heap(ty) => {
+            if let ValueExpr::Var(name) = tuple.as_ref() {
+                let owner = aliases.get(name).map_or(name, |root| root);
+                classes
+                    .get(owner)
+                    .copied()
+                    .unwrap_or(OwnershipClass::Borrowed)
+            } else {
+                OwnershipClass::Borrowed
+            }
+        }
+        // All call results are treated as owned: the ABI requires callees to transfer
+        // ownership of any heap return value (or Dup it before returning).
+        CompExpr::Call { .. } => OwnershipClass::Owned,
         _ => OwnershipClass::Borrowed,
     }
 }
@@ -797,6 +841,26 @@ fn drop_insert_module(
                     next_tmp,
                 );
 
+                // 3a: insert Drops for Owned params that go dead at tail-recursive self-calls.
+                let owned_self_params: Vec<String> = decl
+                    .params
+                    .iter()
+                    .filter(|(name, _)| decl_ownership.get(name) == Some(&OwnershipClass::Owned))
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                let body = if owned_self_params.is_empty() {
+                    body
+                } else {
+                    insert_self_tail_call_param_drops_comp(
+                        body,
+                        &decl.name,
+                        &owned_self_params,
+                        decl_ownership,
+                        &drop_ownership,
+                        &param_order,
+                    )
+                };
+
                 IrDecl {
                     name: decl.name.clone(),
                     params: decl.params.clone(),
@@ -807,6 +871,261 @@ fn drop_insert_module(
                 }
             })
             .collect(),
+    }
+}
+
+/// Collect all `Var` names mentioned anywhere in a value expression.
+fn collect_value_var_names(value: &ValueExpr, out: &mut HashSet<String>) {
+    match value {
+        ValueExpr::Var(n) => {
+            out.insert(n.clone());
+        }
+        ValueExpr::ListLit { elements, spread } => {
+            for e in elements {
+                collect_value_var_names(e, out);
+            }
+            if let Some(s) = spread {
+                collect_value_var_names(s, out);
+            }
+        }
+        ValueExpr::TupleLit(items) => {
+            for i in items {
+                collect_value_var_names(i, out);
+            }
+        }
+        ValueExpr::RecordLit { fields, .. } => {
+            for (_, v) in fields {
+                collect_value_var_names(v, out);
+            }
+        }
+        ValueExpr::Lambda { .. } => {}
+        ValueExpr::Interp(parts) => {
+            for p in parts {
+                if let IrInterpPart::Expr(v) = p {
+                    collect_value_var_names(v, out);
+                }
+            }
+        }
+        ValueExpr::BinOp { left, right, .. } => {
+            collect_value_var_names(left, out);
+            collect_value_var_names(right, out);
+        }
+        ValueExpr::TupleProject { tuple, .. } => collect_value_var_names(tuple, out),
+        ValueExpr::ListGet { list, index } => {
+            collect_value_var_names(list, out);
+            collect_value_var_names(index, out);
+        }
+        ValueExpr::IntLit(_)
+        | ValueExpr::BoolLit(_)
+        | ValueExpr::StrLit(_)
+        | ValueExpr::GlobalRef { .. }
+        | ValueExpr::Unit => {}
+    }
+}
+
+/// For a `Call { callee, args }` that is a direct tail-recursive self-call, return the Owned
+/// parameters of the current decl that are NOT mentioned in any argument expression and are
+/// therefore dead before the recursive call. Drops for these should be emitted before the call.
+fn tail_call_self_dropped_params<'a>(
+    self_name: &str,
+    callee: &ValueExpr,
+    args: &[ValueExpr],
+    ownership: &HashMap<String, OwnershipClass>,
+    self_params: &'a [String],
+    module_ownership: &HashMap<String, HashMap<String, OwnershipClass>>,
+    param_order: &HashMap<String, Vec<String>>,
+) -> Vec<&'a str> {
+    let calling_self = matches!(
+        callee,
+        ValueExpr::GlobalRef { name, .. } | ValueExpr::Var(name) if name == self_name
+    );
+    if !calling_self {
+        return Vec::new();
+    }
+
+    // Collect all vars mentioned anywhere in the arg expressions.
+    let mut mentioned: HashSet<String> = HashSet::new();
+    for arg in args {
+        collect_value_var_names(arg, &mut mentioned);
+    }
+
+    // A param can be dropped before the call iff:
+    // 1. It is classified Owned in the current decl's ownership map.
+    // 2. It does not appear in any arg expression (textual mention).
+    // 3. As a defensive check: the full Call does not consume the param via aliasing
+    //    (use comp_consumes_name on the original call).
+    let call_comp = CompExpr::Call {
+        callee: Box::new(callee.clone()),
+        args: args.to_vec(),
+        reuse_token: None,
+    };
+
+    self_params
+        .iter()
+        .filter(|p| ownership.get(p.as_str()) == Some(&OwnershipClass::Owned))
+        .filter(|p| !mentioned.contains(p.as_str()))
+        .filter(|p| !comp_consumes_name(&call_comp, p, module_ownership, param_order))
+        .map(|p| p.as_str())
+        .collect()
+}
+
+/// Walk a comp expression and, at each direct self-tail-call, prepend `Drop` for Owned params
+/// that are not forwarded. Recurses into all sub-comps.
+fn insert_self_tail_call_param_drops_comp(
+    comp: CompExpr,
+    self_name: &str,
+    owned_params: &[String],
+    ownership: &HashMap<String, OwnershipClass>,
+    module_ownership: &HashMap<String, HashMap<String, OwnershipClass>>,
+    param_order: &HashMap<String, Vec<String>>,
+) -> CompExpr {
+    let recurse = |c: CompExpr| {
+        insert_self_tail_call_param_drops_comp(
+            c,
+            self_name,
+            owned_params,
+            ownership,
+            module_ownership,
+            param_order,
+        )
+    };
+    match comp {
+        CompExpr::Call {
+            ref callee,
+            ref args,
+            ..
+        } => {
+            let drops = tail_call_self_dropped_params(
+                self_name,
+                callee,
+                args,
+                ownership,
+                owned_params,
+                module_ownership,
+                param_order,
+            );
+            if drops.is_empty() {
+                return comp;
+            }
+            let drop_stmts: Vec<CompExpr> = drops
+                .into_iter()
+                .map(|p| CompExpr::Drop {
+                    value: Box::new(ValueExpr::Var(p.to_string())),
+                })
+                .collect();
+            CompExpr::Seq {
+                stmts: drop_stmts,
+                tail: Box::new(comp),
+            }
+        }
+        CompExpr::Let {
+            name,
+            ty,
+            value,
+            body,
+        } => {
+            // params consumed by the bound expression are no longer live in the body
+            let remaining: Vec<String> = owned_params
+                .iter()
+                .filter(|p| !comp_consumes_name(&value, p, module_ownership, param_order))
+                .cloned()
+                .collect();
+            CompExpr::Let {
+                name,
+                ty,
+                value: Box::new(recurse(*value)),
+                body: Box::new(insert_self_tail_call_param_drops_comp(
+                    *body,
+                    self_name,
+                    &remaining,
+                    ownership,
+                    module_ownership,
+                    param_order,
+                )),
+            }
+        }
+        CompExpr::LetMut {
+            name,
+            ty,
+            value,
+            body,
+        } => {
+            let remaining: Vec<String> = owned_params
+                .iter()
+                .filter(|p| !comp_consumes_name(&value, p, module_ownership, param_order))
+                .cloned()
+                .collect();
+            CompExpr::LetMut {
+                name,
+                ty,
+                value: Box::new(recurse(*value)),
+                body: Box::new(insert_self_tail_call_param_drops_comp(
+                    *body,
+                    self_name,
+                    &remaining,
+                    ownership,
+                    module_ownership,
+                    param_order,
+                )),
+            }
+        }
+        CompExpr::Seq { stmts, tail } => {
+            // accumulate consumed params across stmts
+            let mut remaining = owned_params.to_vec();
+            let new_stmts: Vec<CompExpr> = stmts
+                .into_iter()
+                .map(|stmt| {
+                    let s = insert_self_tail_call_param_drops_comp(
+                        stmt.clone(),
+                        self_name,
+                        &remaining,
+                        ownership,
+                        module_ownership,
+                        param_order,
+                    );
+                    remaining
+                        .retain(|p| !comp_consumes_name(&stmt, p, module_ownership, param_order));
+                    s
+                })
+                .collect();
+            CompExpr::Seq {
+                stmts: new_stmts,
+                tail: Box::new(insert_self_tail_call_param_drops_comp(
+                    *tail,
+                    self_name,
+                    &remaining,
+                    ownership,
+                    module_ownership,
+                    param_order,
+                )),
+            }
+        }
+        CompExpr::If { cond, then_, else_ } => CompExpr::If {
+            cond,
+            then_: Box::new(recurse(*then_)),
+            else_: Box::new(recurse(*else_)),
+        },
+        CompExpr::Case { scrutinee, arms } => CompExpr::Case {
+            scrutinee,
+            arms: arms
+                .into_iter()
+                .map(|arm| IrCaseArm {
+                    pattern: arm.pattern,
+                    body: recurse(arm.body),
+                })
+                .collect(),
+        },
+        CompExpr::Value(_)
+        | CompExpr::Assign { .. }
+        | CompExpr::AssignIndex { .. }
+        | CompExpr::Drop { .. }
+        | CompExpr::DropReuse { .. }
+        | CompExpr::Dup { .. }
+        | CompExpr::AllocReuse { .. }
+        | CompExpr::PerformEffect { .. }
+        | CompExpr::Resume { .. }
+        | CompExpr::Handle { .. }
+        | CompExpr::WithHandler { .. } => comp,
     }
 }
 
@@ -1301,21 +1620,163 @@ fn prepend_drop(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr, usize
 }
 
 fn append_drop_preserving_result(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr, usize) {
-    let tmp = format!("__perceus_drop_tmp_{next_tmp}");
-    (
+    // Insert Drop(name) at every tail position in `body` so that tail-calls
+    // (which never return to the current frame) still execute the drop.
+    insert_drop_at_tail(name, body, next_tmp)
+}
+
+/// Insert `Drop(name)` immediately before every "terminal" expression in `body`.
+///
+/// This ensures the drop runs on every execution path including tail-calls
+/// (Wasm `return_call`), which skip the caller frame entirely.
+///
+/// Rules:
+/// - `Value(_)` — prepend Drop.
+/// - `Call { .. }` where `name` not in args/callee — prepend Drop.
+/// - `Call { .. }` where `name` in args/callee — wrap: `let tmp = call in Drop; tmp`.
+/// - `PerformEffect` — same as Call.
+/// - `Let { name: n, .. }` — if `n == name`, stop (shadowed); else recurse into body.
+/// - `LetMut` — same as Let.
+/// - `Seq { tail, .. }` — recurse into tail.
+/// - `If` / `Case` — recurse into every branch.
+/// - Other statements — prepend Drop (conservative).
+fn insert_drop_at_tail(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr, usize) {
+    let mut next_tmp = next_tmp;
+    let recurse = |c, t: &mut usize| {
+        let (out, nt) = insert_drop_at_tail(name, c, *t);
+        *t = nt;
+        out
+    };
+    let prepend = |c: CompExpr| CompExpr::Seq {
+        stmts: vec![CompExpr::Drop {
+            value: Box::new(ValueExpr::Var(name.to_string())),
+        }],
+        tail: Box::new(c),
+    };
+    let wrap_after_call = |c: CompExpr, t: &mut usize| {
+        let tmp = format!("__perceus_drop_tmp_{}", *t);
+        *t += 1;
         CompExpr::Let {
             name: tmp.clone(),
             ty: crate::ir::IrType::Unknown,
-            value: Box::new(body),
+            value: Box::new(c),
             body: Box::new(CompExpr::Seq {
                 stmts: vec![CompExpr::Drop {
                     value: Box::new(ValueExpr::Var(name.to_string())),
                 }],
                 tail: Box::new(CompExpr::Value(ValueExpr::Var(tmp))),
             }),
-        },
-        next_tmp + 1,
-    )
+        }
+    };
+    let result = match body {
+        CompExpr::Value(_) => prepend(body),
+        CompExpr::Call {
+            ref callee,
+            ref args,
+            ..
+        } => {
+            let name_in_call = value_mentions_name(callee, name)
+                || args.iter().any(|a| value_mentions_name(a, name));
+            if name_in_call {
+                wrap_after_call(body, &mut next_tmp)
+            } else {
+                prepend(body)
+            }
+        }
+        CompExpr::PerformEffect { ref args, .. } => {
+            let name_in_args = args.iter().any(|a| value_mentions_name(a, name));
+            if name_in_args {
+                wrap_after_call(body, &mut next_tmp)
+            } else {
+                prepend(body)
+            }
+        }
+        CompExpr::Let {
+            name: n,
+            ty,
+            value,
+            body,
+        } => {
+            if n == name {
+                CompExpr::Let {
+                    name: n,
+                    ty,
+                    value,
+                    body,
+                }
+            } else {
+                let new_body = recurse(*body, &mut next_tmp);
+                CompExpr::Let {
+                    name: n,
+                    ty,
+                    value,
+                    body: Box::new(new_body),
+                }
+            }
+        }
+        CompExpr::LetMut {
+            name: n,
+            ty,
+            value,
+            body,
+        } => {
+            if n == name {
+                CompExpr::LetMut {
+                    name: n,
+                    ty,
+                    value,
+                    body,
+                }
+            } else {
+                let new_body = recurse(*body, &mut next_tmp);
+                CompExpr::LetMut {
+                    name: n,
+                    ty,
+                    value,
+                    body: Box::new(new_body),
+                }
+            }
+        }
+        CompExpr::Seq { stmts, tail } => {
+            let new_tail = recurse(*tail, &mut next_tmp);
+            CompExpr::Seq {
+                stmts,
+                tail: Box::new(new_tail),
+            }
+        }
+        CompExpr::If { cond, then_, else_ } => {
+            let new_then = recurse(*then_, &mut next_tmp);
+            let new_else = recurse(*else_, &mut next_tmp);
+            CompExpr::If {
+                cond,
+                then_: Box::new(new_then),
+                else_: Box::new(new_else),
+            }
+        }
+        CompExpr::Case { scrutinee, arms } => {
+            let new_arms = arms
+                .into_iter()
+                .map(|arm| IrCaseArm {
+                    pattern: arm.pattern,
+                    body: recurse(arm.body, &mut next_tmp),
+                })
+                .collect();
+            CompExpr::Case {
+                scrutinee,
+                arms: new_arms,
+            }
+        }
+        CompExpr::Drop { .. }
+        | CompExpr::DropReuse { .. }
+        | CompExpr::Dup { .. }
+        | CompExpr::Assign { .. }
+        | CompExpr::AssignIndex { .. }
+        | CompExpr::AllocReuse { .. }
+        | CompExpr::Resume { .. }
+        | CompExpr::Handle { .. }
+        | CompExpr::WithHandler { .. } => prepend(body),
+    };
+    (result, next_tmp)
 }
 
 fn balance_if_branch_drops(

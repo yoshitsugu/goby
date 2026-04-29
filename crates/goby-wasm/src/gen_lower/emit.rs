@@ -3865,6 +3865,7 @@ fn emit_helper_call(
                     "gen_lower/emit: intrinsic '{intrinsic:?}' requires heap helper state"
                 ),
             })?,
+            ctx.goby_drop_func_idx,
         ),
         BackendIntrinsic::ListLength => emit_list_length_helper(
             function,
@@ -4158,27 +4159,6 @@ fn emit_function_body(
     // (Perceus plan §3.1: refcount is i64, Goby is memory64-only).
     if !emit_epilogue_cursor_sync && options.memory_config.memory64 {
         let pw = PtrWidth::W64;
-        // Copy total_bytes → peak_bytes (M2 placeholder; M3 will wire real peak tracking).
-        function.instruction(&ptr_const(pw, GLOBAL_PEAK_BYTES_OFFSET as u64));
-        function.instruction(&ptr_const(pw, GLOBAL_ALLOC_BYTES_TOTAL_OFFSET as u64));
-        function.instruction(&Instruction::I64Load(MemArg {
-            offset: 0,
-            align: 3,
-            memory_index: 0,
-        }));
-        function.instruction(&Instruction::I64Store(MemArg {
-            offset: 0,
-            align: 3,
-            memory_index: 0,
-        }));
-        // Keep the frozen M2 stats contract stable until M3 wires a real counter.
-        function.instruction(&ptr_const(pw, GLOBAL_FREE_LIST_HITS_OFFSET as u64));
-        function.instruction(&Instruction::I64Const(0));
-        function.instruction(&Instruction::I64Store(MemArg {
-            offset: 0,
-            align: 3,
-            memory_index: 0,
-        }));
         if options.debug_alloc_stats {
             emit_alloc_stats_line(function, layout, pw, stats_scratch_base);
         }
@@ -8069,6 +8049,7 @@ fn emit_list_push_string_helper(
 fn emit_list_concat_helper(
     function: &mut Function,
     helper_state: &HeapEmitState,
+    goby_drop_func_idx: u32,
 ) -> Result<(), CodegenError> {
     let pw = helper_state.pw();
     // Chunked layout: concatenate two chunked lists into a new chunked list.
@@ -8329,8 +8310,9 @@ fn emit_list_concat_helper(
         memory_index: 0,
     }));
     function.instruction(&Instruction::End); // if/else result: elem (i64) on stack
-    // Save elem to tail_i64 scratch (reuse; we're done reading tail_i64 by now)
-    function.instruction(&Instruction::LocalSet(tail_i64));
+    // Save elem to prefix_i64 scratch (prefix_i64 is free after decode above).
+    // tail_i64 must remain unchanged so we can Drop the original tail list below.
+    function.instruction(&Instruction::LocalSet(prefix_i64));
 
     // Write elem to dst: dst_chunk = dst_header[8 + (global_iter/CHUNK_SIZE)*4]
     function.instruction(&Instruction::LocalGet(s_dst_header));
@@ -8358,7 +8340,7 @@ fn emit_list_concat_helper(
     function.instruction(&ptr_const(pw, 8));
     function.instruction(&ptr_mul(pw));
     function.instruction(&ptr_add(pw));
-    function.instruction(&Instruction::LocalGet(tail_i64)); // elem value (i64) on top
+    function.instruction(&Instruction::LocalGet(prefix_i64)); // elem value (i64) on top
     function.instruction(&Instruction::I64Store(MemArg {
         offset: chunk_item_offset_pw(pw, 0) as u64,
         align: 3,
@@ -8418,6 +8400,11 @@ fn emit_list_concat_helper(
     ));
 
     emit_push_tagged_ptr(function, s_dst_header, TAG_LIST, pw);
+
+    // Drop the tail (spread source): ownership of the tail is consumed by the concat.
+    function.instruction(&Instruction::LocalGet(tail_i64));
+    function.instruction(&Instruction::Call(goby_drop_func_idx));
+
     Ok(())
 }
 
