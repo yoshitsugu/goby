@@ -596,6 +596,36 @@ Output format: human-readable (default) and JSON lines (`--json`).
   known `Var` callees for borrowed-call classification, carries reuse
   metadata into lambda callback bodies, and wraps cell-promoted `each`
   roots with `drop_reuse` / `alloc_reuse(Retain)`.
+- **M9 partially complete (2026-04-28).** Opened when the full
+  real-world driver (many helpers, tail-recursive `check`, multiple
+  intermediate lists per round) still exhausted memory on a 138×138
+  grid. Stopgaps 3a (`type_is_known_heap` DI-1 stopgap) and 3c
+  (cell-promoted `each` reuse) landed in `d7c4092`, but the root
+  causes (DI-1 return ownership not reaching IR, DI-2 tail drops
+  demoting tail calls) remained open. M9 acceptance tests partially
+  red; rolled into M10.
+- **M10 complete (2026-04-30).** Closes M9 by fixing both design
+  issues:
+  - **DI-1:** `classify_decl_return_ownership` infers `Owned` vs
+    `Borrowed` from a declaration's body IR and seeds call-site
+    ownership before `drop_insert`. Replaces the M9 3a
+    `type_is_known_heap` stopgap.
+  - **DI-2:** `insert_drop_at_tail` preserves tail-call shape for
+    direct `Var` callee calls (C2) via pre-call `Dup/Drop`, keeps
+    conservative temp-wrap for `GlobalRef`/intrinsics/indirect (C3).
+  - **Conditional `list.map` ownership:** `__goby_list_map` results
+    are `Owned` only when the callback is proven owned-returning.
+  - **`ListGet` projection-borrow liveness:** parent list stays live
+    while a projected child reference is live.
+  Acceptance:
+  `perceus_real_world_driver_drops_intermediates_and_reuses_per_round`
+  passes; `alloc-baseline/real_world_driver.gb` ceiling `150049`.
+  Perceus Track E is now closed; remaining allocator work is
+  maintenance or future roadmap, not active milestone.
+- **Perceus Track E closed (2026-04-30).** M0–M10 complete.
+  Refcount + free-list + reuse is the steady-state allocator model.
+  Future collection work (GC, RRB-trees, linear/ownership types) is
+  deferred to Later-Phase decisions (see §3.1).
 
 - **M6 Step 5 (`stdlib/goby/list.gb` `set` reuse rewrite) — won't-fix.**
   Not on the acceptance path (the 200 KiB budget was met without it via
