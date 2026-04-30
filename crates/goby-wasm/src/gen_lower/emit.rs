@@ -3841,6 +3841,8 @@ fn emit_helper_call(
             function.instruction(&Instruction::Call(HOST_IMPORT_BASE_IDX + host_offset));
             if let Some(hs) = heap_state {
                 emit_return_if_runtime_error(function, hs);
+                emit_sync_cursor_from_global(function, hs.alloc_cursor_local, hs.pw());
+                emit_sync_floor_from_global(function, hs.heap_floor_local, hs.pw());
                 emit_clamp_heap_floor_to_host_bump_cursor(function, hs.heap_floor_local, hs.pw());
                 emit_sync_floor_to_global(function, hs.heap_floor_local, hs.pw());
             }
@@ -6476,6 +6478,37 @@ fn emit_goby_drop_function(
     function.instruction(&Instruction::End);
 
     // -----------------------------------------------------------------------
+    // TAG_STRING (0x3) — string payload drop.
+    //   layout: [len: i32][bytes...], allocated as payload+refcount aligned to 8.
+    //   String free-list reuse is not wired into alloc yet, so reaching rc=0
+    //   only removes the bytes from live accounting.
+    // -----------------------------------------------------------------------
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(TAG_STRING as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    {
+        push_payload(&mut function);
+        function.instruction(&Instruction::I32Load(MemArg {
+            offset: 0,
+            align: 2,
+            memory_index: 0,
+        }));
+        function.instruction(&Instruction::I64ExtendI32U);
+        function.instruction(&Instruction::I64Const(4));
+        function.instruction(&Instruction::I64Add);
+        function.instruction(&Instruction::I64Const(7));
+        function.instruction(&Instruction::I64Add);
+        function.instruction(&Instruction::I64Const(!7u64 as i64));
+        function.instruction(&Instruction::I64And);
+        function.instruction(&Instruction::I64Const(REFCOUNT_WORD_BYTES as i64));
+        function.instruction(&Instruction::I64Add);
+        function.instruction(&Instruction::LocalSet(l_n));
+        add_freed_bytes_dyn(&mut function);
+    }
+    function.instruction(&Instruction::End);
+
+    // -----------------------------------------------------------------------
     // TAG_RECORD (0x7): child-drop deferred (ctor_tag at offset 0; arity not in payload).
     // -----------------------------------------------------------------------
     function.instruction(&Instruction::LocalGet(l_tag));
@@ -6697,12 +6730,21 @@ fn emit_string_split_helper(
     function.instruction(&ptr_eqz(pw));
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
     emit_sync_cursor_to_global(function, helper_state.alloc_cursor_local, helper_state.pw());
+    emit_sync_floor_to_global(function, helper_state.heap_floor_local, helper_state.pw());
     function.instruction(&Instruction::LocalGet(text_i64));
     function.instruction(&Instruction::Call(
         HOST_IMPORT_BASE_IDX + graphemes_host_offset,
     ));
     function.instruction(&Instruction::LocalSet(sep_i64));
     emit_return_if_runtime_error(function, helper_state);
+    emit_sync_cursor_from_global(function, helper_state.alloc_cursor_local, helper_state.pw());
+    emit_sync_floor_from_global(function, helper_state.heap_floor_local, helper_state.pw());
+    emit_clamp_heap_floor_to_host_bump_cursor(
+        function,
+        helper_state.heap_floor_local,
+        helper_state.pw(),
+    );
+    emit_sync_floor_to_global(function, helper_state.heap_floor_local, helper_state.pw());
     function.instruction(&Instruction::Br(1));
     function.instruction(&Instruction::End);
 

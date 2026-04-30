@@ -6,8 +6,8 @@ This document is the roadmap for Goby's memory management — **Perceus-style
 reference counting with reuse analysis** (Reinking, Xie, de Moura, Leijen;
 PLDI 2021, as used in Koka, Lean 4, and Roc).
 
-**Status (2026-04-30 recheck): M10 remains open; the 138x138 memory
-exhaustion is split into M11.**
+**Status (2026-04-30 recheck): M10 IR boundary fixed; M11 host allocator
+unification implemented for active reductions.**
 
 - **M0 – M8 shipped.** The runtime layout, refcount + free-list discipline,
   static drop insertion, borrow inference, basic-block reuse, `mut`
@@ -19,15 +19,14 @@ exhaustion is split into M11.**
   test (`perceus_real_world_driver_drops_intermediates_and_reuses_per_round`)
   is green. The widening exposed two design fault lines (DI-1 / DI-2)
   recorded in §4.99.
-- **M10 focused fixes landed, but one IR boundary remains.** DI-2 is green,
-  and the failed naive `GlobalRef` promotion proved that local-shadowed field
-  projections must distinguish immutable `Let` parents from `LetMut` parents.
-  M10 now re-closes only that Perceus IR boundary; see §4.100.
-- **M11 is opened for host-intrinsic allocator unification.** The original
-  138x138 real-world driver still exhausts Wasm memory because seven
-  `goby:runtime/track-e` host imports allocate into a monotonic host bump
-  arena that `__goby_drop` cannot free and alloc stats do not count. This is
-  below the Perceus IR layer; see §4.101.
+- **M10 focused fixes landed.** DI-2 is green, and local-shadowed field
+  projections now distinguish immutable `Let` parents from `LetMut` parents.
+  See §4.100.
+- **M11 host-intrinsic allocator unification implemented for active
+  reductions.** Host imports that return escaping Goby values allocate into
+  the refcounted heap and update allocation stats. Both the 138x138
+  `read_lines () -> list.map graphemes` reduction and the full BUGS.md
+  real-world-driver shape run under 256 MiB. See §4.101.
 
 Two long-deferred checkboxes are tracked but **won't-fix** under this
 plan; the rationale and re-open conditions live in `doc/PLAN.md` §4.2:
@@ -884,15 +883,15 @@ re-assigned.
 
 Hard gates:
 
-- [ ] `return_ownership_local_shadowed_global_ref_with_owned_local_is_owned`
+- [x] `return_ownership_local_shadowed_global_ref_with_owned_local_is_owned`
       is un-ignored and green.
-- [ ] The two conservative `GlobalRef` tests stay green:
+- [x] The two conservative `GlobalRef` tests stay green:
       `return_ownership_local_shadowed_global_ref_with_borrowed_local_is_borrowed`
       and `return_ownership_global_ref_without_local_shadow_remains_borrowed`.
-- [ ] `recursive_multi_part_interpolated_print_after_graphemes_executes` stays
+- [x] `recursive_multi_part_interpolated_print_after_graphemes_executes` stays
       green; `debug` must not regress to `debtg`.
 - [x] DI-2 tail-position drop demotion remains eliminated.
-- [ ] `cargo test --release -p goby-core perceus` and the focused
+- [x] `cargo test --release -p goby-core perceus` and the focused
       `goby-wasm` regression set for graphemes / split / walk / rr3 are green.
 
 Historical note: the detailed DI-1 decl-return-ownership draft below was the
@@ -1616,21 +1615,21 @@ tagged values that can reach Goby code.
 
 Hard gates:
 
-- [ ] `perceus_m10_graphemes_single_call_emits_free_list_hits` is un-ignored
-      and green. The test name may remain historical; the gate belongs to M11.
-- [ ] `perceus_m10_list_map_graphemes_138_lines_runs_under_256mib` is
-      un-ignored and green.
-- [ ] The original `doc/BUGS.md` 2026-04-30 138x138 driver is automated or
+- [x] `perceus_m11_graphemes_single_call_reports_host_alloc_stats` is active
+      and green.
+- [x] `perceus_m11_list_map_graphemes_138_lines_runs_under_256mib` is active
+      and green.
+- [x] The original `doc/BUGS.md` 2026-04-30 138x138 driver is automated or
       otherwise reproducibly exercised under `--max-memory-mb 256`, then moved
       Open -> Resolved.
-- [ ] `--debug-alloc-stats` observes host-created heap values: the reduced
+- [x] `--debug-alloc-stats` observes host-created heap values: the reduced
       string/list drivers report non-zero `total_bytes`, and dropping them
       eventually produces free-list or freed-byte evidence rather than silent
       host-bump growth.
-- [ ] Existing Perceus regression tests remain green, especially
+- [x] Existing Perceus regression tests remain green, especially
       `recursive_multi_part_interpolated_print_after_graphemes_executes` and
       the M10 Let/LetMut `GlobalRef` tests.
-- [ ] Repository quality gate: `cargo fmt`, `cargo check`, and
+- [x] Repository quality gate: `cargo fmt`, `cargo check`, and
       `cargo test --workspace --release`.
 
 ### M11 invariants

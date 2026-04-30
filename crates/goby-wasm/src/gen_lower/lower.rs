@@ -328,6 +328,114 @@ pub(crate) fn lower_supported_self_recursive_int_list_fold(
     ]))
 }
 
+pub(crate) fn lower_supported_case_reverse_prepend_acc_builder(
+    decl_name: &str,
+    comp: &CompExpr,
+    decl_params: &[String],
+    known_decls: &HashSet<String>,
+    _lambda_decls: &mut Vec<LambdaAuxDecl>,
+) -> Result<Option<Vec<WasmBackendInstr>>, LowerError> {
+    let CompExpr::Case { scrutinee, arms } = comp else {
+        return Ok(None);
+    };
+    let ValueExpr::Var(list_param) = scrutinee.as_ref() else {
+        return Ok(None);
+    };
+    let Some(acc_param) = decl_params.iter().find(|param| *param != list_param) else {
+        return Ok(None);
+    };
+    if decl_params.len() != 2 || arms.len() != 2 {
+        return Ok(None);
+    }
+
+    let mut empty_arm_body = None;
+    let mut cons_head = None;
+    let mut cons_tail = None;
+    let mut cons_body = None;
+    for arm in arms {
+        match &arm.pattern {
+            IrCasePattern::EmptyList => {
+                empty_arm_body = Some(&arm.body);
+            }
+            IrCasePattern::ListPattern { items, tail } if items.len() == 1 => {
+                let IrListPatternItem::Bind(head) = &items[0] else {
+                    return Ok(None);
+                };
+                let Some(IrListPatternTail::Bind(tail_name)) = tail else {
+                    return Ok(None);
+                };
+                cons_head = Some(head.as_str());
+                cons_tail = Some(tail_name.as_str());
+                cons_body = Some(&arm.body);
+            }
+            _ => return Ok(None),
+        }
+    }
+    if !matches!(empty_arm_body, Some(CompExpr::Value(ValueExpr::Var(name))) if name == acc_param) {
+        return Ok(None);
+    }
+    let Some(head_name) = cons_head else {
+        return Ok(None);
+    };
+    let Some(tail_name) = cons_tail else {
+        return Ok(None);
+    };
+    let Some(CompExpr::Call { callee, args, .. }) = cons_body else {
+        return Ok(None);
+    };
+    if !is_self_decl_callee(callee, decl_name) || args.len() != 2 {
+        return Ok(None);
+    }
+    if !matches!(&args[0], ValueExpr::Var(name) if name == tail_name) {
+        return Ok(None);
+    }
+    let ValueExpr::ListLit { elements, spread } = &args[1] else {
+        return Ok(None);
+    };
+    let Some(spread) = spread.as_deref() else {
+        return Ok(None);
+    };
+    if !matches!(spread, ValueExpr::Var(name) if name == acc_param)
+        || elements
+            .iter()
+            .any(|elem| value_expr_mentions_var(elem, acc_param))
+    {
+        return Ok(None);
+    }
+
+    let item_local = format!(
+        "__rr4_case_fold_item_{}",
+        RR4_FOLD_PREPEND_COUNTER.fetch_add(1, AtomicOrdering::Relaxed)
+    );
+    let bindings = ClosureBindingEnv::with_decl_params(decl_params.iter().map(String::as_str));
+    let prefix_element_instrs = elements
+        .iter()
+        .map(|elem| {
+            let renamed = rename_value_var(elem, head_name, &item_local);
+            lower_value_ctx(&renamed, &HashMap::new(), &bindings, known_decls)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Some(vec![
+        WasmBackendInstr::DeclareLocal {
+            name: item_local.clone(),
+        },
+        WasmBackendInstr::ListReverseFoldPrepend {
+            list_instrs: vec![WasmBackendInstr::LoadLocal {
+                name: list_param.clone(),
+            }],
+            item_local,
+            prefix_element_instrs,
+        },
+        WasmBackendInstr::LoadLocal {
+            name: acc_param.clone(),
+        },
+        WasmBackendInstr::Intrinsic {
+            intrinsic: BackendIntrinsic::ListConcat,
+        },
+    ]))
+}
+
 pub(crate) fn lower_supported_self_recursive_list_spread_builder(
     decl_name: &str,
     comp: &CompExpr,
@@ -818,7 +926,7 @@ fn lower_supported_inline_list_fold_prepend_builder(
     known_decls: &HashSet<String>,
     lambda_decls: &mut Vec<LambdaAuxDecl>,
 ) -> Result<Option<Vec<WasmBackendInstr>>, LowerError> {
-    if args.len() != 3 || !matches_empty_list_value(&args[1]) {
+    if args.len() != 3 {
         return Ok(None);
     }
     let ValueExpr::Lambda {
@@ -867,7 +975,7 @@ fn lower_supported_inline_list_fold_prepend_builder(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    Ok(Some(vec![
+    let mut instrs = vec![
         WasmBackendInstr::DeclareLocal {
             name: item_local.clone(),
         },
@@ -876,7 +984,22 @@ fn lower_supported_inline_list_fold_prepend_builder(
             item_local,
             prefix_element_instrs,
         },
-    ]))
+    ];
+
+    if !matches_empty_list_value(&args[1]) {
+        instrs.extend(lower_value_as_arg(
+            &args[1],
+            aliases,
+            bindings,
+            known_decls,
+            lambda_decls,
+        )?);
+        instrs.push(WasmBackendInstr::Intrinsic {
+            intrinsic: BackendIntrinsic::ListConcat,
+        });
+    }
+
+    Ok(Some(instrs))
 }
 
 /// Recognise the `each` + nested `AssignIndex` shape and lower the callback to use

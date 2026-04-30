@@ -4,8 +4,12 @@ This document tracks confirmed, reproducible bugs in the current Goby toolchain.
 
 Open bugs:
 
+- None currently.
+
+Resolved bugs:
+
 - **2026-04-30.** Perceus M10 was marked complete, but the original
-  138×138 real-world driver acceptance shape still exhausts Wasm memory.
+  138×138 real-world driver acceptance shape still exhausted Wasm memory.
 
   Confirmed repro:
 
@@ -16,7 +20,7 @@ Open bugs:
   2. Run a 138×138 stdin grid under:
      `goby run --debug-alloc-stats --max-memory-mb 256 <program.gb>`.
 
-  Result: `E-MEMORY-EXHAUSTION`. The failure also reproduces with a
+  Result was `E-MEMORY-EXHAUSTION`. The failure also reproduced with a
   138×138 all-`.` grid and with the default 1 GiB module ceiling, so the
   current 6×10 baseline fixture and 20×20 focused compile test do not cover
   the intended acceptance condition from `doc/PLAN_PERCEUS.md`.
@@ -29,7 +33,23 @@ Open bugs:
     exhausts memory, so the next investigation should start around the
     read-lines/graphemes/list-map boundary and then re-run the full driver.
 
-Resolved bugs:
+  Fixes (Perceus M11):
+
+  1. Host imports that return escaping Goby strings/lists now allocate in the
+     refcounted heap instead of the monotonic host bump arena, and generated
+     Wasm reloads the shared heap cursor/floor after host calls.
+  2. The legacy host bump cursor is zero-initialized when the bump arena is not
+     used, so floor clamping no longer forces every later Wasm allocation to
+     grow memory.
+  3. Fold-prepend lowering now handles non-empty accumulators and
+     case-recursive reverse-prepend helpers, avoiding repeated list-spread
+     copies in the full `flatten` driver.
+
+  Acceptance:
+
+  - `perceus_m11_list_map_graphemes_138_lines_runs_under_256mib` passes.
+  - `perceus_m11_real_world_driver_138_grid_runs_under_256mib` passes with a
+    138×138 all-`.` stdin grid and `max_pages=4096` (256 MiB).
 
 - **2026-04-30.** `goby run` exhausted the 1 GiB Wasm memory limit on a
   multi-round driver that repeatedly rebuilt a flat grid. Root causes

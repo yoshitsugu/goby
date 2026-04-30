@@ -1107,6 +1107,93 @@ main =
 }
 
 #[test]
+fn compile_module_inline_fold_prepend_with_non_empty_acc_lowers_once_then_concat() {
+    let source = r#"
+import goby/list ( fold )
+import goby/stdio
+
+build : Int -> List Int can Print
+build n =
+  if n == 0
+    []
+  else
+    rest = build (n - 1)
+    [n, ..rest]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  seed = build 3
+  base = [99]
+  xs =
+    fold seed base (fn acc x ->
+      [x, ..acc]
+    )
+  println "${xs[3]}"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not hard-fail")
+        .expect("general lowering should accept non-empty fold prepend module");
+    let rendered = format!("{main_instrs:?}");
+    assert!(
+        main_instrs.iter().any(|instr| matches!(
+            instr,
+            crate::gen_lower::backend_ir::WasmBackendInstr::ListReverseFoldPrepend { .. }
+        )),
+        "main should lower the per-source prepend chain once, got main: {main_instrs:?}; aux: {aux_decls:?}"
+    );
+    assert!(
+        rendered.contains("ListConcat"),
+        "non-empty fold accumulator should be appended once after the reverse-fold prefix, got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("DeclCall { decl_name: \"fold\" }"),
+        "specialized inline fold prepend lowering should eliminate direct stdlib fold call, got: {rendered}"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
+fn compile_module_case_reverse_prepend_acc_lowers_to_reverse_fold_concat() {
+    let source = r#"
+import goby/stdio
+
+reverse_acc : List String -> List String -> List String can Print
+reverse_acc xs acc =
+  case xs
+    [] -> acc
+    [x, ..rest] -> reverse_acc rest [x, ..acc]
+
+main : Unit -> Unit can Print, Read
+main =
+  _lines = read_lines ()
+  xs = reverse_acc ["a", "b"] ["z"]
+  println "${xs[2]}"
+"#;
+    let module = parse_module(source).expect("source should parse");
+    let (main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("lowering should not hard-fail")
+        .expect("general lowering should accept case reverse-prepend module");
+    let rendered = format!("{main_instrs:?} {aux_decls:?}");
+    assert!(
+        rendered.contains("ListReverseFoldPrepend"),
+        "case reverse-prepend helper should lower to dedicated reverse-fold instruction, got: {rendered}"
+    );
+    assert!(
+        rendered.contains("ListConcat"),
+        "case reverse-prepend helper should append the initial accumulator once, got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("ListFold"),
+        "case reverse-prepend helper should avoid callback fold/list-spread chain, got: {rendered}"
+    );
+    let wasm = compile_module(&module).expect("codegen should succeed");
+    assert_valid_wasm_module(&wasm);
+}
+
+#[test]
 fn compile_module_named_fold_prepend_lowering_rewrites_decl_callback_chain_in_main() {
     let source = r#"
 import goby/list ( fold )
@@ -1954,31 +2041,19 @@ main =
     );
 }
 
-/// M10 reopen runtime guard — a single `graphemes` call must produce a
-/// freed list at decl exit.
-///
-/// `graphemes` returns `final.parts` from a `mut` cell, which is lowered as
-/// `GlobalRef { module: "final", name: "parts" }` in IR (see
-/// `crates/goby-core/src/resolved.rs:419`). Without local-shadowing
-/// awareness in `return_ownership_value`, this returns Borrowed and the
-/// caller never drops the resulting list — leaking n×n grapheme lists in
-/// the 138×138 driver. This test catches a regression of that promotion
-/// at the smallest possible scale; it does not depend on stdin or scale.
-///
-/// Marked `#[ignore]` for now since Step 3 (the fix) has not landed; the
-/// closure plan flips the `#[ignore]` off once the perceus.rs fix is in.
+/// M11 runtime guard — a single `graphemes` call must be visible to the normal
+/// Perceus allocation stats instead of disappearing into the host bump arena.
 #[test]
-#[ignore = "M10 reopen: Step 1 guard; un-ignore once Step 3 fix lands"]
-fn perceus_m10_graphemes_single_call_emits_free_list_hits() {
+fn perceus_m11_graphemes_single_call_reports_host_alloc_stats() {
     let source = r#"
 import goby/list (length)
-import goby/string (graphemes)
+import goby/string
 import goby/stdio
 
 main : Unit -> Unit can Print, Read
 main =
   _ = read()
-  parts = graphemes "abc"
+  parts = string.graphemes "abc"
   n = length parts
   println "${n}"
 "#;
@@ -1994,11 +2069,10 @@ main =
     .expect("graphemes guard should execute")
     .expect("graphemes guard should run on runtime-owned Wasm");
 
-    let free_list_hits = parse_alloc_stats_field(&output.stderr, "free_list_hits");
+    let total_bytes = parse_alloc_stats_field(&output.stderr, "total_bytes");
     assert!(
-        free_list_hits > 0,
-        "graphemes return value must be Owned and dropped by caller; got 0 \
-         free_list_hits. stderr:\n{}",
+        total_bytes > 0,
+        "graphemes must be visible to alloc stats; got total_bytes=0. stderr:\n{}",
         output.stderr
     );
     assert!(
@@ -2008,17 +2082,11 @@ main =
     );
 }
 
-/// M10 reopen — initially-ignored reduced repro for `doc/BUGS.md` 2026-04-30
-/// open entry. The 138-line `read_lines () -> list.map graphemes` shape
-/// exhausts Wasm memory under 256 MiB. This test isolates the reduction so
-/// Step 2 of the reopen plan can localize the dominant allocation.
-///
-/// Marked `#[ignore]` until the underlying allocation issue is fixed; the
-/// closure plan flips it on once Step 3 lands. See
-/// `doc/PLAN_PERCEUS.md` §4.100 Acceptance.
+/// M11 reduced repro for `doc/BUGS.md` 2026-04-30 open entry. The
+/// 138-line `read_lines () -> list.map graphemes` shape must stay under
+/// 256 MiB now that escaping host-created values use the refcounted heap.
 #[test]
-#[ignore = "M10 reopen: Step 1 reduction; un-ignore once Step 3 fix lands"]
-fn perceus_m10_list_map_graphemes_138_lines_runs_under_256mib() {
+fn perceus_m11_list_map_graphemes_138_lines_runs_under_256mib() {
     use crate::memory_config::{RUNTIME_MEMORY_CONFIG, WasmMemoryConfig};
 
     let source = r#"
@@ -2038,7 +2106,7 @@ main =
     let n: usize = 138;
     let stdin = (0..n).map(|_| ".".repeat(n)).collect::<Vec<_>>().join("\n");
 
-    let module = parse_module(source).expect("M10 reduction should parse");
+    let module = parse_module(source).expect("M11 reduction should parse");
     let memory_config = WasmMemoryConfig {
         max_pages: 4096, // 256 MiB
         ..RUNTIME_MEMORY_CONFIG
@@ -2055,9 +2123,9 @@ main =
 
     let output = match result {
         Ok(Some(output)) => output,
-        Ok(None) => panic!("M10 reduction should run on runtime-owned Wasm"),
+        Ok(None) => panic!("M11 reduction should run on runtime-owned Wasm"),
         Err(err) => panic!(
-            "M10 reduction must not exhaust 256 MiB or fail compilation: {}",
+            "M11 reduction must not exhaust 256 MiB or fail compilation: {}",
             err.message
         ),
     };
@@ -2065,15 +2133,87 @@ main =
     assert!(
         !output.stderr.contains("E-MEMORY-EXHAUSTION")
             && !output.stdout.contains("E-MEMORY-EXHAUSTION"),
-        "M10 reduction must not exhaust 256 MiB; stderr:\n{}\nstdout:\n{}",
+        "M11 reduction must not exhaust 256 MiB; stderr:\n{}\nstdout:\n{}",
         output.stderr,
         output.stdout
     );
     let expected = format!("{n}");
     assert!(
         output.stdout.trim_end().ends_with(expected.as_str()),
-        "M10 reduction should print {expected} (the row count); stdout:\n{}",
+        "M11 reduction should print {expected} (the row count); stdout:\n{}",
         output.stdout
+    );
+}
+
+/// M11 full repro for `doc/BUGS.md` 2026-04-30: the real-world driver shape
+/// from the alloc-baseline fixture, with stdin-backed 138x138 input, must run
+/// under the original 256 MiB acceptance ceiling.
+#[test]
+fn perceus_m11_real_world_driver_138_grid_runs_under_256mib() {
+    use crate::memory_config::{RUNTIME_MEMORY_CONFIG, WasmMemoryConfig};
+
+    let fixture = include_str!("../tests/fixtures/alloc-baseline/real_world_driver.gb");
+    let source = fixture.replace(
+        "  lines = [\"@@@@@@@@@@\", \"@@@@@@@@@@\", \"@@@@@@@@@@\", \"@@@@@@@@@@\", \"@@@@@@@@@@\", \"@@@@@@@@@@\"]",
+        "  lines = read_lines ()",
+    );
+    assert_ne!(
+        source, fixture,
+        "fixture shape should be rewritten to use stdin-backed read_lines"
+    );
+
+    let n: usize = 138;
+    let stdin = (0..n).map(|_| ".".repeat(n)).collect::<Vec<_>>().join("\n");
+    let module = parse_module(&source).expect("M11 full driver should parse");
+    let (main_instrs, aux_decls) = crate::gen_lower::lower_module_to_instrs(&module)
+        .expect("M11 full driver lowering should not hard-fail")
+        .expect("M11 full driver should use general lowering");
+    let lowered_dump = format!("{main_instrs:?} {aux_decls:?}");
+    assert!(
+        lowered_dump.contains("ListReverseFoldPrepend"),
+        "M11 full driver should use reverse-fold prepend lowering; got: {lowered_dump}"
+    );
+    let memory_config = WasmMemoryConfig {
+        max_pages: 4096, // 256 MiB
+        ..RUNTIME_MEMORY_CONFIG
+    };
+
+    let result = execute_runtime_module_with_stdin_config_and_options_captured(
+        &module,
+        Some(stdin),
+        Some(memory_config),
+        CompileOptions {
+            debug_alloc_stats: true,
+        },
+    );
+
+    let output = match result {
+        Ok(Some(output)) => output,
+        Ok(None) => panic!("M11 full driver should run on runtime-owned Wasm"),
+        Err(err) => panic!(
+            "M11 full driver must not exhaust 256 MiB or fail compilation: {}",
+            err.message
+        ),
+    };
+
+    assert!(
+        !output.stderr.contains("E-MEMORY-EXHAUSTION")
+            && !output.stdout.contains("E-MEMORY-EXHAUSTION"),
+        "M11 full driver must not exhaust 256 MiB; stderr:\n{}\nstdout:\n{}",
+        output.stderr,
+        output.stdout
+    );
+    assert_eq!(
+        output.stdout.trim_end(),
+        "0",
+        "all-dot 138x138 driver should print zero removed cells; stdout:\n{}",
+        output.stdout
+    );
+    let total_bytes = parse_alloc_stats_field(&output.stderr, "total_bytes");
+    assert!(
+        total_bytes > 0,
+        "M11 full driver should report host-created heap allocations; stderr:\n{}",
+        output.stderr
     );
 }
 

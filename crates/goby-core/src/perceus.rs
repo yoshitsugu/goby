@@ -17,6 +17,25 @@ enum OwnershipClass {
     Borrowed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReturnBindingKind {
+    ImmutableLet,
+    MutableLet,
+    ParamOrUnknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ReturnBinding {
+    ownership: OwnershipClass,
+    kind: ReturnBindingKind,
+}
+
+impl ReturnBinding {
+    fn new(ownership: OwnershipClass, kind: ReturnBindingKind) -> Self {
+        Self { ownership, kind }
+    }
+}
+
 pub fn assert_perceus_pipeline_order(pass_names: &[&'static str]) {
     assert_eq!(
         pass_names, EXPECTED_PIPELINE,
@@ -901,7 +920,10 @@ fn callback_returns_owned(
 ) -> bool {
     match callback {
         ValueExpr::Lambda { param, body } => {
-            let mut env = HashMap::from([(param.clone(), OwnershipClass::Borrowed)]);
+            let mut env = HashMap::from([(
+                param.clone(),
+                ReturnBinding::new(OwnershipClass::Borrowed, ReturnBindingKind::ParamOrUnknown),
+            )]);
             return_ownership_comp(body, &mut env, decl_returns) == OwnershipClass::Owned
         }
         ValueExpr::GlobalRef { name, .. } => {
@@ -978,18 +1000,18 @@ const HEAP_RETURNING_INTRINSICS: &[&str] = &[
     // its elements; that is only safe when the callback returns owned values.
     // `classify_call_result_ownership` handles map at the call site where the
     // callback argument is visible.
+    "__goby_value_to_string",
+    "__goby_string_concat",
+    "__goby_list_join_string",
+    "__goby_string_graphemes_list",
+    "__goby_string_split_lines",
     // Intentionally omitted (in-place / consume-and-return idioms):
     // - `__goby_list_push_string`: returns the same heap reference as
     //   arg-0 when there is room to push in place.
-    // - `__goby_list_join_string`, `__goby_string_concat`,
-    //   `__goby_string_graphemes_list`, `__goby_string_split_lines`,
-    //   `__goby_env_fetch_env_var`: deferred because graphemes-pipeline
-    //   regressions during Step 1b suggest at least one of these
-    //   intrinsics consumes its arg or returns an aliased reference.
-    //   Conservative Borrowed retains pre-M10 behaviour while the
-    //   per-intrinsic ownership semantics are documented and verified
-    //   one at a time. Re-add an entry only with a regression test in
-    //   the same commit.
+    // - `__goby_string_each_grapheme_state`: may return an in-place slice
+    //   into the source string instead of allocating.
+    // - `__goby_env_fetch_env_var`: not audited in the M11 host allocator
+    //   slice.
 ];
 
 /// Per-decl ownership of the returned reference (M10 §4.100 Step 1).
@@ -1046,10 +1068,13 @@ fn classify_decl_return_ownership(
         let snapshot = returns.clone();
         let mut changed = false;
         for decl in &module.decls {
-            let mut env: HashMap<String, OwnershipClass> = HashMap::new();
+            let mut env: HashMap<String, ReturnBinding> = HashMap::new();
             if let Some(params) = param_ownership.get(&decl.name) {
                 for (name, class) in params {
-                    env.insert(name.clone(), *class);
+                    env.insert(
+                        name.clone(),
+                        ReturnBinding::new(*class, ReturnBindingKind::ParamOrUnknown),
+                    );
                 }
             }
             let class = return_ownership_comp(&decl.body, &mut env, &snapshot);
@@ -1076,19 +1101,38 @@ fn classify_decl_return_ownership(
 /// effectively pure on `env` once it returns.
 fn return_ownership_comp(
     comp: &CompExpr,
-    env: &mut HashMap<String, OwnershipClass>,
+    env: &mut HashMap<String, ReturnBinding>,
     returns: &HashMap<String, OwnershipClass>,
 ) -> OwnershipClass {
     match comp {
         CompExpr::Value(value) => return_ownership_value(value, env, returns),
         CompExpr::Let {
             name, value, body, ..
+        } => {
+            let value_class = return_ownership_comp(value, env, returns);
+            let previous = env.insert(
+                name.clone(),
+                ReturnBinding::new(value_class, ReturnBindingKind::ImmutableLet),
+            );
+            let result = return_ownership_comp(body, env, returns);
+            match previous {
+                Some(prev) => {
+                    env.insert(name.clone(), prev);
+                }
+                None => {
+                    env.remove(name);
+                }
+            }
+            result
         }
-        | CompExpr::LetMut {
+        CompExpr::LetMut {
             name, value, body, ..
         } => {
             let value_class = return_ownership_comp(value, env, returns);
-            let previous = env.insert(name.clone(), value_class);
+            let previous = env.insert(
+                name.clone(),
+                ReturnBinding::new(value_class, ReturnBindingKind::MutableLet),
+            );
             let result = return_ownership_comp(body, env, returns);
             match previous {
                 Some(prev) => {
@@ -1116,9 +1160,12 @@ fn return_ownership_comp(
             for arm in arms {
                 // Pattern-bound names own the projected sub-parts.
                 let pattern_binders = collect_pattern_bindings(&arm.pattern);
-                let mut shadowed: Vec<(String, Option<OwnershipClass>)> = Vec::new();
+                let mut shadowed: Vec<(String, Option<ReturnBinding>)> = Vec::new();
                 for name in &pattern_binders {
-                    let prev = env.insert(name.clone(), OwnershipClass::Owned);
+                    let prev = env.insert(
+                        name.clone(),
+                        ReturnBinding::new(OwnershipClass::Owned, ReturnBindingKind::ImmutableLet),
+                    );
                     shadowed.push((name.clone(), prev));
                 }
                 let arm_class = return_ownership_comp(&arm.body, env, returns);
@@ -1180,11 +1227,14 @@ fn return_ownership_comp(
 #[allow(dead_code)]
 fn return_ownership_value(
     value: &ValueExpr,
-    env: &HashMap<String, OwnershipClass>,
+    env: &HashMap<String, ReturnBinding>,
     returns: &HashMap<String, OwnershipClass>,
 ) -> OwnershipClass {
     match value {
-        ValueExpr::Var(name) => env.get(name).copied().unwrap_or(OwnershipClass::Borrowed),
+        ValueExpr::Var(name) => env
+            .get(name)
+            .map(|binding| binding.ownership)
+            .unwrap_or(OwnershipClass::Borrowed),
         // `GlobalRef` in *value* position is a *reference to* a module
         // decl (used as a first-class function value). It is **not** the
         // decl's return value; that would require a `Call` form. We must
@@ -1193,19 +1243,18 @@ fn return_ownership_value(
         // classify as `Owned` and the caller would emit a Drop on a
         // function reference.
         //
-        // NOTE (2026-04-30 M10 reopen): `crates/goby-core/src/resolved.rs:419`
-        // lowers `local.field` record-field projections as
-        // `GlobalRef { module: <local_name>, name: <field_name> }`. A naive
-        // promotion to `env[module]` works for immutable `Let` parents but
-        // is *unsafe* when the parent is a `LetMut` cell (the `graphemes`
-        // case): caller-side Drop of the projected field then races with
-        // the next `mut := ...` re-assignment, producing use-after-free
-        // (`debug` rendered as `debtg` in
-        // `recursive_multi_part_interpolated_print_after_graphemes_executes`).
-        // A correct fix needs to distinguish Let vs. LetMut binders in env
-        // and is parked behind the runtime-layer leak audit (see
-        // doc/STATE.md "Hypothesis").
-        ValueExpr::GlobalRef { .. } => OwnershipClass::Borrowed,
+        // In value position a `GlobalRef` is normally a reference to a module
+        // member, not a call result. The exception is the current lowering of
+        // `local.field`, which is encoded as `GlobalRef { module: local, ... }`.
+        // Promote only immutable owned locals; `LetMut` parents can be
+        // re-assigned after the projection read and must stay borrowed.
+        ValueExpr::GlobalRef { module, .. } => match env.get(module) {
+            Some(ReturnBinding {
+                ownership: OwnershipClass::Owned,
+                kind: ReturnBindingKind::ImmutableLet,
+            }) => OwnershipClass::Owned,
+            _ => OwnershipClass::Borrowed,
+        },
         ValueExpr::ListLit { spread: None, .. } => OwnershipClass::Owned,
         ValueExpr::ListLit {
             spread: Some(s), ..
@@ -4966,8 +5015,6 @@ mod tests {
     // -------------------------------------------------------------------
 
     #[test]
-    #[ignore = "M10 reopen: pending Let vs. LetMut distinction; \
-                see doc/STATE.md Hypothesis"]
     fn return_ownership_local_shadowed_global_ref_with_owned_local_is_owned() {
         // (i) `final.parts` where `final` is a let-bound local of an
         //     Owned-classifying value (a fresh RecordLit with an Owned
@@ -4979,12 +5026,8 @@ mod tests {
         //     final.parts
         //   ```
         //
-        //   This boundary is *desirable* for `stdlib::graphemes`-shape
-        //   programs but cannot be enabled blindly: the same lowering is
-        //   used for `LetMut` parents, where Owned promotion is unsafe
-        //   (use-after-free across `mut := ...`). The test stays
-        //   `#[ignore]`d as a forward-looking spec until the Let/LetMut
-        //   distinction lands.
+        //   This boundary is allowed only for immutable `Let` parents. The
+        //   sibling LetMut test below pins the unsafe mutable-cell case.
         let module = IrModule {
             decls: vec![IrDecl {
                 name: "wrap".to_string(),
@@ -5017,6 +5060,48 @@ mod tests {
             }],
         };
         assert_eq!(return_ownership_for("wrap", &module), OwnershipClass::Owned);
+    }
+
+    #[test]
+    fn return_ownership_local_shadowed_global_ref_with_owned_let_mut_is_borrowed() {
+        // `mut final = ...; final.parts` must not transfer ownership from the
+        // parent cell. The cell may be re-assigned after a projection read, so
+        // caller-side Drop of the projected field can race with later writes.
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "wrap_mut".to_string(),
+                params: vec![("_".to_string(), IrType::Unit)],
+                result_ty: list_int_ty(),
+                residual_effects: vec![],
+                reuse_param: None,
+                body: CompExpr::LetMut {
+                    name: "final".to_string(),
+                    ty: IrType::Unknown,
+                    value: Box::new(CompExpr::Value(ValueExpr::RecordLit {
+                        constructor: "SomeRecord".to_string(),
+                        fields: vec![(
+                            "parts".to_string(),
+                            ValueExpr::ListLit {
+                                elements: vec![
+                                    ValueExpr::IntLit(1),
+                                    ValueExpr::IntLit(2),
+                                    ValueExpr::IntLit(3),
+                                ],
+                                spread: None,
+                            },
+                        )],
+                    })),
+                    body: Box::new(CompExpr::Value(ValueExpr::GlobalRef {
+                        module: "final".to_string(),
+                        name: "parts".to_string(),
+                    })),
+                },
+            }],
+        };
+        assert_eq!(
+            return_ownership_for("wrap_mut", &module),
+            OwnershipClass::Borrowed
+        );
     }
 
     #[test]

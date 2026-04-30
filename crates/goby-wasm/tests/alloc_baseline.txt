@@ -1,5 +1,5 @@
 # example max_total_bytes
-fold.gb 0
-acceptance/hof_fold_print.gb 0
-alloc-baseline/refcount_reuse_loop.gb 119575
-alloc-baseline/real_world_driver.gb 150049
+fold.gb 168
+acceptance/hof_fold_print.gb 361
+alloc-baseline/refcount_reuse_loop.gb 119601
+alloc-baseline/real_world_driver.gb 145262

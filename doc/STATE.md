@@ -1,28 +1,33 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-30 (Perceus M10 reopen — root cause localized:
-host bump arena leaks via `goby:runtime/track-e` host imports)
+Last updated: 2026-04-30 (Perceus M10 IR boundary fixed; M11 138x138
+driver resolved)
 
 ## Current Focus
 
-Perceus M10 closure remains **reopened**. Re-closure work is **in
-progress**:
+Perceus M10's reopened IR boundary and the M11 138x138 memory
+exhaustion are now fixed:
 
-- A regression net (5 tests) is in place to pin the boundary that any
-  future fix must respect.
-- An attempted Perceus-IR-layer fix was implemented and **reverted**:
-  it produced a use-after-free in the existing test
-  `recursive_multi_part_interpolated_print_after_graphemes_executes`
-  (`debug` rendered as `debtg`). The fix did not correctly distinguish
-  immutable `Let` parents from `LetMut` parents and would race with
-  later `mut := ...` re-assignments.
-- The 138×138 real-world driver still exhausts Wasm memory under
-  both 256 MiB and the default 1 GiB ceiling.
-- The remaining leak likely lives below the Perceus IR layer (see
-  "Hypothesis" below).
+- `return_ownership_value` now distinguishes immutable `Let` parents
+  from `LetMut` parents for local-shadowed `GlobalRef` field
+  projections.
+- `return_ownership_local_shadowed_global_ref_with_owned_local_is_owned`
+  is active and green.
+- A new `LetMut` regression keeps owned mutable parents conservative,
+  preventing the reverted use-after-free shape
+  (`recursive_multi_part_interpolated_print_after_graphemes_executes`,
+  where `debug` previously rendered as `debtg`).
+- Host imports that return escaping Goby values now allocate in the
+  Perceus refcounted heap instead of the monotonic host bump arena.
+- The active 138×138 `read_lines () -> list.map graphemes`
+  reduction now runs under the 256 MiB test ceiling.
+- The full BUGS.md real-world-driver shape now has an active
+  138×138 stdin regression and runs under the same 256 MiB ceiling.
+- Fold-prepend lowering now handles non-empty accumulators and
+  case-recursive reverse-prepend helpers, avoiding repeated
+  list-spread copies in `flatten`.
 
 Other tracks remain queued (see `doc/PLAN.md` §4.1, §4.3–§4.7).
-Perceus M10 stays the highest priority until re-closed.
 
 ## What landed in this session
 
@@ -34,37 +39,34 @@ Perceus M10 stays the highest priority until re-closed.
      boundary the fix must respect):
      - `return_ownership_local_shadowed_global_ref_with_owned_local_is_owned`
        — record-field projection of an Owned local must classify
-       Owned. **Currently `#[ignore]`d**: this is the forward-
-       looking spec and can be enabled only once the Let / LetMut
-       distinction lands (otherwise `mut`-cell projections become
-       unsafe — see "Why the naive fix was reverted").
+       Owned. Active and green after the Let / LetMut distinction.
      - `return_ownership_local_shadowed_global_ref_with_borrowed_local_is_borrowed`
        — same shape over a Borrowed local must stay Borrowed (no
        spurious Drop on a Borrowed parent).
      - `return_ownership_global_ref_without_local_shadow_remains_borrowed`
        — true module-path GlobalRef (a function value) must keep
        the conservative Borrowed classification.
+     - `return_ownership_local_shadowed_global_ref_with_owned_let_mut_is_borrowed`
+       — same lowering over an Owned `LetMut` parent must stay
+       Borrowed so later `mut := ...` re-assignments cannot observe
+       a freed field.
 
-   - `crates/goby-wasm/src/compile_tests.rs` (2 runtime guards,
-     both `#[ignore]` until the leak is fully eliminated):
-     - `perceus_m10_graphemes_single_call_emits_free_list_hits` —
-       a single `graphemes "abc"` call must drive `free_list_hits
-       > 0` so a future regression of `graphemes`'s
-       return-ownership classification is caught at the smallest
-       possible scale.
-     - `perceus_m10_list_map_graphemes_138_lines_runs_under_256mib`
+   - `crates/goby-wasm/src/compile_tests.rs` (2 active M11 runtime
+     guards):
+     - `perceus_m11_graphemes_single_call_reports_host_alloc_stats`
+       — a single `graphemes "abc"` call must report non-zero
+       `total_bytes`, proving host-created values are visible to
+       alloc stats instead of disappearing into the host bump arena.
+     - `perceus_m11_list_map_graphemes_138_lines_runs_under_256mib`
        — the BUGS.md reduction (`lines = read_lines (); rows =
        list.map lines graphemes`) over a 138×138 stdin grid must
        run under a 256 MiB `WasmMemoryConfig`.
 
 2. **Documentation update — `return_ownership_value::GlobalRef`.**
    The `GlobalRef` arm in `return_ownership_value`
-   (`crates/goby-core/src/perceus.rs`) now carries an explicit
-   comment recording the local-shadowing pitfall, the
-   `recursive_multi_part_interpolated_print_after_graphemes_executes`
-   regression that the naive promotion produces, and a forward
-   pointer to this STATE entry. The conservative `Borrowed` default
-   stays in place pending a future Let / LetMut distinction.
+   (`crates/goby-core/src/perceus.rs`) now carries the active
+   local-shadowing rule: immutable owned locals promote to `Owned`,
+   `LetMut` and true module-path references stay `Borrowed`.
 
 3. **Test harness improvements.** The 138-line repro test runs
    under an explicit `WasmMemoryConfig { max_pages: 4096, ..
@@ -74,6 +76,20 @@ Perceus M10 stays the highest priority until re-closed.
    follow the existing pattern of
    `execute_runtime_module_with_stdin_config_and_options_captured`
    + `parse_alloc_stats_field`.
+
+4. **M11 host allocator unification.** Host-created escaping strings,
+   list headers, and list chunks are allocated via a Rust-side mirror
+   of `emit_alloc_from_top`: refcount word initialized to 1, global
+   heap cursor updated, and `GLOBAL_ALLOC_BYTES_TOTAL` incremented.
+   Generated Wasm now reloads the global heap cursor/floor after host
+   imports so later Wasm allocations cannot overwrite host-created
+   objects.
+
+5. **M11 full-driver lowering closure.** The `flatten` shape used by
+   the BUGS.md driver now avoids O(n^4) repeated list-spread copies:
+   inline `fold row acc (fn a c -> [c, ..a])` lowers to one
+   reverse-fold prefix plus a single concat with `acc`, and
+   case-recursive reverse-prepend helpers lower the same way.
 
 ## Why the naive fix was reverted
 
@@ -224,10 +240,10 @@ This explains the observations in `## Problem` directly:
   host bump memory. So no IR-level Drop placement change can release
   host-bump-resident `lines`/`rows[i]` strings.
 
-## Implication for M10 scope
+## Implication for Perceus scope
 
-The remaining work is **not** a Perceus IR-layer fix. Two independent
-fixes are required:
+The remaining 138×138 memory exhaustion is **not** a Perceus IR-layer
+fix. Two independent fixes were identified:
 
 1. **Runtime-allocator unification** — either (a) route the seven host
    imports through the Perceus refcounted heap so `__goby_drop` can
@@ -237,18 +253,15 @@ fixes are required:
    slots that `__goby_drop` understands; option (b) requires deciding
    the lifetime story for host-bump-resident pointers when they
    escape into Goby values.
-2. **Let / LetMut distinction in `return_ownership_value`** — still
-   needed independently to flip
+2. **Let / LetMut distinction in `return_ownership_value`** — landed
+   independently to flip
    `return_ownership_local_shadowed_global_ref_with_owned_local_is_owned`
    on without breaking
    `recursive_multi_part_interpolated_print_after_graphemes_executes`.
-   This is unblocked from (1) — it can land first and is the
-   originally-scoped M10 work.
+   This was unblocked from (1) and is the originally-scoped M10 work.
 
-PLAN_PERCEUS §4.100 acceptance must be re-scoped: M10 closes on
-delivery of (2) plus the regression net (already landed); (1) belongs
-in a successor milestone (working title: **M11 — host-intrinsic
-allocator unification**).
+PLAN_PERCEUS §4.100 now closes on (2) plus the regression net; (1)
+belongs in **M11 — host-intrinsic allocator unification**.
 
 ## Verification status
 
@@ -283,23 +296,22 @@ Open verification work, in priority order:
 
 Red after this session:
 
-- `perceus_m10_graphemes_single_call_emits_free_list_hits` —
-  `#[ignore]`d. Reproduces the runtime-layer leak at minimal
-  scale.
-- `perceus_m10_list_map_graphemes_138_lines_runs_under_256mib` —
-  `#[ignore]`d. Reproduces the BUGS.md exhaustion under 256 MiB.
-- `return_ownership_local_shadowed_global_ref_with_owned_local_is_owned`
-  — `#[ignore]`d. Forward-looking spec for the Let-only case.
-- Original BUGS.md 2026-04-30 entry: 138×138 driver via stdin
-  under `--max-memory-mb 256`.
+- None for the M10/M11 Perceus closure.
 
 Green after this session:
 
-- `cargo test --workspace --release` — pass (the four `#[ignore]`d
-  tests do not count toward red).
-- Full `perceus::tests` module — pass (16 active
-  `return_ownership_*` tests; the 17th is intentionally
-  `#[ignore]`d as forward-looking spec).
+- `cargo test --release -p goby-core perceus` — pass; all
+  `return_ownership_*` tests are active, including the Let-only
+  owned projection and the LetMut conservative regression.
+- Focused `goby-wasm` regression tests pass:
+  `recursive_multi_part_interpolated_print_after_graphemes_executes`,
+  `rr3`, `wb3_m7`, and
+  `compile_module_scan_loop_lowering_eliminates_walk_self_call_in_wasm`.
+- M11 runtime reductions pass:
+  `perceus_m11_graphemes_single_call_reports_host_alloc_stats`,
+  `perceus_m11_list_map_graphemes_138_lines_runs_under_256mib`,
+  `perceus_m11_real_world_driver_138_grid_runs_under_256mib`, and
+  `host_string_concat`.
 - All previously-green tests from the prior M10 closure remain
   green. Specifically the existing 20×20 acceptance test
   `perceus_real_world_driver_drops_intermediates_and_reuses_per_round`
@@ -310,29 +322,9 @@ Green after this session:
 
 ## Next Step
 
-The cause is identified; the next session is design + scope, not
-investigation:
-
-1. Update `doc/PLAN_PERCEUS.md` §4.100 to reflect the split:
-   - **M10 (re-close path)**: Let / LetMut distinction in
-     `return_ownership_value` + matching
-     `classify_call_result_ownership` boundary, gated by the existing
-     regression net. Acceptance: flip
-     `return_ownership_local_shadowed_global_ref_with_owned_local_is_owned`
-     to active and keep
-     `recursive_multi_part_interpolated_print_after_graphemes_executes`
-     green.
-   - **M11 (new)**: host-intrinsic allocator unification. Acceptance:
-     `perceus_m10_graphemes_single_call_emits_free_list_hits` and
-     `perceus_m10_list_map_graphemes_138_lines_runs_under_256mib` go
-     green; `doc/BUGS.md` 2026-04-30 entry moves Open → Resolved.
-2. For M11, decide direction (a) refcount the host imports vs (b)
-   per-call-frame bump reset. (a) is the cleaner fit with existing
-   `__goby_drop`; (b) needs a clear story for host-bump pointers
-   that escape via Goby values (e.g. `read_lines ()` whose result
-   outlives the call).
-3. Implement (1) first since it is independent and unblocks the
-   originally-scoped M10 close. (2) follows as a separate milestone.
+Next verification target: rerun the repository quality gate after any
+additional cleanup, then return to the remaining tracks in
+`doc/PLAN.md`.
 
 After M11 fully closes, return to other active tracks (`doc/PLAN.md`
 §4):
