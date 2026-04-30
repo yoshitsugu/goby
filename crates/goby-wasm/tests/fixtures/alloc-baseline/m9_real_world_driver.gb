@@ -1,0 +1,106 @@
+import goby/list (each, fold, length)
+import goby/string (graphemes)
+import goby/stdio
+
+threshold : Int
+threshold = 4
+
+check_around_rolls : List String -> Int -> Int -> Int -> Int -> Bool can Print
+check_around_rolls rolls x y max_x max_y =
+  if rolls[y * max_x + x] == "@"
+    around_diffs = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+    result =
+      fold around_diffs 0 (fn result d ->
+        diff_y = y + d.1
+        diff_x = x + d.0
+        if 0 <= diff_y && diff_y < max_y && 0 <= diff_x && diff_x < max_x
+          if rolls[diff_y * max_x + diff_x] == "@"
+            result + 1
+          else
+            result
+        else
+          result
+      )
+    result < threshold
+  else
+    False
+
+reverse_positions_acc : List Int -> List Int -> List Int can Print
+reverse_positions_acc xs acc =
+  case xs
+    [] -> acc
+    [x, ..rest] -> reverse_positions_acc rest [x, ..acc]
+
+reverse_positions : List Int -> List Int can Print
+reverse_positions xs =
+  reverse_positions_acc xs []
+
+count_valid_roll_acc : List String -> Int -> Int -> Int -> Int -> List Int -> Int -> (List Int, Int) can Print
+count_valid_roll_acc rolls x y max_x max_y acc count =
+  if y >= max_y
+    (reverse_positions acc, count)
+  else
+    if x >= max_x
+      count_valid_roll_acc rolls 0 (y + 1) max_x max_y acc count
+    else
+      if check_around_rolls rolls x y max_x max_y
+        count_valid_roll_acc rolls (x + 1) y max_x max_y [y * max_x + x, ..acc] (count + 1)
+      else
+        count_valid_roll_acc rolls (x + 1) y max_x max_y acc count
+
+count_valid_roll : List String -> Int -> Int -> Int -> Int -> (List Int, Int) can Print
+count_valid_roll rolls x y max_x max_y =
+  count_valid_roll_acc rolls x y max_x max_y [] 0
+
+update_rolls : List String -> List Int -> List String can Print
+update_rolls rolls removed_indices =
+  mut new_rolls = rolls
+  each removed_indices (fn idx ->
+    new_rolls[idx] := "."
+    ()
+  )
+  new_rolls
+
+flatten_acc : List (List String) -> List String -> List String can Print
+flatten_acc rows acc =
+  case rows
+    [] -> acc
+    [row, ..rest] ->
+      new_acc =
+        fold row acc (fn a c -> [c, ..a])
+      flatten_acc rest new_acc
+
+reverse_strings_acc : List String -> List String -> List String can Print
+reverse_strings_acc xs acc =
+  case xs
+    [] -> acc
+    [x, ..rest] -> reverse_strings_acc rest [x, ..acc]
+
+flatten : List (List String) -> List String can Print
+flatten rows =
+  reversed = flatten_acc rows []
+  reverse_strings_acc reversed []
+
+check : List String -> Int -> Int -> Int -> Int can Print
+check rolls max_x max_y result =
+  counted = count_valid_roll rolls 0 0 max_x max_y
+  removed_indices = counted.0
+  count = counted.1
+  if count > 0
+    new_rolls = update_rolls rolls removed_indices
+    check new_rolls max_x max_y (result + count)
+  else
+    result
+
+main : Unit -> Unit can Print, Read
+main =
+  lines = ["@@@@@@@@@@", "@@@@@@@@@@", "@@@@@@@@@@", "@@@@@@@@@@", "@@@@@@@@@@", "@@@@@@@@@@"]
+  nlines = length lines
+  rows = list.map lines graphemes
+  max_y = length rows
+  row0 = rows[0]
+  max_x = length row0
+  rolls = flatten rows
+  nrolls = length rolls
+  result = check rolls max_x max_y 0
+  println "${result}"
