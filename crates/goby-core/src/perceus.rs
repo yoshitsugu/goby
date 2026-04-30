@@ -2042,13 +2042,13 @@ fn insert_owned_binding_drop(
     }
 
     if !comp_consumes_name(&body, name, module_ownership, param_order) {
-        return append_drop_preserving_result(name, body, next_tmp);
+        return append_drop_preserving_result(name, body, next_tmp, module_ownership, param_order);
     }
 
     (body, next_tmp)
 }
 
-fn prepend_drop(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr, usize) {
+fn prepend_drop(name: &str, body: CompExpr, _next_tmp: usize) -> (CompExpr, usize) {
     (
         CompExpr::Seq {
             stmts: vec![CompExpr::Drop {
@@ -2056,14 +2056,8 @@ fn prepend_drop(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr, usize
             }],
             tail: Box::new(body),
         },
-        next_tmp,
+        _next_tmp,
     )
-}
-
-fn append_drop_preserving_result(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr, usize) {
-    // Insert Drop(name) at every tail position in `body` so that tail-calls
-    // (which never return to the current frame) still execute the drop.
-    insert_drop_at_tail(name, body, next_tmp)
 }
 
 /// Insert `Drop(name)` immediately before every "terminal" expression in `body`.
@@ -2087,10 +2081,16 @@ fn append_drop_preserving_result(name: &str, body: CompExpr, next_tmp: usize) ->
 /// - `Seq { tail, .. }` — recurse into tail.
 /// - `If` / `Case` — recurse into every branch.
 /// - Other statements — prepend Drop (conservative).
-fn insert_drop_at_tail(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr, usize) {
+fn insert_drop_at_tail(
+    name: &str,
+    body: CompExpr,
+    next_tmp: usize,
+    module_ownership: &HashMap<String, HashMap<String, OwnershipClass>>,
+    param_order: &HashMap<String, Vec<String>>,
+) -> (CompExpr, usize) {
     let mut next_tmp = next_tmp;
     let recurse = |c, t: &mut usize| {
-        let (out, nt) = insert_drop_at_tail(name, c, *t);
+        let (out, nt) = insert_drop_at_tail(name, c, *t, module_ownership, param_order);
         *t = nt;
         out
     };
@@ -2130,16 +2130,28 @@ fn insert_drop_at_tail(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr
                 // Step 2.
                 wrap_after_expr(body, &mut next_tmp)
             } else if name_in_args && callee_can_lower_to_tail_decl_call(callee) {
-                CompExpr::Seq {
-                    stmts: vec![
-                        CompExpr::Dup {
-                            value: Box::new(ValueExpr::Var(name.to_string())),
-                        },
-                        CompExpr::Drop {
-                            value: Box::new(ValueExpr::Var(name.to_string())),
-                        },
-                    ],
-                    tail: Box::new(body),
+                let name_in_owned_arg = args.iter().enumerate().any(|(idx, arg)| {
+                    value_mentions_name(arg, name)
+                        && !callee_arg_is_borrowed(callee, idx, module_ownership, param_order)
+                });
+                if name_in_owned_arg {
+                    // Owned argument: Dup;Drop is a refcount no-op; the callee
+                    // consumes the arg so no post-call drop is needed.
+                    CompExpr::Seq {
+                        stmts: vec![
+                            CompExpr::Dup {
+                                value: Box::new(ValueExpr::Var(name.to_string())),
+                            },
+                            CompExpr::Drop {
+                                value: Box::new(ValueExpr::Var(name.to_string())),
+                            },
+                        ],
+                        tail: Box::new(body),
+                    }
+                } else {
+                    // Borrowed argument: tail-call would skip the caller frame
+                    // before the drop runs, so wrap to preserve it.
+                    wrap_after_expr(body, &mut next_tmp)
                 }
             } else if name_in_args {
                 wrap_after_expr(body, &mut next_tmp)
@@ -2253,11 +2265,23 @@ fn insert_drop_at_tail(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr
     (result, next_tmp)
 }
 
+fn append_drop_preserving_result(
+    name: &str,
+    body: CompExpr,
+    next_tmp: usize,
+    module_ownership: &HashMap<String, HashMap<String, OwnershipClass>>,
+    param_order: &HashMap<String, Vec<String>>,
+) -> (CompExpr, usize) {
+    // Insert Drop(name) at every tail position in `body` so that tail-calls
+    // (which never return to the current frame) still execute the drop.
+    insert_drop_at_tail(name, body, next_tmp, module_ownership, param_order)
+}
+
 fn callee_can_lower_to_tail_decl_call(callee: &ValueExpr) -> bool {
     match callee {
         ValueExpr::Var(name) => !name.starts_with("__goby_"),
-        ValueExpr::GlobalRef { .. }
-        | ValueExpr::IntLit(_)
+        ValueExpr::GlobalRef { .. } => true,
+        ValueExpr::IntLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::ListLit { .. }
@@ -2568,7 +2592,7 @@ fn insert_owned_let_drop(
     }
 
     if !comp_consumes_name(&body, name, module_ownership, param_order) {
-        return append_drop_preserving_result(name, body, next_tmp);
+        return append_drop_preserving_result(name, body, next_tmp, module_ownership, param_order);
     }
 
     (body, next_tmp)
@@ -2620,10 +2644,11 @@ fn comp_consumes_name(
         CompExpr::Case { arms, .. } => arms
             .iter()
             .any(|arm| comp_consumes_name(&arm.body, name, module_ownership, param_order)),
-        CompExpr::Dup { .. } | CompExpr::Resume { .. } | CompExpr::AllocReuse { .. } => false,
-        CompExpr::Drop { value } | CompExpr::DropReuse { value, .. } => {
-            value_mentions_name(value, name)
-        }
+        CompExpr::Dup { .. }
+        | CompExpr::Resume { .. }
+        | CompExpr::AllocReuse { .. }
+        | CompExpr::Drop { .. }
+        | CompExpr::DropReuse { .. } => false,
         CompExpr::PerformEffect { args, .. } => {
             args.iter().any(|arg| value_mentions_name(arg, name))
         }
@@ -2950,6 +2975,8 @@ fn count_var_uses_value(value: &ValueExpr, name: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::{
         OwnershipClass, assert_perceus_pipeline_order, classify_decl_return_ownership,
         insert_drop_at_tail, ownership_classify_module, run_perceus_passes,
@@ -3504,7 +3531,9 @@ mod tests {
             reuse_token: None,
         };
 
-        let (rewritten, _) = insert_drop_at_tail("xs", call, 0);
+        let empty_modules: HashMap<String, HashMap<String, OwnershipClass>> = HashMap::new();
+        let empty_params: HashMap<String, Vec<String>> = HashMap::new();
+        let (rewritten, _) = insert_drop_at_tail("xs", call, 0, &empty_modules, &empty_params);
         let module = IrModule {
             decls: vec![IrDecl {
                 name: "main".to_string(),
@@ -3537,7 +3566,9 @@ mod tests {
             reuse_token: None,
         };
 
-        let (rewritten, _) = insert_drop_at_tail("f", call, 0);
+        let empty_modules: HashMap<String, HashMap<String, OwnershipClass>> = HashMap::new();
+        let empty_params: HashMap<String, Vec<String>> = HashMap::new();
+        let (rewritten, _) = insert_drop_at_tail("f", call, 0, &empty_modules, &empty_params);
         let module = IrModule {
             decls: vec![IrDecl {
                 name: "main".to_string(),
@@ -3570,7 +3601,9 @@ mod tests {
             reuse_token: None,
         };
 
-        let (rewritten, _) = insert_drop_at_tail("xs", call, 0);
+        let empty_modules: HashMap<String, HashMap<String, OwnershipClass>> = HashMap::new();
+        let empty_params: HashMap<String, Vec<String>> = HashMap::new();
+        let (rewritten, _) = insert_drop_at_tail("xs", call, 0, &empty_modules, &empty_params);
         let module = IrModule {
             decls: vec![IrDecl {
                 name: "main".to_string(),
@@ -3589,6 +3622,41 @@ mod tests {
         assert!(
             !ir_str.contains("dup xs"),
             "intrinsic calls do not lower to TailDeclCall and must not use the C2 Dup; Drop shape:\n{ir_str}"
+        );
+    }
+
+    #[test]
+    fn tail_drop_for_globalref_callee_preserves_tail_call_shape() {
+        let call = CompExpr::Call {
+            callee: Box::new(ValueExpr::GlobalRef {
+                module: "other".to_string(),
+                name: "helper".to_string(),
+            }),
+            args: vec![ValueExpr::Var("xs".to_string())],
+            reuse_token: None,
+        };
+
+        let empty_modules: HashMap<String, HashMap<String, OwnershipClass>> = HashMap::new();
+        let empty_params: HashMap<String, Vec<String>> = HashMap::new();
+        let (rewritten, _) = insert_drop_at_tail("xs", call, 0, &empty_modules, &empty_params);
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "main".to_string(),
+                params: vec![],
+                result_ty: IrType::Unknown,
+                residual_effects: vec![],
+                reuse_param: None,
+                body: rewritten,
+            }],
+        };
+        let ir_str = fmt_ir(&module);
+        assert!(
+            ir_str.contains("dup xs"),
+            "GlobalRef calls lower to TailDeclCall and must use the C2 Dup; Drop shape:\n{ir_str}"
+        );
+        assert!(
+            !ir_str.contains("__perceus_drop_tmp_"),
+            "GlobalRef calls must not be wrapped in a temp when the drop can be emitted inline:\n{ir_str}"
         );
     }
 
