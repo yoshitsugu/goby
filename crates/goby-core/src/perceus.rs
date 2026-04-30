@@ -775,10 +775,28 @@ fn classify_owned_result(
                 OwnershipClass::Borrowed
             }
         }
-        // All call results are treated as owned: the ABI requires callees to transfer
-        // ownership of any heap return value (or Dup it before returning).
-        CompExpr::Call { .. } => OwnershipClass::Owned,
+        // Call results: only Owned when the binding type is *known* to be heap.
+        // `Let` bindings introduced by `ir_lower` (e.g. `__goby_ir_binop_right_*`,
+        // `__goby_ir_if_condition_*`) carry `IrType::Unknown` even for scalar
+        // results, so widening Unknown → Owned would emit RefCountDrop on
+        // non-heap locals and break loop lowering. Stay conservative for Unknown.
+        CompExpr::Call { .. } if type_is_known_heap(ty) => OwnershipClass::Owned,
         _ => OwnershipClass::Borrowed,
+    }
+}
+
+/// Strict heap predicate: `true` only when the type is *definitely* a heap
+/// reference. Unlike `type_may_be_heap`, `Unknown` returns `false`.
+fn type_is_known_heap(ty: &crate::ir::IrType) -> bool {
+    match ty {
+        crate::ir::IrType::Int
+        | crate::ir::IrType::Bool
+        | crate::ir::IrType::Str
+        | crate::ir::IrType::Unit
+        | crate::ir::IrType::Unknown => false,
+        crate::ir::IrType::Opaque(name) => {
+            !matches!(name.as_str(), "Int" | "Bool" | "String" | "Unit")
+        }
     }
 }
 

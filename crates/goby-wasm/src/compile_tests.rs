@@ -1938,9 +1938,13 @@ main =
     assert_eq!(output.stdout, "475\n");
     let reuse_hits = parse_alloc_stats_field(&output.stderr, "reuse_hits");
     let total_bytes = parse_alloc_stats_field(&output.stderr, "total_bytes");
-    assert_eq!(
-        reuse_hits, 200,
-        "borrow-then-update driver should reuse once per update_xs call; stderr:\n{}",
+    // M9 (3a + 3c) widened reuse so that every per-index AssignIndex inside `each`
+    // hits the reuse path, not just the per-call `mut ys = xs` seed. Expected at
+    // least one reuse per update_xs call (200 iters); the actual figure scales
+    // with idxs length (50) for a total of 10000.
+    assert!(
+        reuse_hits >= 200,
+        "borrow-then-update driver should reuse at least once per update_xs call; stderr:\n{}",
         output.stderr
     );
     assert!(

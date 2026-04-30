@@ -5670,8 +5670,8 @@ fn emit_alloc_with_flag(
         memory_index: 0,
     }));
     function.instruction(&Instruction::I64Sub);
-    // stack: [peak, live]
-    function.instruction(&Instruction::I64GtU);
+    // stack: [peak, live]; update when live > peak.
+    function.instruction(&Instruction::I64LtU);
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
     function.instruction(&Instruction::I64Const(GLOBAL_PEAK_BYTES_OFFSET as i64));
     function.instruction(&Instruction::I64Const(
