@@ -2074,7 +2074,11 @@ fn append_drop_preserving_result(name: &str, body: CompExpr, next_tmp: usize) ->
 /// Rules:
 /// - `Value(_)` — prepend Drop.
 /// - `Call { .. }` where `name` not in args/callee — prepend Drop.
-/// - `Call { .. }` where `name` in args/callee — wrap: `let tmp = call in Drop; tmp`.
+/// - `Call { .. }` where `name` appears only in args and the callee can lower
+///   to `TailDeclCall` — emit `Dup; Drop` before the call so direct tail calls
+///   stay in tail position.
+/// - `Call { .. }` where `name` appears in callee — wrap:
+///   `let tmp = call in Drop; tmp`.
 /// - `PerformEffect` — same as Call.
 /// - `Let { name: n, .. }` — if `n == name`, stop (shadowed); if `value`
 ///   projects from `name` and `n` is later live, drop after the whole Let;
@@ -2118,9 +2122,26 @@ fn insert_drop_at_tail(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr
             ref args,
             ..
         } => {
-            let name_in_call = value_mentions_name(callee, name)
-                || args.iter().any(|a| value_mentions_name(a, name));
-            if name_in_call {
+            let name_in_callee = value_mentions_name(callee, name);
+            let name_in_args = args.iter().any(|a| value_mentions_name(a, name));
+            if name_in_callee {
+                // C3 is not preserved because indirect tail calls are not
+                // implemented; this is intentional per PLAN_PERCEUS §4.100
+                // Step 2.
+                wrap_after_expr(body, &mut next_tmp)
+            } else if name_in_args && callee_can_lower_to_tail_decl_call(callee) {
+                CompExpr::Seq {
+                    stmts: vec![
+                        CompExpr::Dup {
+                            value: Box::new(ValueExpr::Var(name.to_string())),
+                        },
+                        CompExpr::Drop {
+                            value: Box::new(ValueExpr::Var(name.to_string())),
+                        },
+                    ],
+                    tail: Box::new(body),
+                }
+            } else if name_in_args {
                 wrap_after_expr(body, &mut next_tmp)
             } else {
                 prepend(body)
@@ -2230,6 +2251,25 @@ fn insert_drop_at_tail(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr
         | CompExpr::WithHandler { .. } => prepend(body),
     };
     (result, next_tmp)
+}
+
+fn callee_can_lower_to_tail_decl_call(callee: &ValueExpr) -> bool {
+    match callee {
+        ValueExpr::Var(name) => !name.starts_with("__goby_"),
+        ValueExpr::GlobalRef { .. }
+        | ValueExpr::IntLit(_)
+        | ValueExpr::BoolLit(_)
+        | ValueExpr::StrLit(_)
+        | ValueExpr::ListLit { .. }
+        | ValueExpr::TupleLit(_)
+        | ValueExpr::RecordLit { .. }
+        | ValueExpr::Lambda { .. }
+        | ValueExpr::Interp(_)
+        | ValueExpr::BinOp { .. }
+        | ValueExpr::Unit
+        | ValueExpr::TupleProject { .. }
+        | ValueExpr::ListGet { .. } => false,
+    }
 }
 
 fn comp_projects_from_name(comp: &CompExpr, name: &str) -> bool {
@@ -2912,7 +2952,7 @@ fn count_var_uses_value(value: &ValueExpr, name: &str) -> usize {
 mod tests {
     use super::{
         OwnershipClass, assert_perceus_pipeline_order, classify_decl_return_ownership,
-        ownership_classify_module, run_perceus_passes,
+        insert_drop_at_tail, ownership_classify_module, run_perceus_passes,
     };
     use crate::ir::{
         CompExpr, IrCaseArm, IrCasePattern, IrDecl, IrModule, IrType, ValueExpr, fmt_ir,
@@ -3453,6 +3493,102 @@ mod tests {
         assert!(
             ir_str.contains("__perceus_drop_tmp_0"),
             "post-call drop must preserve call result through a temp; got:\n{ir_str}"
+        );
+    }
+
+    #[test]
+    fn tail_drop_for_name_in_call_arg_preserves_tail_call_shape() {
+        let call = CompExpr::Call {
+            callee: Box::new(ValueExpr::Var("walk".to_string())),
+            args: vec![ValueExpr::Var("xs".to_string()), ValueExpr::IntLit(1)],
+            reuse_token: None,
+        };
+
+        let (rewritten, _) = insert_drop_at_tail("xs", call, 0);
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "main".to_string(),
+                params: vec![],
+                result_ty: IrType::Unknown,
+                residual_effects: vec![],
+                reuse_param: None,
+                body: rewritten,
+            }],
+        };
+        let ir_str = fmt_ir(&module);
+        let dup_pos = ir_str.find("dup xs").expect("expected Dup before call");
+        let drop_pos = ir_str.find("drop xs").expect("expected Drop before call");
+        let call_pos = ir_str.find("call walk(xs, 1)").expect("expected tail call");
+        assert!(
+            dup_pos < drop_pos && drop_pos < call_pos,
+            "name-in-arg tail drop must emit Dup; Drop before the call:\n{ir_str}"
+        );
+        assert!(
+            !ir_str.contains("__perceus_drop_tmp_"),
+            "name-in-arg tail drop must not wrap the call in a temp:\n{ir_str}"
+        );
+    }
+
+    #[test]
+    fn tail_drop_for_name_in_callee_keeps_conservative_temp_wrap() {
+        let call = CompExpr::Call {
+            callee: Box::new(ValueExpr::Var("f".to_string())),
+            args: vec![ValueExpr::IntLit(1)],
+            reuse_token: None,
+        };
+
+        let (rewritten, _) = insert_drop_at_tail("f", call, 0);
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "main".to_string(),
+                params: vec![],
+                result_ty: IrType::Unknown,
+                residual_effects: vec![],
+                reuse_param: None,
+                body: rewritten,
+            }],
+        };
+        let ir_str = fmt_ir(&module);
+        assert!(
+            ir_str.contains("__perceus_drop_tmp_0"),
+            "name-in-callee tail drop should keep the conservative temp wrap:\n{ir_str}"
+        );
+        assert!(
+            ir_str.contains("drop f"),
+            "name-in-callee temp wrap should still drop the callee binding:\n{ir_str}"
+        );
+    }
+
+    #[test]
+    fn tail_drop_for_intrinsic_arg_keeps_temp_wrap() {
+        let call = CompExpr::Call {
+            callee: Box::new(ValueExpr::Var("__goby_list_each".to_string())),
+            args: vec![
+                ValueExpr::Var("xs".to_string()),
+                ValueExpr::Var("println".to_string()),
+            ],
+            reuse_token: None,
+        };
+
+        let (rewritten, _) = insert_drop_at_tail("xs", call, 0);
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "main".to_string(),
+                params: vec![],
+                result_ty: IrType::Unknown,
+                residual_effects: vec![],
+                reuse_param: None,
+                body: rewritten,
+            }],
+        };
+        let ir_str = fmt_ir(&module);
+        assert!(
+            ir_str.contains("__perceus_drop_tmp_0"),
+            "intrinsic calls must keep the post-call drop temp wrap:\n{ir_str}"
+        );
+        assert!(
+            !ir_str.contains("dup xs"),
+            "intrinsic calls do not lower to TailDeclCall and must not use the C2 Dup; Drop shape:\n{ir_str}"
         );
     }
 

@@ -1270,6 +1270,12 @@ cargo test --release -p goby-wasm \
   refcount_reuse_loop_owned_param_seed_reuses_assign_index
 ```
 
+Status 2026-04-30: complete. `insert_drop_at_tail` now preserves the C2
+direct `Var` callee tail shape with `Dup(name); Drop(name); Call(...)`,
+keeps `GlobalRef` calls, runtime intrinsics, and C3 indirect/closure calls in
+the temp-wrap form, and has focused unit tests for those cases. The Step 2
+verification commands above are green.
+
 All must remain green; the new unit tests must pass.
 
 ### Step 3 — Acceptance fixture (and optional AoC evidence)
@@ -1346,7 +1352,7 @@ Hard gates (must all pass; closure is blocked otherwise):
 - [ ] All M9 open items in §4 ("Open M9 acceptance items") closed.
 - [ ] DI-1 stopgap (`type_is_known_heap`) deleted; replaced by
       decl-return ownership inference.
-- [ ] DI-2 demotion eliminated; new unit test green.
+- [x] DI-2 demotion eliminated; new unit test green.
 - [ ] `cargo test --workspace --release` green with no
       `--no-fail-fast` needed.
 - [ ] Project invariants check clean (see Step 4).

@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-30 (Perceus M10 in progress — Step 1c implemented)
+Last updated: 2026-04-30 (Perceus M10 in progress — Step 2 implemented)
 
 ## Current Focus
 
@@ -12,8 +12,8 @@ Primary plan reference: `doc/PLAN_PERCEUS.md` §4.99 / §4.100.
 
 ## Current Decision
 
-Step 1c has landed in the working tree. Step 1a/1b/1c should be
-committed together; the final formatting and workspace gates are green.
+Step 1a/1b/1c landed in `9a9f502`. Step 2 is implemented in the
+working tree and should be committed next.
 
 The selected design changed during implementation: `__goby_list_map`
 is not seeded as unconditionally `Owned`. The outer list is fresh, but
@@ -31,6 +31,11 @@ Implemented direction:
   parent list remains live while any projected child reference derived
   from it remains live.
 - Do not weaken the cli integration allocation-stat assertion.
+- Resolve DI-2 by splitting tail drop placement into C1/C2/C3:
+  direct `Var` callee calls that mention the dropped name only in args
+  keep the tail call shape via `Dup(name); Drop(name); Call(...)`;
+  `GlobalRef` calls, runtime intrinsics, and calls that mention the name
+  as callee keep the conservative temp wrap.
 
 Deferred alternative: treating `ListGet` as an ownership transfer with
 a matching `Dup` on the source. That may be useful later, but it is
@@ -39,35 +44,22 @@ M10 closure.
 
 ## Current Working Tree
 
-Files currently touched by M10 Step 1 work:
+Files currently touched by M10 Step 2 work:
 
 - `crates/goby-core/src/perceus.rs`
-  - added `classify_decl_return_ownership`,
-    `return_ownership_comp`, `return_ownership_value`,
-    `callee_decl_return_class`, conditional map-result ownership, and
-    projection-borrow-aware tail-drop placement.
-  - keeps `HEAP_RETURNING_INTRINSICS` for unconditional seeds only;
-    `__goby_list_map` is handled at the call site instead.
-  - changed `ownership_classify_module` to return
-    `(param_ownership, decl_returns)`.
-  - threaded `decl_returns` through `classify_comp`,
-    `classify_bound_comp`, and `ownership_classify_decl`.
-  - changed `classify_owned_result` to use decl-return ownership
-    instead of `IrType`.
-  - deleted `type_is_known_heap`.
-  - added return-ownership unit tests.
-- `crates/goby-wasm/src/gen_lower/emit.rs`
-  - exports aux decls when `expose_perceus_test_exports` is set, so
-    Perceus acceptance tests can call helper declarations directly.
+  - updated `insert_drop_at_tail` to preserve C2 direct tail calls with
+    pre-call `Dup`/`Drop`.
+  - left runtime intrinsics and C3 closure/indirect call handling in the
+    temp-wrap form and documented why.
+  - added focused C2/C3/intrinsic unit tests for the tail-drop shape.
 - `doc/PLAN_PERCEUS.md`
-  - records the GFP return-ownership fixpoint, conditional
-    `list.map` ownership, and Step 1c projection-borrow direction.
+  - records Step 2 completion and checks the DI-2 acceptance item.
 - `doc/STATE.md`
-  - records the implemented Step 1c policy.
+  - records the implemented Step 2 policy and next step.
 
 ## Known Red / Green State
 
-Green after Step 1c:
+Green after Step 2:
 
 - M9 acceptance tests:
   - `perceus_m9_simple_list_drop_increments_free_list_hits`
@@ -77,6 +69,11 @@ Green after Step 1c:
 - `goby-cli cli_integration::run_command_debug_alloc_stats_emits_stats_line_for_general_lowered_program`
 - Graphemes / split / walk / rr3 regression set.
 - `cargo test --workspace --release alloc_baseline`.
+- `cargo test -p goby-core tail_drop_for_name`.
+- Step 2 wasm checks:
+  - `compile_module_scan_loop_lowering_eliminates_walk_self_call_in_wasm`
+  - `perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round`
+  - `refcount_reuse_loop_owned_param_seed_reuses_assign_index`
 
 The critical projection-borrow shape is:
 
@@ -95,7 +92,7 @@ child remains live.
 
 - [x] Step 1c: implement conditional `list.map` ownership plus
       projection-borrow liveness for `ListGet`.
-- [ ] Step 2: fix DI-2 with tail-call-safe drop placement in
+- [x] Step 2: fix DI-2 with tail-call-safe drop placement in
       `insert_drop_at_tail` (C1 / C2 / C3 split in
       `doc/PLAN_PERCEUS.md` §4.100).
 - [ ] Step 3: add
@@ -110,10 +107,17 @@ Optional evidence, not a closure gate: AoC2025 day 4 part 2 under
 
 ## Next Step
 
-Commit Step 1a/1b/1c together.
+Commit Step 2, then start Step 3:
+`crates/goby-wasm/tests/fixtures/alloc-baseline/m9_real_world_driver.gb`
+plus its `alloc_baseline.txt` ceiling.
 
 Gate evidence:
 
 - `cargo fmt --all --check` — pass.
 - `cargo check` — pass.
-- `cargo test --workspace --release` — pass.
+- `cargo test` — pass.
+- `cargo test -p goby-core tail_drop_for` — pass.
+- `cargo test -p goby-core borrowed_callee_arg_is_dropped_by_owner_after_call` — pass.
+- `cargo test --release -p goby-wasm compile_module_scan_loop_lowering_eliminates_walk_self_call_in_wasm` — pass.
+- `cargo test --release -p goby-wasm perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round` — pass.
+- `cargo test --release -p goby-wasm refcount_reuse_loop_owned_param_seed_reuses_assign_index` — pass.
