@@ -604,7 +604,16 @@ Output format: human-readable (default) and JSON lines (`--json`).
   causes (DI-1 return ownership not reaching IR, DI-2 tail drops
   demoting tail calls) remained open. M9 acceptance tests partially
   red; rolled into M10.
-- **M10 complete (2026-04-30).** Closes M9 by fixing both design
+- **M10 reopened (2026-04-30 recheck).** The focused M10 fixes landed, but the
+  original 138×138 real-world driver acceptance shape is still red. The
+  committed 6×10 `alloc-baseline/real_world_driver.gb` fixture and 20×20
+  focused compile test are too small to prove closure. Recheck found
+  `E-MEMORY-EXHAUSTION` for the stdin-based 138×138 driver under
+  `--max-memory-mb 256` and at the default 1 GiB ceiling; a reduced
+  `list.map lines graphemes` shape over 138 input lines also fails.
+  Next work: automate the 138×138 repro, reduce/fix read-lines/graphemes/list-map
+  allocation behavior, then re-close M10 only after the full driver is green.
+- **M10 focused fixes (2026-04-30).** Attempted to close M9 by fixing both design
   issues:
   - **DI-1:** `classify_decl_return_ownership` infers `Owned` vs
     `Borrowed` from a declaration's body IR and seeds call-site
@@ -617,15 +626,10 @@ Output format: human-readable (default) and JSON lines (`--json`).
     are `Owned` only when the callback is proven owned-returning.
   - **`ListGet` projection-borrow liveness:** parent list stays live
     while a projected child reference is live.
-  Acceptance:
+  Focused acceptance:
   `perceus_real_world_driver_drops_intermediates_and_reuses_per_round`
   passes; `alloc-baseline/real_world_driver.gb` ceiling `150049`.
-  Perceus Track E is now closed; remaining allocator work is
-  maintenance or future roadmap, not active milestone.
-- **Perceus Track E closed (2026-04-30).** M0–M10 complete.
-  Refcount + free-list + reuse is the steady-state allocator model.
-  Future collection work (GC, RRB-trees, linear/ownership types) is
-  deferred to Later-Phase decisions (see §3.1).
+  This is not sufficient for Track E closure.
 
 - **M6 Step 5 (`stdlib/goby/list.gb` `set` reuse rewrite) — won't-fix.**
   Not on the acceptance path (the 200 KiB budget was met without it via

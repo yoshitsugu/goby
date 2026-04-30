@@ -1954,6 +1954,129 @@ main =
     );
 }
 
+/// M10 reopen runtime guard — a single `graphemes` call must produce a
+/// freed list at decl exit.
+///
+/// `graphemes` returns `final.parts` from a `mut` cell, which is lowered as
+/// `GlobalRef { module: "final", name: "parts" }` in IR (see
+/// `crates/goby-core/src/resolved.rs:419`). Without local-shadowing
+/// awareness in `return_ownership_value`, this returns Borrowed and the
+/// caller never drops the resulting list — leaking n×n grapheme lists in
+/// the 138×138 driver. This test catches a regression of that promotion
+/// at the smallest possible scale; it does not depend on stdin or scale.
+///
+/// Marked `#[ignore]` for now since Step 3 (the fix) has not landed; the
+/// closure plan flips the `#[ignore]` off once the perceus.rs fix is in.
+#[test]
+#[ignore = "M10 reopen: Step 1 guard; un-ignore once Step 3 fix lands"]
+fn perceus_m10_graphemes_single_call_emits_free_list_hits() {
+    let source = r#"
+import goby/list (length)
+import goby/string (graphemes)
+import goby/stdio
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  parts = graphemes "abc"
+  n = length parts
+  println "${n}"
+"#;
+    let module = parse_module(source).expect("graphemes guard should parse");
+    let output = execute_runtime_module_with_stdin_config_and_options_captured(
+        &module,
+        Some(String::new()),
+        None,
+        CompileOptions {
+            debug_alloc_stats: true,
+        },
+    )
+    .expect("graphemes guard should execute")
+    .expect("graphemes guard should run on runtime-owned Wasm");
+
+    let free_list_hits = parse_alloc_stats_field(&output.stderr, "free_list_hits");
+    assert!(
+        free_list_hits > 0,
+        "graphemes return value must be Owned and dropped by caller; got 0 \
+         free_list_hits. stderr:\n{}",
+        output.stderr
+    );
+    assert!(
+        output.stdout.trim_end().ends_with("3"),
+        "graphemes \"abc\" should print 3; stdout:\n{}",
+        output.stdout
+    );
+}
+
+/// M10 reopen — initially-ignored reduced repro for `doc/BUGS.md` 2026-04-30
+/// open entry. The 138-line `read_lines () -> list.map graphemes` shape
+/// exhausts Wasm memory under 256 MiB. This test isolates the reduction so
+/// Step 2 of the reopen plan can localize the dominant allocation.
+///
+/// Marked `#[ignore]` until the underlying allocation issue is fixed; the
+/// closure plan flips it on once Step 3 lands. See
+/// `doc/PLAN_PERCEUS.md` §4.100 Acceptance.
+#[test]
+#[ignore = "M10 reopen: Step 1 reduction; un-ignore once Step 3 fix lands"]
+fn perceus_m10_list_map_graphemes_138_lines_runs_under_256mib() {
+    use crate::memory_config::{RUNTIME_MEMORY_CONFIG, WasmMemoryConfig};
+
+    let source = r#"
+import goby/list (length)
+import goby/string (graphemes)
+import goby/stdio
+
+main : Unit -> Unit can Print, Read
+main =
+  lines = read_lines ()
+  rows = list.map lines graphemes
+  nrows = length rows
+  println "${nrows}"
+"#;
+
+    // 138 rows × 138 cells of '.', mirroring the BUGS.md repro shape.
+    let n: usize = 138;
+    let stdin = (0..n).map(|_| ".".repeat(n)).collect::<Vec<_>>().join("\n");
+
+    let module = parse_module(source).expect("M10 reduction should parse");
+    let memory_config = WasmMemoryConfig {
+        max_pages: 4096, // 256 MiB
+        ..RUNTIME_MEMORY_CONFIG
+    };
+
+    let result = execute_runtime_module_with_stdin_config_and_options_captured(
+        &module,
+        Some(stdin),
+        Some(memory_config),
+        CompileOptions {
+            debug_alloc_stats: true,
+        },
+    );
+
+    let output = match result {
+        Ok(Some(output)) => output,
+        Ok(None) => panic!("M10 reduction should run on runtime-owned Wasm"),
+        Err(err) => panic!(
+            "M10 reduction must not exhaust 256 MiB or fail compilation: {}",
+            err.message
+        ),
+    };
+
+    assert!(
+        !output.stderr.contains("E-MEMORY-EXHAUSTION")
+            && !output.stdout.contains("E-MEMORY-EXHAUSTION"),
+        "M10 reduction must not exhaust 256 MiB; stderr:\n{}\nstdout:\n{}",
+        output.stderr,
+        output.stdout
+    );
+    let expected = format!("{n}");
+    assert!(
+        output.stdout.trim_end().ends_with(expected.as_str()),
+        "M10 reduction should print {expected} (the row count); stdout:\n{}",
+        output.stdout
+    );
+}
+
 #[test]
 fn perceus_real_world_driver_drops_intermediates_and_reuses_per_round() {
     // Source: doc/BUGS.md "Open bugs" 2026-04-28 entry — full AoC2025 day 4 part 2 repro.

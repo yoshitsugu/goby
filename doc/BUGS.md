@@ -4,7 +4,30 @@ This document tracks confirmed, reproducible bugs in the current Goby toolchain.
 
 Open bugs:
 
-None.
+- **2026-04-30.** Perceus M10 was marked complete, but the original
+  138×138 real-world driver acceptance shape still exhausts Wasm memory.
+
+  Confirmed repro:
+
+  1. Use the `real_world_driver.gb` shape from
+     `crates/goby-wasm/tests/fixtures/alloc-baseline/real_world_driver.gb`,
+     but read `lines = read_lines ()` instead of the committed 6×10
+     hard-coded grid.
+  2. Run a 138×138 stdin grid under:
+     `goby run --debug-alloc-stats --max-memory-mb 256 <program.gb>`.
+
+  Result: `E-MEMORY-EXHAUSTION`. The failure also reproduces with a
+  138×138 all-`.` grid and with the default 1 GiB module ceiling, so the
+  current 6×10 baseline fixture and 20×20 focused compile test do not cover
+  the intended acceptance condition from `doc/PLAN_PERCEUS.md`.
+
+  Initial reduction:
+
+  - The focused Perceus tests still pass.
+  - The committed `alloc_baseline` fixture passes, but it is too small.
+  - A reduced `list.map lines graphemes` shape over 138 input lines also
+    exhausts memory, so the next investigation should start around the
+    read-lines/graphemes/list-map boundary and then re-run the full driver.
 
 Resolved bugs:
 

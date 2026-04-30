@@ -1192,6 +1192,19 @@ fn return_ownership_value(
         // function value of an `Owned`-returning decl would spuriously
         // classify as `Owned` and the caller would emit a Drop on a
         // function reference.
+        //
+        // NOTE (2026-04-30 M10 reopen): `crates/goby-core/src/resolved.rs:419`
+        // lowers `local.field` record-field projections as
+        // `GlobalRef { module: <local_name>, name: <field_name> }`. A naive
+        // promotion to `env[module]` works for immutable `Let` parents but
+        // is *unsafe* when the parent is a `LetMut` cell (the `graphemes`
+        // case): caller-side Drop of the projected field then races with
+        // the next `mut := ...` re-assignment, producing use-after-free
+        // (`debug` rendered as `debtg` in
+        // `recursive_multi_part_interpolated_print_after_graphemes_executes`).
+        // A correct fix needs to distinguish Let vs. LetMut binders in env
+        // and is parked behind the runtime-layer leak audit (see
+        // doc/STATE.md "Hypothesis").
         ValueExpr::GlobalRef { .. } => OwnershipClass::Borrowed,
         ValueExpr::ListLit { spread: None, .. } => OwnershipClass::Owned,
         ValueExpr::ListLit {
@@ -4920,6 +4933,162 @@ mod tests {
         );
         assert_eq!(
             return_ownership_for("pick_build", &module),
+            OwnershipClass::Borrowed
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // M10 reopen — Local-shadowed `GlobalRef` is a record-field projection
+    //
+    // The IR currently encodes `local.field` as
+    // `ValueExpr::GlobalRef { module: <local_name>, name: <field_name> }`
+    // (see `crates/goby-core/src/resolved.rs:419` — `Expr::Qualified` only
+    // becomes `TupleProject` when the member is numeric; field accesses on
+    // local records flow through `resolve_qualified` and produce a
+    // `GlobalRef` with the local name as `module`).
+    //
+    // Without local-shadowing awareness, `return_ownership_value` sees this
+    // as a function-value reference and conservatively classifies it as
+    // Borrowed. That is what made `stdlib/goby/string.gb::graphemes`
+    // (which returns `final.parts` from a `mut` cell) classify as
+    // `return_ownership[graphemes] = Borrowed`, suppressing `Drop(rows)`
+    // at every call site of `list.map lines graphemes` and leaking ~19000
+    // grapheme lists on a 138×138 stdin run (BUGS.md 2026-04-30).
+    //
+    // The three tests below pin the boundary the fix must respect:
+    //   (i)  When `module` shadows a local with class Owned, the field
+    //        projection is Owned.
+    //   (ii) When the shadowed local is Borrowed, the field projection
+    //        stays Borrowed (no spurious Drop).
+    //   (iii) When `module` is *not* a local (i.e. truly a module path),
+    //        the value remains Borrowed — preserves the
+    //        `return_ownership_global_ref_value_is_borrowed` invariant.
+    // -------------------------------------------------------------------
+
+    #[test]
+    #[ignore = "M10 reopen: pending Let vs. LetMut distinction; \
+                see doc/STATE.md Hypothesis"]
+    fn return_ownership_local_shadowed_global_ref_with_owned_local_is_owned() {
+        // (i) `final.parts` where `final` is a let-bound local of an
+        //     Owned-classifying value (a fresh RecordLit with an Owned
+        //     payload) must classify Owned at the return position.
+        //
+        //   ```goby
+        //   wrap _ =
+        //     final = SomeRecord(parts: [1, 2, 3])
+        //     final.parts
+        //   ```
+        //
+        //   This boundary is *desirable* for `stdlib::graphemes`-shape
+        //   programs but cannot be enabled blindly: the same lowering is
+        //   used for `LetMut` parents, where Owned promotion is unsafe
+        //   (use-after-free across `mut := ...`). The test stays
+        //   `#[ignore]`d as a forward-looking spec until the Let/LetMut
+        //   distinction lands.
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "wrap".to_string(),
+                params: vec![("_".to_string(), IrType::Unit)],
+                result_ty: list_int_ty(),
+                residual_effects: vec![],
+                reuse_param: None,
+                body: CompExpr::Let {
+                    name: "final".to_string(),
+                    ty: IrType::Unknown,
+                    value: Box::new(CompExpr::Value(ValueExpr::RecordLit {
+                        constructor: "SomeRecord".to_string(),
+                        fields: vec![(
+                            "parts".to_string(),
+                            ValueExpr::ListLit {
+                                elements: vec![
+                                    ValueExpr::IntLit(1),
+                                    ValueExpr::IntLit(2),
+                                    ValueExpr::IntLit(3),
+                                ],
+                                spread: None,
+                            },
+                        )],
+                    })),
+                    body: Box::new(CompExpr::Value(ValueExpr::GlobalRef {
+                        module: "final".to_string(),
+                        name: "parts".to_string(),
+                    })),
+                },
+            }],
+        };
+        assert_eq!(return_ownership_for("wrap", &module), OwnershipClass::Owned);
+    }
+
+    #[test]
+    fn return_ownership_local_shadowed_global_ref_with_borrowed_local_is_borrowed() {
+        // (ii) When the shadowed local has Borrowed class (e.g. it
+        //      itself names a Borrowed param), the field projection
+        //      cannot be promoted. Otherwise we would emit Drop on a
+        //      Borrowed parent and double-free the caller's owner.
+        //
+        //   ```goby
+        //   peek_field rec =        -- rec : Borrowed
+        //     rec.parts
+        //   ```
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "peek_field".to_string(),
+                params: vec![("rec".to_string(), IrType::Opaque("Rec".to_string()))],
+                result_ty: list_int_ty(),
+                residual_effects: vec![],
+                reuse_param: None,
+                body: CompExpr::Value(ValueExpr::GlobalRef {
+                    module: "rec".to_string(),
+                    name: "parts".to_string(),
+                }),
+            }],
+        };
+        // `rec` is never consumed in the body, so M4.5 leaves it Borrowed.
+        // The field projection must follow.
+        assert_eq!(
+            return_ownership_for("peek_field", &module),
+            OwnershipClass::Borrowed
+        );
+    }
+
+    #[test]
+    fn return_ownership_global_ref_without_local_shadow_remains_borrowed() {
+        // (iii) When no local shadows `module`, this is a real module-
+        //       path reference (a function value). It must keep the
+        //       conservative Borrowed classification — see the existing
+        //       `return_ownership_global_ref_value_is_borrowed` test.
+        //
+        //       This test layers the local-shadowing check on top: even
+        //       *with* the M10 reopen fix in place, a non-shadowing
+        //       GlobalRef must not be promoted.
+        let module = IrModule {
+            decls: vec![
+                IrDecl {
+                    name: "make_list".to_string(),
+                    params: vec![("_".to_string(), IrType::Unit)],
+                    result_ty: list_int_ty(),
+                    residual_effects: vec![],
+                    reuse_param: None,
+                    body: CompExpr::Value(ValueExpr::ListLit {
+                        elements: vec![ValueExpr::IntLit(1)],
+                        spread: None,
+                    }),
+                },
+                IrDecl {
+                    name: "pick_make_list".to_string(),
+                    params: vec![("_".to_string(), IrType::Unit)],
+                    result_ty: IrType::Opaque("Closure".to_string()),
+                    residual_effects: vec![],
+                    reuse_param: None,
+                    body: CompExpr::Value(ValueExpr::GlobalRef {
+                        module: "self".to_string(),
+                        name: "make_list".to_string(),
+                    }),
+                },
+            ],
+        };
+        assert_eq!(
+            return_ownership_for("pick_make_list", &module),
             OwnershipClass::Borrowed
         );
     }

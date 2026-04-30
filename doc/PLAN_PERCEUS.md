@@ -6,7 +6,7 @@ This document is the roadmap for Goby's memory management — **Perceus-style
 reference counting with reuse analysis** (Reinking, Xie, de Moura, Leijen;
 PLDI 2021, as used in Koka, Lean 4, and Roc).
 
-**Status (2026-04-30): re-opened at M10.**
+**Status (2026-04-30 recheck): M10 remains open.**
 
 - **M0 – M8 shipped.** The runtime layout, refcount + free-list discipline,
   static drop insertion, borrow inference, basic-block reuse, `mut`
@@ -18,10 +18,11 @@ PLDI 2021, as used in Koka, Lean 4, and Roc).
   test (`perceus_real_world_driver_drops_intermediates_and_reuses_per_round`)
   is green. The widening exposed two design fault lines (DI-1 / DI-2)
   recorded in §4.99.
-- **M10 (next).** Three remaining tests are red, all rooted in DI-1
-  (heap-typed call results cannot be classified Owned because type
-  information never reaches IR). M10 lands the chosen DI-1 fix, resolves
-  DI-2, and closes the M9 acceptance gate. See §4.100.
+- **M10 focused fixes landed, but closure is blocked.** DI-1 and DI-2
+  focused tests are green, but the original 138×138 real-world driver shape
+  still exhausts Wasm memory. The committed 6×10 fixture and 20×20 focused
+  compile test are too small to prove closure. See §4.100 for the reopened
+  gate.
 
 Two long-deferred checkboxes are tracked but **won't-fix** under this
 plan; the rationale and re-open conditions live in `doc/PLAN.md` §4.2:
@@ -788,14 +789,12 @@ remaining design hazards:
    self-tail-call drop only targets `Owned` parameters and is safe
    across effect-induced tail calls.
 
-**Conclusion:** The major Perceus pipeline stages (ownership classify
-/ drop insert / reuse) are designed to operate without type
-information, so DI-1's exposure is localised to the
-**call-result classification in `classify_owned_result`**. In other
-words, the inability to classify a heap-typed call result as Owned is
-the sole cause of the three remaining M9 failures (`build_list` /
-`simple_list_drop` / cli `debug_alloc_stats`); the blast radius of
-any fix is bounded.
+**2026-04-30 recheck:** the DI-1/DI-2 focused failures are fixed, but the
+full acceptance shape is still red. A stdin-based 138×138 driver fails with
+`E-MEMORY-EXHAUSTION` under `--max-memory-mb 256` and at the default 1 GiB
+ceiling; a reduced `list.map lines graphemes` shape over 138 lines also
+fails. The next reduction should start at read-lines/graphemes/list-map
+allocation behavior before returning to the full driver.
 
 ---
 
@@ -1360,14 +1359,15 @@ Hard gates (must all pass; closure is blocked otherwise):
       added with a recorded `total_bytes` ceiling in `alloc_baseline.txt`.
       This is the **reproducible** acceptance bench; it exercises the
       same shape as the AoC2025 program.
+- [ ] A stdin-based 138×138 real-world driver regression is automated and
+      passes under `--max-memory-mb 256`.
 
-Optional evidence (not a closure gate):
+Supporting evidence:
 
 - AoC2025 day 4 part 2 (138×138) under `--max-memory-mb 256`. The
-  AoC input is not in the repository, so this is supporting evidence
-  in the commit message rather than a CI-checkable gate. Capture
-  numbers in `tmp/m10_aoc_acceptance.txt` if the contributor has the
-  input on hand.
+  exact AoC input is not in the repository, but the generated/read-lines
+  138×138 shape must be CI-checkable before using private input as supporting
+  evidence.
 
 ### Invariants the fix must preserve
 
