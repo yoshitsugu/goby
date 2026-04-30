@@ -6,7 +6,8 @@ This document is the roadmap for Goby's memory management — **Perceus-style
 reference counting with reuse analysis** (Reinking, Xie, de Moura, Leijen;
 PLDI 2021, as used in Koka, Lean 4, and Roc).
 
-**Status (2026-04-30 recheck): M10 remains open.**
+**Status (2026-04-30 recheck): M10 remains open; the 138x138 memory
+exhaustion is split into M11.**
 
 - **M0 – M8 shipped.** The runtime layout, refcount + free-list discipline,
   static drop insertion, borrow inference, basic-block reuse, `mut`
@@ -18,11 +19,15 @@ PLDI 2021, as used in Koka, Lean 4, and Roc).
   test (`perceus_real_world_driver_drops_intermediates_and_reuses_per_round`)
   is green. The widening exposed two design fault lines (DI-1 / DI-2)
   recorded in §4.99.
-- **M10 focused fixes landed, but closure is blocked.** DI-1 and DI-2
-  focused tests are green, but the original 138×138 real-world driver shape
-  still exhausts Wasm memory. The committed 6×10 fixture and 20×20 focused
-  compile test are too small to prove closure. See §4.100 for the reopened
-  gate.
+- **M10 focused fixes landed, but one IR boundary remains.** DI-2 is green,
+  and the failed naive `GlobalRef` promotion proved that local-shadowed field
+  projections must distinguish immutable `Let` parents from `LetMut` parents.
+  M10 now re-closes only that Perceus IR boundary; see §4.100.
+- **M11 is opened for host-intrinsic allocator unification.** The original
+  138x138 real-world driver still exhausts Wasm memory because seven
+  `goby:runtime/track-e` host imports allocate into a monotonic host bump
+  arena that `__goby_drop` cannot free and alloc stats do not count. This is
+  below the Perceus IR layer; see §4.101.
 
 Two long-deferred checkboxes are tracked but **won't-fix** under this
 plan; the rationale and re-open conditions live in `doc/PLAN.md` §4.2:
@@ -790,47 +795,117 @@ remaining design hazards:
    across effect-induced tail calls.
 
 **2026-04-30 recheck:** the DI-1/DI-2 focused failures are fixed, but the
-full acceptance shape is still red. A stdin-based 138×138 driver fails with
+full acceptance shape is still red. A stdin-based 138x138 driver fails with
 `E-MEMORY-EXHAUSTION` under `--max-memory-mb 256` and at the default 1 GiB
 ceiling; a reduced `list.map lines graphemes` shape over 138 lines also
-fails. The next reduction should start at read-lines/graphemes/list-map
-allocation behavior before returning to the full driver.
+fails. Follow-up investigation localized that failure to host-bump allocations
+inside `goby:runtime/track-e` imports, not to Perceus IR Drop placement.
+M10 now keeps the remaining IR ownership boundary; the runtime allocator fix is
+M11 (§4.101).
 
 ---
 
-## 4.100. M10 — Heap-typed call results, tail-call-safe drops, and M9 closure
+## 4.100. M10 — Let/LetMut-safe return-field ownership
 
-M10 is the forward-looking plan that closes M9. It addresses DI-1 and
-DI-2 from §4.99 and finishes M9's acceptance items. Each step is one
-commit's worth of work and ends with a verifiable check.
+M10 is re-scoped after the 2026-04-30 root-cause localization in
+`doc/STATE.md`: the remaining Perceus IR work is **not** the 138x138 memory
+exhaustion. That failure is caused by host-bump allocations below the IR layer
+and moves to M11 (§4.101).
+
+The active M10 closure path is the smaller, independent ownership fix exposed
+by the reverted naive `GlobalRef` promotion. `local.field` is currently lowered
+as `ValueExpr::GlobalRef { module: local_name, name: field_name }`, which
+conflates a true module-path function reference with a local-shadowed record
+field projection. M10 closes when that shape can transfer ownership from an
+immutable `Let` parent without transferring from a `LetMut` parent.
 
 ### Scope
 
 In scope:
 
-1. Resolve DI-1 so heap-returning calls are classified `Owned` again,
-   without re-introducing the walk / graphemes / rr3 regressions.
-2. Model heap-returning stdlib intrinsics and the projection-borrow
-   lifetime they expose (`ListGet` from an owned parent followed by
-   later use of the projected child).
-3. Resolve DI-2 so tail-call drops never demote a `TailDeclCall` to
-   `DeclCall`.
-4. Close the three open M9 acceptance tests and add the
-   alloc-baseline fixture.
-5. Close the BUGS.md M9 entry and run AoC2025 day 4 part 2 under the
-   256 MiB ceiling.
+1. Teach `return_ownership_value` and the matching call-result boundary to
+   distinguish:
+   - immutable `Let` parents, where field-projection ownership transfer is
+     sound when the parent is `Owned`;
+   - `LetMut` parents, where projection transfer is unsafe because the cell may
+     be re-assigned after the read; and
+   - true module-path `GlobalRef`s, which remain conservatively `Borrowed`.
+2. Enable the ignored forward-looking unit test
+   `return_ownership_local_shadowed_global_ref_with_owned_local_is_owned`.
+3. Keep the already-green safety guards green:
+   `return_ownership_local_shadowed_global_ref_with_borrowed_local_is_borrowed`,
+   `return_ownership_global_ref_without_local_shadow_remains_borrowed`, and
+   `recursive_multi_part_interpolated_print_after_graphemes_executes`.
+4. Preserve the DI-2 tail-call-safe drop fix that has already landed.
 
-Out of scope (still §M9 invariants):
+Out of scope:
 
+- Host-intrinsic allocator unification and the 138x138 stdin driver memory
+  exhaustion. That is M11 (§4.101), because `__goby_drop` cannot free values
+  allocated in the host bump arena.
+- Treating `list.map lines graphemes` as an M10 closure gate. The hot leak is
+  host-bump allocation in `read_lines` / string intrinsics, not only Perceus
+  Drop placement.
 - Reuse across `perform` / `with_handler` boundaries.
 - Reuse on `set xs i v` (M6 Step 5 won't-fix conditions still stand).
 - Inter-procedural reuse beyond the §3.7.1 tail-call rule.
 
-### Design decision: DI-1 fix
+### Active design
 
-Three options were recorded in §4.99 DI-1. M10 picks **Option B**
-(syntactic decl-body inspection) and rejects A and C for the
-following reasons:
+The fix is binding-kind-aware ownership propagation for `GlobalRef` values that
+shadow a local binding.
+
+Implementation direction:
+
+- Extend the return-ownership environment from "name -> `OwnershipClass`" to
+  carry the binding kind needed for projection transfer:
+  `name -> { ownership: OwnershipClass, projection_parent: ImmutableLet |
+  MutableLet | ParamOrUnknown }`.
+- When walking `CompExpr::Let`, bind the local as `ImmutableLet`; when walking
+  `CompExpr::LetMut`, bind it as `MutableLet`. Parameters and unresolved names
+  stay `ParamOrUnknown`.
+- In `return_ownership_value`, handle
+  `ValueExpr::GlobalRef { module, name: _ }` as:
+  - if `module` shadows an `ImmutableLet` local and that local is `Owned`, return
+    `Owned`;
+  - if `module` shadows a `MutableLet` local, return `Borrowed`;
+  - if `module` shadows a `Borrowed` local, return `Borrowed`;
+  - otherwise treat it as a true module-path reference and return `Borrowed`.
+- Apply the same rule anywhere `classify_call_result_ownership` or its helper
+  consumes return-ownership facts for a projected field result.
+
+This is intentionally narrower than the reverted promotion. The reverted rule
+"`GlobalRef.module` exists in the local ownership env, so promote from
+`env[module]`" was unsound because it promoted `LetMut` parents inside
+`graphemes`, freeing per-grapheme strings while the mutable cell was still being
+re-assigned.
+
+### Active M10 acceptance
+
+Hard gates:
+
+- [ ] `return_ownership_local_shadowed_global_ref_with_owned_local_is_owned`
+      is un-ignored and green.
+- [ ] The two conservative `GlobalRef` tests stay green:
+      `return_ownership_local_shadowed_global_ref_with_borrowed_local_is_borrowed`
+      and `return_ownership_global_ref_without_local_shadow_remains_borrowed`.
+- [ ] `recursive_multi_part_interpolated_print_after_graphemes_executes` stays
+      green; `debug` must not regress to `debtg`.
+- [x] DI-2 tail-position drop demotion remains eliminated.
+- [ ] `cargo test --release -p goby-core perceus` and the focused
+      `goby-wasm` regression set for graphemes / split / walk / rr3 are green.
+
+Historical note: the detailed DI-1 decl-return-ownership draft below was the
+pre-root-cause M10 plan. It is retained as implementation context, but it is no
+longer the active closure gate for M10 unless a future change explicitly
+revalidates it against the M10/M11 split.
+
+### Historical design decision: DI-1 fix
+
+Three options were recorded in §4.99 DI-1. The pre-root-cause M10 draft picked
+**Option B** (syntactic decl-body inspection) and rejected A and C for the
+following reasons. This is no longer the active M10 closure path after the
+M10/M11 split above.
 
 - **Option A** (parse `type_annotation`) is brittle: Goby's type
   annotation grammar allows `(A -> B) -> C`, parametric type
@@ -1151,12 +1226,11 @@ the projected child, so `Drop(rolls)` must not be inserted immediately
 after the `ListGet` merely because `rolls` itself has no later direct
 textual use.
 
-M10 therefore treats Step 1c as part of the DI-1 closure, not as an
-optional follow-up. Do not commit Step 1a/1b as a green-lighted design
-while this test remains red; the intended commit boundary is after
-Step 1c makes the workspace green again.
+The historical draft treated Step 1c as part of the DI-1 closure, not as an
+optional follow-up. Under the current M10/M11 split, this material is retained
+only as context for any future decl-return-ownership work.
 
-Design direction for M10:
+Historical design direction:
 
 - Add an explicit, conservative model for **projection borrows**:
   `ListGet(parent, index)` may create a child reference whose lifetime
@@ -1292,9 +1366,9 @@ All must remain green; the new unit tests must pass.
     - Append the post-fix `total_bytes` figure to
       `crates/goby-wasm/tests/alloc_baseline.txt` as the ceiling.
 
-    This fixture is the **reproducible** M10 closure gate. It lives in
-    the repository, runs with no external input, and is the artefact
-    future reviewers can run to verify M10 closure independently.
+    In the historical draft this fixture was the **reproducible** M10 closure
+    gate. Under the current split, the 138x138 stdin-shaped runtime failure is
+    an M11 allocator gate.
 
 (b) **Optional, evidence only.** If the contributor has access to the
     AoC2025 day 4 part 2 input locally:
@@ -1327,7 +1401,7 @@ expected at every step, not specific to M10.
 
 - [ ] Move the BUGS.md M9 entry from "Open" to "Resolved on
       YYYY-MM-DD" with a one-paragraph fix summary listing
-      DI-1 (Option B), DI-2, and the M10 acceptance items.
+      DI-1 (Option B), DI-2, and the historical M10 acceptance items.
 - [ ] Update `doc/STATE.md` and `doc/PLAN.md` §4.2 to record M10
       outcome and re-close Perceus. **Note:** these two docs are
       already stale relative to PLAN_PERCEUS today (they still say
@@ -1344,9 +1418,14 @@ expected at every step, not specific to M10.
 - [ ] Commit each step as its own commit; final commit message
       includes the alloc-baseline numbers from Step 3(c).
 
-### Acceptance for M10 closure
+### Historical acceptance for the pre-M11 M10 draft
 
-Hard gates (must all pass; closure is blocked otherwise):
+This checklist belonged to the pre-root-cause draft that treated the 138x138
+driver as an M10 gate. After the 2026-04-30 localization, these items are
+split: the Let/LetMut `GlobalRef` boundary stays in M10, and host-intrinsic
+allocator unification moves to M11 (§4.101).
+
+Historical hard gates:
 
 - [ ] All M9 open items in §4 ("Open M9 acceptance items") closed.
 - [ ] DI-1 stopgap (`type_is_known_heap`) deleted; replaced by
@@ -1391,6 +1470,182 @@ Supporting evidence:
   without 3b.
 - Type-driven ownership (Option C). Tracked as the long-term
   successor plan to PLAN_PERCEUS.
+
+---
+
+## 4.101. M11 — Host-intrinsic allocator unification
+
+M11 closes the problem localized in `doc/STATE.md`: seven
+`goby:runtime/track-e` host imports allocate escaping Goby values in the host
+bump arena. That arena is monotonic, is not visible to `__goby_drop`, and is
+not counted by `--debug-alloc-stats`. No Perceus IR Drop-placement change can
+free those bytes.
+
+### Decision
+
+Use allocator unification: any host import that returns a Goby heap value must
+allocate that value in the same refcounted heap layout that Wasm-generated code
+uses.
+
+Rejected alternative: per-call-frame host-bump reset. It is unsafe for escaping
+values such as `read_lines ()`, `split_lines (read ())`,
+`__goby_string_graphemes_list`, and `__goby_string_each_grapheme` resume values.
+Those pointers can outlive the import call and be stored in lists, records,
+closures, or `mut` cells. Resetting the bump cursor at the call boundary would
+turn valid Goby values into dangling pointers; tracking escape precisely would
+rebuild ownership on the side. The refcounted heap is already the ownership
+model, so host imports should join it.
+
+### Scope
+
+In scope:
+
+1. Replace host-bump allocation for escaping returned values with a host-side
+   Perceus allocator helper.
+2. Migrate all host imports that currently allocate through
+   `alloc_from_host_bump`:
+   - `__goby_value_to_string`
+   - `__goby_string_each_grapheme_state`
+   - `__goby_string_concat`
+   - `__goby_list_join_string`
+   - `__goby_string_graphemes_list`
+   - `__goby_string_split_lines`
+3. Keep `__goby_string_each_grapheme_count` allocation-free.
+4. Make host-created strings, list headers, and list chunks visible to
+   `__goby_drop`, free-list reuse, and alloc stats.
+
+Out of scope:
+
+- A general exact-size allocator for `large` objects. Existing `large`
+  abandonment rules from §3.2 still apply.
+- A tracing collector or region system.
+- Rewriting stdlib `graphemes` away from host intrinsics. The allocator
+  boundary should be correct regardless of which intrinsic path is used.
+
+### Implementation plan
+
+#### Step 0 — Measurement guard
+
+Add temporary or test-only instrumentation around `alloc_from_host_bump` to
+record cumulative host-bump bytes for:
+
+- one `split_lines_host` call on the 138x138 reduction;
+- one `graphemes_list_host` call on representative ASCII and multibyte input;
+- the reduced `list.map lines graphemes` driver.
+
+This step is evidence, not the fix. It verifies that the n=50 to n=70 cliff
+matches host-bump growth and gives before/after numbers for the M11 commit.
+
+#### Step 1 — Host-side Perceus allocation helper
+
+Add a `wasm_exec.rs` helper that mirrors the runtime contract of
+`emit_alloc_from_top`:
+
+- reserve `payload_size + REFCOUNT_WORD_BYTES`, align to 8 bytes, and allocate
+  from the Wasm-owned top-down heap, not from `host_bump_cursor`;
+- initialize the refcount word to `1` and return the payload pointer;
+- update `GLOBAL_HEAP_CURSOR_OFFSET` so the next Wasm allocation cannot
+  re-enter the host-created object;
+- respect `GLOBAL_HOST_BUMP_CURSOR_OFFSET` as the lower floor while the old bump
+  path still exists;
+- update `GLOBAL_ALLOC_BYTES_TOTAL_OFFSET` with the aligned allocation size;
+- surface memory exhaustion through the same `RUNTIME_ERROR_MEMORY_EXHAUSTION`
+  path as the current host bump allocator.
+
+The helper should be small and explicit rather than calling generated Wasm
+helpers from inside a host import. Re-entering Wasm allocation from a host
+import would complicate borrowing of `Caller` and make failure behavior harder
+to audit. Duplicating the few allocation-slot writes in Rust is acceptable if a
+focused test locks the slot contract.
+
+#### Step 2 — Migrate host-created strings
+
+Replace `encode_string_in_host_bump` with a refcounted equivalent for escaping
+strings. It writes the existing string payload layout unchanged:
+
+```text
+[payload + 0] : i32 len
+[payload + 4] : utf-8 bytes
+```
+
+Only the allocation source changes: the payload pointer now has a refcount word
+at `payload - 8`, so `__goby_drop` can release it. Apply this path to:
+
+- `value_to_string_host`
+- `string_concat_host`
+- `list_join_string_host`
+- the fresh-allocation branch of `grapheme_state_host_inner`
+
+The in-place `span.start == 0` / `span.start >= 4` cases in
+`grapheme_state_host_inner` can keep their existing no-allocation behavior.
+
+#### Step 3 — Migrate host-created `List String`
+
+Replace `alloc_list_string_host` so it allocates the list header, each chunk,
+and each element string via the refcounted host helper. The payload layout stays
+identical to the Wasm list layout documented in §3.1 / §3.2:
+
+- list header: `total_len`, `n_chunks`, chunk pointers;
+- chunk: `len`, tagged items;
+- element string: tagged `String` pointer to `(len, bytes)`.
+
+This migration covers:
+
+- `graphemes_list_host`
+- `split_lines_host`
+
+After this step, dropping a `List String` returned by a host intrinsic must walk
+the host-created list exactly like a Wasm-created list: drop children, free
+chunks and strings into the existing free-list / large-object policy, and update
+the existing freed/reuse stats.
+
+#### Step 4 — Keep or narrow the old bump arena
+
+After all escaping host values move to the refcounted heap, audit remaining
+uses of `alloc_from_host_bump`:
+
+- if no escaping values remain, keep the bump arena only for non-escaping host
+  scratch or remove it if it becomes unused;
+- if any remaining use returns a tagged Goby value, it is a bug and must move
+  to the refcounted helper before M11 closes.
+
+Do not split the ownership model into "sometimes bump, sometimes Perceus" for
+tagged values that can reach Goby code.
+
+### Acceptance for M11 closure
+
+Hard gates:
+
+- [ ] `perceus_m10_graphemes_single_call_emits_free_list_hits` is un-ignored
+      and green. The test name may remain historical; the gate belongs to M11.
+- [ ] `perceus_m10_list_map_graphemes_138_lines_runs_under_256mib` is
+      un-ignored and green.
+- [ ] The original `doc/BUGS.md` 2026-04-30 138x138 driver is automated or
+      otherwise reproducibly exercised under `--max-memory-mb 256`, then moved
+      Open -> Resolved.
+- [ ] `--debug-alloc-stats` observes host-created heap values: the reduced
+      string/list drivers report non-zero `total_bytes`, and dropping them
+      eventually produces free-list or freed-byte evidence rather than silent
+      host-bump growth.
+- [ ] Existing Perceus regression tests remain green, especially
+      `recursive_multi_part_interpolated_print_after_graphemes_executes` and
+      the M10 Let/LetMut `GlobalRef` tests.
+- [ ] Repository quality gate: `cargo fmt`, `cargo check`, and
+      `cargo test --workspace --release`.
+
+### M11 invariants
+
+- Tagged Goby values returned from host imports must have exactly the same
+  payload layout and refcount prefix contract as values allocated by
+  Wasm-generated code.
+- Host allocation must update the same global accounting slots as
+  `emit_alloc_from_top`; otherwise `--debug-alloc-stats` is not a reliable
+  acceptance signal.
+- Host allocation must not overwrite either older top-down heap objects or any
+  still-live host-bump region while the bump arena exists.
+- The M11 fix must not depend on making `return_ownership_value` more
+  aggressive. IR ownership precision and host allocator correctness are
+  separate boundaries.
 
 ---
 
