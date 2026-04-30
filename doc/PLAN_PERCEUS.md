@@ -1,24 +1,35 @@
 # Goby Memory Management Plan — Perceus Refcount with Reuse
 
-Last updated: 2026-04-27
+Last updated: 2026-04-30
 
-This document is the roadmap that replaced Goby's previous bump-only allocator
-with a principled memory management scheme based on **Perceus-style reference
-counting with reuse analysis** (Reinking, Xie, de Moura, Leijen; PLDI 2021, as
-used in Koka, Lean 4, and Roc). M0–M7 are complete as of 2026-04-26.
+This document is the roadmap for Goby's memory management — **Perceus-style
+reference counting with reuse analysis** (Reinking, Xie, de Moura, Leijen;
+PLDI 2021, as used in Koka, Lean 4, and Roc).
 
-**Status (2026-04-27): roadmap closed.** Two checkboxes remain unchecked
-because the work behind them is intentionally not shipping:
+**Status (2026-04-30): re-opened at M10.**
 
-- M4 residency test `perceus_loop_residency` — won't-fix; superseded by
-  the M3 proxy plus the M6 acceptance test (see §M4 entry).
-- M6 Step 5 (`stdlib/goby/list.gb` `set` reuse rewrite) — won't-fix;
-  not on the acceptance path. Re-open conditions and the required ABI
-  changes are mirrored in `doc/PLAN.md` §4.2 so they survive once this
-  document is deleted.
+- **M0 – M8 shipped.** The runtime layout, refcount + free-list discipline,
+  static drop insertion, borrow inference, basic-block reuse, `mut`
+  lowering through reuse primitives, and the M8 widening for the
+  borrow-then-update driver shape are all in place. See §4 for the
+  one-line acceptance summary of each.
+- **M9 partially shipped (2026-04-29).** 3a (self-tail-call param drops)
+  and 3c (TupleProject Owned propagation) landed and the M9 acceptance
+  test (`perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round`)
+  is green. The widening exposed two design fault lines (DI-1 / DI-2)
+  recorded in §4.99.
+- **M10 (next).** Three remaining tests are red, all rooted in DI-1
+  (heap-typed call results cannot be classified Owned because type
+  information never reaches IR). M10 lands the chosen DI-1 fix, resolves
+  DI-2, and closes the M9 acceptance gate. See §4.100.
 
-This document is scheduled for deletion. Anything that needs to outlive
-it lives in `doc/PLAN.md` §4.2.
+Two long-deferred checkboxes are tracked but **won't-fix** under this
+plan; the rationale and re-open conditions live in `doc/PLAN.md` §4.2:
+
+- M4 residency test `perceus_loop_residency` — superseded by the M3
+  proxy plus the M6 acceptance test.
+- M6 Step 5 (`stdlib/goby/list.gb` `set` reuse rewrite) — not on the
+  acceptance path; ABI changes required are mirrored in `doc/PLAN.md`.
 
 Related documents:
 
@@ -55,9 +66,13 @@ closes. The program is fully specified in §1.1 to keep the target
 reproducible.
 
 - Terminate under `goby run --max-memory-mb 16` on the end-state
-  implementation.
-- Produce the same checksum under `goby check` (interpreter) and `goby run`
-  (Wasm backend).
+  implementation. Goby ships a single execution path: `goby run`
+  compiles the program through the general-lowered Wasm backend and
+  runs it under wasmtime. (`goby check` only parses and typechecks
+  and is not a runtime backend.)
+- Produce the checksum recorded by the M1 acceptance fixture under
+  `goby run`. The checksum is committed into the integration test as a
+  literal and is the only authoritative target.
 - Allocate O(length) bytes total over the whole run, measured by the
   `--debug-alloc-stats` counter introduced in M2. Exact ceiling: 200 KiB
   for the listed program. Anything above that is a bug.
@@ -114,9 +129,10 @@ main =
 
 Constants: length 4096, iterations 5000.
 
-Expected checksum under both backends: recorded by M1 from a `goby check`
-run and committed into the integration test as a literal; it becomes
-authoritative.
+Expected checksum: recorded by M1 from a `goby run` execution against
+this exact program and committed into the integration test as a
+literal. It becomes the authoritative value; subsequent runs must
+reproduce it byte-for-byte.
 
 ---
 
@@ -199,12 +215,16 @@ head. No dynamic bucket discovery.
 | `closure[s]` | closure env with `s` slots          | `s ∈ {0..8}`                         |
 | `cell`       | mutable cell (one boxed slot)       | one size                             |
 | `string[b]`  | boxed strings                       | `b ∈ {8, 16, 32, 64, 128, 256, 512, large}` rounded up |
-| `large`      | overflow bucket                     | exact-size, no free list (bump only) |
+| `large`      | overflow bucket                     | exact-size, no free list              |
 
-Allocations that do not fit any enumerated bucket fall into `large`. `large`
-allocations are freed when their refcount reaches zero (returned to a
-free-range list keyed by exact size) but are not recycled into any other
-bucket.
+Allocations that do not fit any enumerated bucket fall into `large`. As
+implemented today (`emit.rs::emit_helper_drop_large`), reaching refcount
+zero on a `large` allocation **abandons** the memory: there is no
+exact-size free range and the bytes are not recycled into any other
+bucket. This is a deliberate trade-off — the goal program does not
+exercise `large` — and is acceptable until a workload demands it. A
+future "exact-size free range" implementation is allowed but is not part
+of this plan.
 
 Every size-class head is a reserved slot in linear memory. The slot layout
 is declared as a struct in `emit.rs` adjacent to the existing
@@ -362,8 +382,10 @@ AllocReuse { token: String, size_class: SizeClass, init: AllocInit },
 ```
 
 **Size-class encoding.** A new `SizeClass` enum mirrors the table in §3.2.
-It lives in `goby-core` so IR can carry it and both backends (Wasm and
-interpreter) can read it.
+It lives in `goby-core` so IR can carry it and the Wasm backend can read
+it. (Goby ships only the Wasm backend today; "both backends" wording in
+older drafts referred to a planned interpreter that did not survive
+the M0 precondition gate.)
 
 **Pass pipeline** (required ordering, asserted at pipeline boot):
 
@@ -372,27 +394,50 @@ resolved
   → shared IR lowering (ir::from_resolved)
   → closure_capture::materialize_envs
   → ownership_classify          (M4; perceus_ownership.rs)
-  → drop_insert                 (M4; perceus_drop.rs)
+  → return_ownership            (M10; classify_decl_return_ownership;
+                                 reads ownership_classify's output)
+  → drop_insert                 (M4 / M10; perceus_drop.rs;
+                                 consumes return_ownership)
   → reuse_pair                  (M5; perceus_reuse.rs)
-  → backend_ir::lower  /  interpreter::eval
+  → backend_ir::lower (Wasm)
 ```
+
+`return_ownership` (M10) is inserted between `ownership_classify` and
+`drop_insert` because it consumes parameter facts and produces a
+per-decl return fact that `drop_insert` reads at every Call use-site
+(via `classify_owned_result`). The order is enforced by
+`assert_perceus_pipeline_order` at pipeline boot.
 
 File names use the `perceus_` prefix; the exported pass functions and
 types do not carry that prefix (per label hygiene).
 
 ### 3.9 Drop specialization
 
-Each heap-typed ADT gets a generated drop helper that decrements refcount
-on every owning field. Generation happens during backend lowering
-(`crates/goby-wasm/src/gen_lower/`) from the IR-level type information.
-For generic polymorphic types (`List a`, `(a, b)`, user-defined `record {
-  ... }`) the runtime dispatches on the tagged value representation
-(existing tag scheme in `runtime_value.rs`) to decide whether a field is a
-heap pointer. No monomorphization.
+**Current implementation (M0–M9, runtime-tag dispatch).**
+Drop is a single `__goby_drop` helper emitted once per module. Given a
+tagged i64 value, it switches on the runtime tag (`TAG_LIST`,
+`TAG_TUPLE`, `TAG_RECORD`, `TAG_CLOSURE`, `TAG_CHUNK`, `TAG_CELL`,
+`TAG_STRING`) and walks the appropriate object structure, recursing on
+owning fields and finally returning the chunk to its size-class
+free-list (or, for `large`, abandoning it; see §3.2).
 
-The generated helpers live in a dedicated Wasm function section
-`__goby_drop_*` emitted once per module. `drop(ptr)` on an object of a
-given runtime tag dispatches into the matching helper by a small switch.
+This means drop dispatch does **not** rely on per-decl IR type
+information — DI-1 in §4.99 documents that no such information reaches
+IR today. The polymorphic shape of `List a` / `(a, b)` / `record { … }`
+is recovered at runtime from the chunk-element tags rather than at
+compile time from inferred element types. No monomorphization.
+
+**Future (post-PLAN_PERCEUS).** A typechecker-fed pass that reflows
+inferred ADT types into IR would let `__goby_drop` specialise per
+type and skip the runtime tag switch on monomorphic call sites. This
+is the long-term successor referenced in §4.99 DI-1 Option C and in
+M10's "Out of scope" list. Until that lands, the current tag-based
+helper remains the contract.
+
+Implementation pointer: `crates/goby-wasm/src/gen_lower/emit.rs::emit_goby_drop_function`
+emits the single tag-dispatching `__goby_drop` helper. Per-tag handling
+lives inline as the cases of that function's switch rather than as
+separate helpers.
 
 ### 3.10 Last-use rules (normative)
 
@@ -431,2004 +476,817 @@ closure-type drop helper when the closure value is dropped.
 
 ## 4. Milestones
 
-Milestones run top-to-bottom. Each ends with the full test suite green
-**and** its acceptance criterion met. The criterion is the checkbox
-directly under the milestone's **Acceptance** bullet; other checkboxes
-are sub-tasks. Every acceptance criterion is objectively checkable by a
-test or a fixture file, not by inspection.
-
-### M0 — Precondition gate
-
-- [x] `doc/PLAN_LIST_FIX_M4_SITES.md` milestones fully complete;
-      memory64 is the only supported width (`doc/STATE.md` already
-      records M4.6 — reconfirm at this plan's start).
-- [x] No outstanding tasks in `doc/BUGS.md` that touch `emit.rs`
-      allocation paths or `runtime_value.rs` tag layout.
-- [x] **Acceptance:** `doc/STATE.md` records "Perceus plan unblocked";
-      the implementation track can proceed to M1.
-
-### M1 — Literal hoisting and goal harness
-
-Hoist constant list/tuple/record literals with no free variables into
-module-level static slots. Introduce the in-tree goal program.
-
-- [x] In `goby-core`, add a "closed-literal" detector over shared IR: a
-      `ListLit` / `TupleLit` / `RecordLit` whose transitive
-      subexpressions contain no `Var`, no `GlobalRef`, no `Lambda`, and
-      no `Call`.
-- [x] Emit detected literals once at module init into a new static arena
-      in `emit.rs`; rewrite the original site to a load from the slot.
-      Static-arena slots carry the sentinel refcount from §3.1.
-- [x] Add `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` with the normative source
-      from §1.1.
-- [x] Add integration test in `crates/goby-wasm/tests/` that compiles
-      the example and validates the Wasm output. The `goby run` case
-      remains `#[ignore]` (un-ignored in M5). The ignore comment cites
-      `doc/PLAN_PERCEUS.md` M5.
-- [x] **Acceptance:** `cargo test -p goby-wasm` green; existing
-      `examples/*.gb` outputs byte-identical; `refcount_reuse_loop_example_compiles`
-      passes (un-ignored as of 2026-04-18).
-
-### M2 — Heap object header with refcount, allocation counter
-
-Add the refcount word, static sentinel, and allocation counter. Refcount
-is maintained but not yet consulted for freeing.
-
-- [x] Adjust layout in `emit.rs` (lines 102–160) so every heap object
-      allocation prepends a refcount word. The prefix is absorbed in
-      the single shared allocator (`emit_alloc_from_top`): the
-      **payload** pointer returned to callers is unchanged in meaning,
-      and `chunk_alloc_size_pw`, `header_alloc_size_pw`, tuple/record/
-      closure size helpers stay as payload sizes. The allocator adds
-      `REFCOUNT_WORD_BYTES` internally before size alignment and
-      advances the returned pointer past the header. Load/store offsets
-      inside payloads remain unchanged. See S2 for the exact edit.
-- [x] All `alloc` sites initialize refcount to 1 by virtue of calling
-      `emit_alloc_from_top`, which now writes the header as part of
-      allocation. The named helper that performs that write is
-      `emit_init_refcount_one` in `emit.rs`.
-- [x] Hoisted-literal and string-constant emissions initialize to
-      sentinel via `emit_init_refcount_sentinel(pw)`.
-- [x] Add global `__goby_alloc_bytes_total` (i64, reserved linear-
-      memory slot adjacent to `host_bump_cursor`). Every `alloc`
-      increments it by the allocation size.
-- [x] Add CLI flag `--debug-alloc-stats` to the `run` subcommand. On
-      program exit it prints exactly one line to stderr, format frozen:
-      `alloc-stats: total_bytes=<N> peak_bytes=<M> free_list_hits=<H>`.
-      In M2, `peak_bytes == total_bytes` and `free_list_hits == 0`;
-      they are placeholders filled in by later milestones.
-- [x] **Acceptance:** all existing `examples/*.gb` produce
-      byte-identical output;
-      `goby run --debug-alloc-stats examples/hello.gb` prints the
-      frozen line with a positive `total_bytes`. Snapshot test stores
-      that hello output.
-
-#### M2 — Implementation notes (non-normative detail for the implementer)
-
-The checkboxes above are the contract. This subsection records the
-concrete file surface, invariants to preserve, and ordering that the M2
-change must follow. Nothing here weakens the acceptance criterion.
-
-**S1. Layout slot additions (`crates/goby-wasm/src/layout.rs`).**
-
-The current layout ends `HEAP_BASE = 28`. Extend the reserved prefix by
-three i64 slots, aligned to 8 bytes, then advance `HEAP_BASE`:
-
-```
- offset  size  name                              notes
- ------  ----  --------------------------------  -----------------------------
-     0     8   iovec / nwritten (existing)       unchanged
-     8     4   (pad)                             already present implicitly
-    12     4   GLOBAL_HEAP_CURSOR_OFFSET         unchanged (i32)
-    16     4   GLOBAL_HEAP_FLOOR_OFFSET          unchanged (i32)
-    20     4   GLOBAL_RUNTIME_ERROR_OFFSET       unchanged (i32)
-    24     4   GLOBAL_HOST_BUMP_CURSOR_OFFSET    unchanged (i32)
-    28     4   (pad to 8-byte align for i64)     new
-    32     8   GLOBAL_ALLOC_BYTES_TOTAL_OFFSET   new (i64, zero-init)
-    40     8   GLOBAL_PEAK_BYTES_OFFSET          new (i64, zero-init; placeholder in M2)
-    48     8   GLOBAL_FREE_LIST_HITS_OFFSET      new (i64, zero-init; placeholder in M2)
-    56     …   iovec scratch / static string pool / heap
-```
-
-Set `HEAP_BASE = 56`. `initial_floor = align_up_i32(buffer_ptr + 4, 8)`
-in `initialize_helper_state_locals` rebases automatically.
-
-Zero-initialization strategy matches the existing emitter model, which
-does **not** use `data.active` for global slots. Verify against
-`crates/goby-wasm/src/gen_lower/emit.rs`:
-
-- `initialize_helper_state_locals` (emit.rs:1310) writes
-  `GLOBAL_HEAP_CURSOR_OFFSET`, `GLOBAL_RUNTIME_ERROR_OFFSET`, and
-  `GLOBAL_HEAP_FLOOR_OFFSET` from the main function body on entry.
-- The data section (emit.rs:1907) is reserved for the newline byte
-  and the static string / static heap pools only.
-
-Follow that pattern: extend `initialize_helper_state_locals` so that,
-when `is_main` is true, it also emits three `I64Store` instructions
-writing `0i64` into `GLOBAL_ALLOC_BYTES_TOTAL_OFFSET`,
-`GLOBAL_PEAK_BYTES_OFFSET`, and `GLOBAL_FREE_LIST_HITS_OFFSET`. The
-aux-decl branch of the same function must **not** re-zero these slots.
-
-The data section in `emit_general_module_with_aux` is untouched for the
-new globals. If the acceptance test from S1 wants to assert
-initialization, it must either disassemble the function body or call
-`_start` and read the slots post-entry via `Memory::read`.
-
-Rationale for placing the new slots *inside* the pre-`HEAP_BASE` header
-rather than inside the STATIC_STRING_LIMIT region: static strings and
-the heap cursor grow **down** from `STATIC_STRING_LIMIT`, so borrowing
-from that region would race with the existing bump downward. The
-pre-`HEAP_BASE` header grows up and is initialized exactly once at
-`main` entry.
-
-**S2. Refcount-prepended allocation (`crates/goby-wasm/src/gen_lower/emit.rs`).**
-
-Every dynamic heap object gets one extra 8-byte refcount word **before**
-the payload pointer, per §3.1. Implementation strategy:
-
-1. Introduce `REFCOUNT_WORD_BYTES: u32 = 8` near the `CHUNK_SIZE`
-   constant. Use 8 unconditionally: Goby is memory64-only (§3.1 and
-   `doc/STATE.md` M4.6), and hoisted-literal layout already uses `u64`.
-2. Modify `emit_alloc_from_top(function, hs, size_local, result_local)`
-   to:
-   - add `REFCOUNT_WORD_BYTES` to `size_local` *before* the 8-byte
-     alignment adjustment (so the cursor consumes the header too);
-   - after the existing cursor decrement, the current `result_local`
-     points at the *header* address; store `i64 1` into
-     `result_local + 0` via `I64Store { offset: 0, align: 3 }`;
-   - then advance `result_local += REFCOUNT_WORD_BYTES` so the caller
-     still receives a **payload pointer** (unchanged ABI for all
-     callers that assume payload-relative offsets).
-3. All call sites of `emit_alloc_from_top` remain unchanged. They still
-   pass the *payload* size in `size_local`; the helper is the single
-   place that knows about the refcount prefix. Do **not** touch
-   `chunk_alloc_size_pw`, `header_alloc_size_pw`, or tuple/record/
-   closure size helpers — the normative plan (§3.1) says "load/store
-   offsets inside the object are unchanged". Prefixing the header
-   inside the allocator preserves that invariant; changing the `*_pw`
-   size helpers would break it.
-4. Introduce two small helpers for explicit refcount writes:
-   - `emit_init_refcount_one(function, pw, payload_ptr_local)` — stores
-     `1i64` at `payload_ptr_local - REFCOUNT_WORD_BYTES`. Called from
-     the allocator path above.
-   - `emit_init_refcount_sentinel_bytes()` — returns `u64::MAX` bytes
-     for embedding in static data segments. `StaticHeapPoolBuilder::
-     alloc_payload` already writes the sentinel (emit.rs:525–529); keep
-     that call site.
-
-**S3. Allocation counter plumbing.**
-
-`emit_alloc_from_top` increments `GLOBAL_ALLOC_BYTES_TOTAL_OFFSET` by
-the *aligned total* (payload + 8-byte refcount, post-alignment) on
-every call. Emit sequence, reusing `hs.scratch` locals:
-
-```
-i64.load  [GLOBAL_ALLOC_BYTES_TOTAL_OFFSET]
-local.get size_local        ;; already aligned, includes refcount word
-i64.add
-i64.store [GLOBAL_ALLOC_BYTES_TOTAL_OFFSET]
-```
-
-No memory_index load/store fuss: the slot is at a fixed address and the
-existing `GLOBAL_*` constant pattern in emit.rs already uses
-`ptr_const(pw, OFFSET as u64)` + `I64Store` without MemArg gymnastics.
-
-`GLOBAL_PEAK_BYTES_OFFSET` is written once as `total_bytes` at program
-exit in M2 (placeholder; M3 wires real peak tracking against the free
-list). `GLOBAL_FREE_LIST_HITS_OFFSET` stays zero until M3 increments it.
-
-**S4. Exit-time stats emission.**
-
-The stats line must land on stderr when `--debug-alloc-stats` is set.
-Two execution paths need coverage:
-
-- **File-based `wasmtime`** (current default for most programs,
-  `execute_wasm` in `crates/goby-cli/src/main.rs:520`). The Wasm
-  module's `_start` must itself `fd_write(2, ...)` before returning.
-  Add an epilogue emitter `emit_alloc_stats_line(function, hs)` that:
-  1. If the module was compiled without the debug flag, emits nothing.
-     (The flag is a compile-time option to avoid runtime-conditional
-     emission.)
-  2. Otherwise formats `alloc-stats: total_bytes=<N> peak_bytes=<M>
-     free_list_hits=<H>\n` into a scratch buffer in linear memory.
-     Reuse the existing `i64_to_decimal_ascii` helper if present;
-     otherwise add a minimal i64-to-decimal emitter in
-     `gen_lower/emit.rs` (used only by this path).
-  3. Writes the buffer to fd=2 via `fd_write`. `fd_write` is already
-     imported; its iovec layout is documented at
-     `crates/goby-wasm/src/layout.rs:1`.
-  4. Is inserted at the exit of the `_start` function, after any
-     user `println`s have flushed to fd=1. Place the emitter call
-     immediately before the final `end` of `main`'s function body in
-     `emit_general_module_with_aux`, gated on
-     `EmitOptions::debug_alloc_stats`.
-
-- **Host-owned execution** (`execute_runtime_module_with_stdin_and_config`
-  in `crates/goby-wasm/src/wasm_exec.rs`). The host already owns the
-  `Store` and can read `GLOBAL_ALLOC_BYTES_TOTAL_OFFSET` directly after
-  `_start` returns. Add a parallel path: when `debug_alloc_stats` is
-  requested, read the three slots out of linear memory via the existing
-  `Memory::read` helper (see wasm_exec.rs:861 for precedent) and print
-  the same frozen line to stderr from Rust.
-
-Both paths share the frozen format. Add one `format_alloc_stats_line(
-total: u64, peak: u64, hits: u64) -> String` helper in
-`goby-cli` (or a shared crate-internal module) to keep them in sync.
-
-**S5. Option plumbing: where to add the boundary.**
-
-The current public surface has no `compile_module_with_options` or
-equivalent. The two entrypoints that must receive the debug flag are:
-
-- File-based path: `goby_wasm::compile_module` (`crates/goby-wasm/
-  src/lib.rs:105`), which delegates to
-  `execution_plan::compile_module_entrypoint` (`crates/goby-wasm/
-  src/execution_plan.rs`).
-- Host-owned path: `goby_wasm::execute_runtime_module_with_stdin_and_config`
-  (`crates/goby-wasm/src/lib.rs:167`), which delegates to
-  `execution_plan::execute_runtime_module_with_stdin_and_config_entrypoint`
-  (execution_plan.rs:120). That function internally calls
-  `compile_module_entrypoint` for the `GeneralLowered` arm.
-
-Concrete edits:
-
-1. Extend `EmitOptions` (currently defined in emit.rs) with
-   `debug_alloc_stats: bool`, default `false`.
-2. Introduce a small `CompileOptions` struct at the `goby-wasm` crate
-   root (or extend an existing equivalent if one appears during
-   implementation) carrying `debug_alloc_stats`. Plumb it through
-   `compile_module_entrypoint` down to `emit_general_module_with_aux_
-   and_options`, which already accepts `EmitOptions`. The rest of the
-   call chain is internal and need not grow a new type.
-3. Add a new public entrypoint
-   `goby_wasm::compile_module_with_options(module, CompileOptions) ->
-   Result<Vec<u8>, CodegenError>`. The existing `compile_module`
-   becomes a thin wrapper passing `CompileOptions::default()`.
-4. Add a new public entrypoint
-   `goby_wasm::execute_runtime_module_with_stdin_config_and_options(
-   module, stdin_seed, memory_config, CompileOptions) -> Result<
-   Option<String>, CodegenError>`. The existing
-   `execute_runtime_module_with_stdin_and_config` wraps it with
-   default options. This function is also responsible for the
-   post-`_start` host-side print described in S4.
-5. `CliArgs.debug_alloc_stats` (new bool) flows into both new
-   entrypoints from `run_command` (`crates/goby-cli/src/main.rs:259`).
-   `execute_wasm` (main.rs:520) gets an extra parameter and, when the
-   flag is set, inherits the wasmtime-child stderr as-is (default
-   behavior — no extra plumbing needed beyond not suppressing it).
-
-The host-owned path needs the signal because it does not re-emit
-Wasm; it reads the counters out of linear memory after `_start`.
-The file-based path needs it only to flip `EmitOptions.debug_alloc_stats`
-before `compile_module_entrypoint` emits the `_start` epilogue.
-
-**S6. CLI surface (`crates/goby-cli/src/main.rs`).**
-
-1. Add `--debug-alloc-stats` (boolean, no value) to the argument parser
-   alongside `--max-memory-mb`. Mirror the existing pre/post-file
-   acceptance. Reject on non-`run` commands with the same warning
-   pattern already used for `--max-memory-mb` on non-run commands.
-2. Thread the bool through `CliArgs`, `run_command`, both execution
-   branches, and into the two new `goby-wasm` entrypoints introduced
-   in S5: `goby_wasm::compile_module_with_options` (file-based arm in
-   `run_command` at main.rs:302) and
-   `goby_wasm::execute_runtime_module_with_stdin_config_and_options`
-   (host-owned arm at main.rs:283).
-3. Add unit tests mirroring the existing
-   `parses_max_memory_mb_*` cases: space-separated, missing-value,
-   before/after file. At least one integration test in
-   `crates/goby-cli/tests/` that runs `goby run --debug-alloc-stats
-   examples/hello.gb` and greps the stderr line against the frozen
-   regex `^alloc-stats: total_bytes=[1-9][0-9]* peak_bytes=[0-9]+
-   free_list_hits=0$`.
-
-**S7. Regression protection for existing examples.**
-
-Every `examples/*.gb` must still produce byte-identical stdout. The
-refcount prefix is invisible to user code because:
-
-- Payload-relative offsets inside objects are unchanged (S2.3).
-- Static heap already writes sentinel refcounts (existing code at
-  emit.rs:525–529).
-- The payload pointer ABI is unchanged.
-
-The one latent risk is alignment: `emit_alloc_from_top` currently
-aligns the *payload* start to 8. With an 8-byte refcount prefix, the
-header also starts at an 8-byte boundary and the payload therefore
-stays aligned. Preserve the alignment assertion explicitly: after
-`result_local += REFCOUNT_WORD_BYTES`, assert in a debug-only check
-(`debug_assert!` via a test-only harness) that `result_local % 8 == 0`.
-
-Acceptance verification: `cargo test -p goby-wasm` must remain green,
-including the snapshot suite (tests under
-`crates/goby-wasm/tests/wasm_exports_and_smoke.rs` cover most
-examples). `cargo test -p goby-core` must also stay green; M2 does not
-touch the interpreter.
-
-**S8. Ordered implementation steps (minimal, reviewable).**
-
-Split the M2 change into the following commit-sized steps. Run
-`cargo check` + the focused test after each step; only proceed to the
-next when green.
-
-1. **Layout slots.** Add the three new `GLOBAL_*_OFFSET` constants and
-   advance `HEAP_BASE` in `layout.rs`. Extend
-   `initialize_helper_state_locals` (emit.rs:1310) so that, when
-   `is_main` is true, it stores `0i64` into each new slot after the
-   existing `GLOBAL_HEAP_CURSOR_OFFSET` / `GLOBAL_RUNTIME_ERROR_OFFSET` /
-   `GLOBAL_HEAP_FLOOR_OFFSET` writes. Focused test: add a test in
-   `crates/goby-wasm/tests/` that compiles a trivial module and, via a
-   wasmtime `Memory::read` harness (pattern at `wasm_exec.rs`:861),
-   asserts all three slots read back as `0` immediately after `_start`
-   on a program that never allocates. An assembly-level inspection of
-   the data section is **not** the right assertion — the slots are
-   initialized in function-body code, not data.
-
-2. **Refcount prefix in allocator.** Modify `emit_alloc_from_top` per
-   S2; add `emit_init_refcount_one` helper. Do not touch counters yet.
-   Focused test: `cargo test -p goby-wasm list_lit_`,
-   `tuple_lit_`, `record_lit_`, `closure_`. Snapshot byte-identity of
-   `hello.gb` stdout.
-
-3. **Allocation counter.** Wire the `GLOBAL_ALLOC_BYTES_TOTAL_OFFSET`
-   increment into `emit_alloc_from_top`. Write initial
-   `GLOBAL_PEAK_BYTES_OFFSET = GLOBAL_ALLOC_BYTES_TOTAL_OFFSET` at
-   `_start` exit (placeholder; M3 replaces with real peak). Focused
-   test: a new unit test that compiles a program with one `ListLit`
-   and reads the counter slot via a WASI memory read in
-   `wasm_exec.rs`-style test harness.
-
-4. **EmitOptions + Wasm-side stats line.** Add
-   `EmitOptions.debug_alloc_stats`, `emit_alloc_stats_line`, and the
-   `fd_write` epilogue. Focused test: compile `hello.gb` with the flag
-   and parse stderr from a wasmtime-driven integration test
-   (conditional on wasmtime availability, matching existing pattern).
-
-5. **Host-owned path.** Add the post-`_start` memory-read branch in
-   `execute_runtime_module_with_stdin_and_config`. Focused test:
-   one of the existing GeneralLowered runtime tests run with the flag.
-
-6. **CLI wiring.** Add the flag to `parse_args_from`, plumb through
-   `run_command` / `execute_wasm`. Add the CLI unit + integration
-   tests listed in S6.
-
-7. **Acceptance sweep.** `cargo fmt --all`, `cargo check
-   --all-targets`, `cargo test -p goby-core`, `cargo test -p
-   goby-wasm`, `cargo test -p goby-cli`. Verify no `examples/*.gb`
-   stdout regressed (snapshot suite).
-
-**S9. What this step does *not* do (guardrails).**
-
-- Does **not** free memory. `drop` is M3. The counter can and will
-  rise monotonically across the whole run.
-- Does **not** introduce free lists. `GLOBAL_FREE_LIST_HITS_OFFSET`
-  stays zero.
-- Does **not** alter `mut` lowering. `AllocMutableCell` gets the same
-  refcount prefix as every other heap object but its refcount is not
-  yet consulted for anything.
-- Does **not** change interpreter behavior. Perceus is a Wasm-backend
-  concern until M4 introduces IR-level `Dup`/`Drop`.
-- Does **not** touch `doc/LANGUAGE_SPEC.md`. No user-visible semantic
-  change.
-
-**S10. Files touched (exhaustive).**
-
-```
-crates/goby-wasm/src/layout.rs                 (S1: slot offsets + HEAP_BASE)
-crates/goby-wasm/src/gen_lower/emit.rs         (S1 init writes in
-                                                 initialize_helper_state_locals;
-                                                 S2 refcount prefix;
-                                                 S3 counter increment;
-                                                 S4 Wasm _start epilogue;
-                                                 EmitOptions.debug_alloc_stats)
-crates/goby-wasm/src/execution_plan.rs         (S5: thread CompileOptions
-                                                 through compile_module_entrypoint
-                                                 and execute_runtime_module_with_
-                                                 stdin_and_config_entrypoint;
-                                                 S4 host-side post-read in the
-                                                 GeneralLowered arm)
-crates/goby-wasm/src/lib.rs                    (S5: new public entrypoints
-                                                 compile_module_with_options and
-                                                 execute_runtime_module_with_
-                                                 stdin_config_and_options;
-                                                 existing entrypoints become
-                                                 default-option wrappers)
-crates/goby-wasm/src/wasm_exec.rs              (expose a helper to read the
-                                                 three i64 stat slots from
-                                                 linear memory for the host-side
-                                                 print; or inline via Memory::read)
-crates/goby-cli/src/main.rs                    (S6: --debug-alloc-stats flag
-                                                 parsing, USAGE update, plumbing
-                                                 into both run_command arms)
-crates/goby-cli/tests/                         (new CLI integration test)
-crates/goby-wasm/tests/                        (new allocator layout test;
-                                                 stderr-line integration test)
-doc/STATE.md                                   (flip focus to "M2 in progress" /
-                                                 "M2 complete" at end)
-doc/PLAN_PERCEUS.md                            (check the M2 boxes at end)
-```
-
-No changes to `stdlib/goby/*.gb`, no changes to `examples/*.gb`, no
-changes to the interpreter (`crates/goby-core/src/interp*`), no changes
-to `doc/LANGUAGE_SPEC.md`.
-
-### M3 — Free lists and `drop` runtime
-
-- [x] Free-list head pointers declared as a struct at a fixed reserved
-      offset in linear memory; layout committed as a comment in
-      `emit.rs`. One head per size class from §3.2.
-- [x] `emit_alloc(size_class, pw)` helper: pops from the matching
-      free list, falls back to bump. Replaces all current direct
-      bump-allocation emissions. (landed as `emit_alloc_with_flag` per C1)
-- [x] `__goby_drop` helper function emitted once per module: refcount
-      decrement, on zero dispatches to the per-type child-drop helper
-      by runtime tag, then pushes onto the matching free list via
-      intrusive first-word next pointer.
-- [x] Per-type child-drop helpers (§3.9) emitted. TAG_CHUNK/TAG_LIST/
-      TAG_TUPLE/TAG_CELL fully implemented. TAG_RECORD/TAG_CLOSURE:
-      freed_bytes accounting only (arity not in payload; full child-drop
-      deferred to M4 with layout change).
-- [x] `free_list_hits` counter wired into `alloc`; increments when the
-      free-list path is taken. `peak_bytes` wired: max of running
-      `(bumped_bytes − freed_bytes)`.
-- [x] **Acceptance:** `cargo test -p goby-wasm` green; a new test
-      `drop_frees_unique_list` explicitly calls `__goby_drop` on a
-      freshly allocated unique list and observes
-      `free_list_hits > 0` on the subsequent allocation.
-
-#### M3 — Clarifications (added 2026-04-19)
-
-The checkboxes above stand; these notes only disambiguate points the
-implementer flagged. None of them weaken the acceptance criterion.
-
-**C1. `emit_alloc` name vs. existing `emit_alloc_with_flag`.** Step 1–5
-landed `emit_alloc_with_flag` (free-list pop + hits counter + bump
-fallback). The bullet "`emit_alloc(size_class, pw)` helper" refers to
-the *same* helper; the M3 task is to make it the **sole** bump-site
-entrypoint — i.e. port every remaining direct bump emission
-(`emit_alloc_from_top` call site) to go through
-`emit_alloc_with_flag(size_class, ...)`. No second helper is introduced.
-Renaming `emit_alloc_with_flag` to `emit_alloc` is optional and
-non-normative.
-
-**C2. `peak_bytes` formula.** The normative reading is:
-
-```
-peak_bytes = max over the run of (total_bytes − freed_bytes)
-```
-
-where `total_bytes` is the existing cumulative allocation counter
-(§S3) and `freed_bytes` is the new cumulative counter added by the
-free-list push path in this milestone (`GLOBAL_FREED_BYTES_OFFSET`,
-already reserved by Step 1). "bumped_bytes" in the original bullet is
-a synonym for `total_bytes`; rename accordingly. `peak_bytes` is
-updated on every `alloc` and every free-list push: after each
-counter write, compute `(total_bytes − freed_bytes)` and
-`i64.store` into `GLOBAL_PEAK_BYTES_OFFSET` only when the new value
-exceeds the stored one.
-
-**C3. Per-type child-drop dispatch.** §3.9 says "dispatch on the
-tagged value representation". For Perceus M3, implement this as
-follows:
-
-- **Per-size-class helpers.** One child-drop function per size class
-  with a static shape: `header[k]`, `tuple[a]`, `record[a]`,
-  `closure[s]`, `cell`, `string[b]`. These helpers have no runtime
-  tag test at the *shape* level — shape is fixed by size class.
-- **Per-slot tag test.** Inside each helper, every owning slot is
-  read and inspected with the existing `runtime_value.rs` tag scheme
-  to decide whether to recurse via `__goby_drop`. Unboxed ints /
-  booleans / unit skip the call. This is the only runtime tag check.
-- **`chunk` has no owning slots** at the per-element level for
-  primitive lists; for lists of heap values the element slot holds
-  tagged values and the same per-slot tag test applies.
-- **`large` bucket.** Uses an exact-size free-range list keyed by
-  size (§3.2). For M3 the child-drop is the same per-shape helper as
-  the would-be size class; size-class matching is what's relaxed,
-  not the shape.
-
-The M3 deliverable includes **all** owning-shape helpers, not just
-`Cell`. The current Step 1–5 commit only pushes `Cell`; Steps 6–7
-must extend child-drop to `header[k]`, `chunk` (when containing
-heap elements), `tuple[a]`, `record[a]`, and `closure[s]`.
-
-**C4. How the acceptance test gets a "unique list" without M4.** M3
-ships without automatic drop insertion. The acceptance test
-`drop_frees_unique_list` must therefore hand-construct the situation.
-Preferred shape:
-
-1. Compile a module that exposes (for testing only) an exported Wasm
-   function which allocates a list of known size class, returns the
-   payload pointer, and a second exported function which, given that
-   pointer, invokes `__goby_drop`.
-2. The integration test calls the first function, then the second,
-   then allocates again and reads `GLOBAL_FREE_LIST_HITS_OFFSET` via
-   `Memory::read` (pattern at `wasm_exec.rs`:861) and asserts > 0.
-
-Exporting these test-only entrypoints is acceptable; gate them on a
-`cfg(test)` or `EmitOptions::expose_perceus_test_exports` flag so they
-do not leak into release modules.
-
-**C5. Free-list intrusive next-pointer overwrites payload word 0.**
-This is intentional and correct: the object is dead (refcount 0) when
-pushed, so clobbering its payload is safe. The only constraint is
-that the size class has at least one word of payload — all §3.2
-classes satisfy this. No action needed; record this as the invariant
-that forbids zero-sized size classes.
-
-### M4 — Static drop insertion, effect-aware
-
-The Perceus algorithm proper, with the closure and handler rules from
-§3.5 applied from the start, not as a follow-up.
-
-- [x] `ownership_classify` pass (landed in
-      `crates/goby-core/src/perceus.rs` as
-      `ownership_classify_module`/`ownership_classify_decl`) marks every
-      parameter and `let`-binding of a fresh-heap value as `Owned`.
-      Borrowed classification is deferred to M4.5.
-- [x] `drop_insert` pass (same file, `drop_insert_module`) implements a
-      **conservative slice** of §3.10 that inserts `CompExpr::Dup` /
-      `CompExpr::Drop` only where the consume-vs-borrow distinction is
-      unambiguous without borrow inference — see the M4 as-shipped note
-      below.
-- [x] Pipeline ordering assertion in the compiler driver: panics at
-      startup if passes are wired in the wrong order.
-- [x] Handler-boundary rules from §3.5 implemented inside
-      `drop_insert`: `Dup` live-across bindings at `WithHandler`;
-      `Resume` treated as borrow. Continuation drop cascades for
-      multi-resume are covered by C5's existing `WithHandler` logic.
-- [x] Correctness tests added inline in
-      `crates/goby-core/src/perceus.rs` `mod tests` (renamed per label
-      hygiene; milestone IDs stripped). The M4 `mut_rec_drop` test from
-      §M4 C6 is **not** shipped as-is: a mutually recursive pair that
-      round-trips an owned allocation between helpers requires the full
-      parameter Dup/Drop machinery that M4.5 will restore. The
-      ownership-transfer **primitive** that `mut_rec_drop` builds on is
-      covered by the single-decl regression
-      `call_site_transfers_ownership_of_owned_arg_to_callee`.
-      Shipped tests:
-      `call_site_transfers_ownership_of_owned_arg_to_callee`,
-      `nested_let_with_call_consuming_binding_does_not_get_outer_drop`,
-      `seq_stmt_with_call_consuming_binding_does_not_get_outer_drop`,
-      `partial_application_captured_list_is_left_to_closure_drop`,
-      `closure_captures_heap_values_outer_scope_does_not_drop`,
-      `case_heap_bound_pattern_drops_unused_bindings`,
-      `multi_resume_captured_list_state_preserved_across_resumes`.
-- [~] Residency test `perceus_loop_residency` — **won't-fix (2026-04-27).**
-      Originally scoped to drive `free_list_hits >= 999` from a real
-      tail-recursive `build 1000` loop. By M6 acceptance the benchmark
-      `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` reports
-      `free_list_hits=0 reuse_hits=5000`: the budget is met through the
-      reuse-token path (M5/M6 `RefCountDropReuse` + `ListSetInPlace`),
-      not through `__goby_drop` → free-list cycling. The `free_list_hits`
-      counter therefore no longer tracks the benchmark's hot loop, and
-      a dedicated full-loop residency assertion would only re-prove what
-      the M3 proxy
-      (`drop_frees_unique_list_and_subsequent_alloc_gets_free_list_hit`)
-      already covers. The M3 proxy stays as the single point of evidence
-      for the `__goby_drop` → free-list path.
-- [x] **Acceptance (as-shipped):** all correctness tests pass;
-      `cargo test --workspace` green; M3 residency proxy remains
-      green; real-loop residency gate reopens under M4.5.
-
-#### M4 — As-shipped scope note (added 2026-04-21)
-
-M4 landed as a **conservative slice**, not the full §3.10 implementation,
-because applying uniform "every `Var` occurrence consumes" semantics to
-all parameter uses produced use-after-free in real programs. Root cause:
-Goby intrinsics like `length`, `list_get`, `list_first` are **borrow
-positions** — they read without consuming — and the current IR does not
-distinguish borrow from consume on `ValueExpr::Var`. Any attempt to
-insert `Drop` after a parameter's last-use, or to branch-balance `Drop`
-between `If` / `Case` arms on general bindings, must therefore be
-deferred until M4.5 adds borrow classification.
-
-What the shipped slice does:
-- classifies all params as `Owned`
-- inserts `Drop` for `let x = <fresh-heap>` bindings only when
-  `use_count == 0` (dropped at the top of the body). When the binding is
-  used even once, the pass leaves it alone. The earlier `use_count == 1 &&
-  !result_references` branch was removed because it misclassified cases
-  like `let xs = [..] in let y = process(xs) in y`: the single use of `xs`
-  sits in a `Call` argument that transfers ownership to the callee, so
-  emitting a post-body `Drop(xs)` double-frees. Regression tests
-  `nested_let_with_call_consuming_binding_does_not_get_outer_drop` and
-  `seq_stmt_with_call_consuming_binding_does_not_get_outer_drop` pin this.
-- inserts `Drop` for unused `case` pattern bindings in each arm
-- inserts `Dup` for owned bindings live across a `WithHandler` body
-  (Case pattern binds and Handle clause params are scoped out of the
-  live-across set)
-- treats `Call`-site argument passing as an ownership transfer: the
-  caller emits no post-`Call` `Drop` for owned args (verified by
-  `call_site_transfers_ownership_of_owned_arg_to_callee`)
-- for parameters: only emits `Drop` on params that are **never** referenced
-  in the body (the unambiguous "dead parameter" case)
-
-What M4.5 must re-open:
-- full last-use analysis on parameters (needs borrow/consume marks on
-  `Var` occurrences)
-- If/Case branch balancing on non-pattern bindings
-- Dup insertion for non-last uses in multi-use scopes
-- `perceus_loop_residency` gate
-
-#### M4 — Clarifications (added 2026-04-19)
-
-**C1. `OwnershipMap` shape.** Keyed by `BindingId` (parameters and
-`let`-bound names, including tuple / record destructurings). Values are
-`Owned | Borrowed` (M4 only emits `Owned`). Per-use markers (last-use,
-non-last-use) are **not** stored in the map — they are computed on
-demand during `drop_insert` by a reverse-order scan inside each basic
-block (§3.7). Rationale: keeping the map shallow avoids having to
-invalidate it when `drop_insert` rewrites the tree.
-
-**C2. Pass granularity.** `insert_drops` runs **per `IrDecl`**. The
-module-level pipeline calls it in a loop over all decls.
-`closure_capture::materialize_envs` has already run, so env-slot
-reads appear as ordinary `Var`s over a synthetic binding whose type is
-the env record. The per-decl contract is: the returned `IrDecl` is
-semantically equivalent modulo inserted `Dup` / `Drop` nodes.
-
-**C3. Pipeline-ordering assertion.** "Startup" means the first call to
-`compile_module_entrypoint` (`crates/goby-wasm/src/execution_plan.rs`)
-and to the interpreter's driver
-(`crates/goby-core/src/interp*`). Concretely: a single
-`assert_perceus_pipeline_order()` helper in `goby-core` is called by
-both drivers before they iterate decls. The assertion compares a
-`Vec<&'static str>` of pass names against a fixed expected list from
-§3.8. It panics (not a typed error) because mis-ordering is a compile-
-time wiring bug, not a user-visible condition.
-
-**C4. IR-node lowering (new — not covered by §3.9).** M4 introduces
-`CompExpr::Dup` and `CompExpr::Drop` but §3.9 only spells out the
-child-drop helpers. Backend lowering responsibility split:
-
-- `CompExpr::Drop { value }` lowers to a call to the module-level
-  `__goby_drop` (already emitted by M3). The argument is the payload
-  pointer; non-heap values short-circuit inside `__goby_drop` via a
-  tag check at entry.
-- `CompExpr::Dup { value }` lowers to a new module-level
-  `__goby_dup` helper (emitted by M4): sentinel check, else i64-
-  increment the refcount at `ptr - PTR_BYTES`. Emit once per module
-  alongside `__goby_drop`.
-- Interpreter lowering: in `goby-core`'s interpreter, `Dup` /
-  `Drop` become no-ops at the value level but must still drive the
-  runtime refcount if the interpreter later gains a heap model. For
-  M4, the interpreter treats them as `Unit`-producing no-ops and
-  the perceus tests run against the Wasm backend.
-
-**C5. Multi-resume continuation-drop cascade (§3.5).** The IR-level
-implementation is: at `WithHandler` lowering, each owned binding live
-across the handler call gets a `Dup` inserted before the handler
-invocation. The captured-continuation object conceptually owns one
-refcount per such binding. When the continuation is dropped
-(completion or explicit abandon), the continuation object's child-
-drop runs `Drop` on each captured binding. M4 does **not** need to
-change the Wasm effect-handler ABI; it only needs `drop_insert` to
-emit the extra `Dup`s and to treat `Resume` as a borrow of the
-captured frame (reads without consuming). If multi-resume is
-invoked N times, each `Resume` issues its own `Dup` over the
-preserved bindings; if invoked zero times, the captured refcounts
-are released by the continuation-object drop path.
-
-**C6. Test-name disambiguation.**
-
-- `mut_rec_drop` → test that a mutually recursive pair of
-  functions, each of which heap-allocates and returns the
-  allocation to the other, does not leak: inserted drops cover
-  both call boundaries.
-- `partial_application_drop` → when a curried partial application
-  is constructed and then dropped without being fully applied,
-  the captured arguments are released.
-- `closure_captures_heap_values` → a closure that captures a
-  list by value sees its env dropped when the closure itself is
-  dropped; nothing runs the captured list's drop twice.
-- `case_heap_bound_pattern` → `case xs { [x, ..rest] -> … }`
-  leaves both `x` and `rest` owned; the non-matching arm drops
-  `xs`; the matching arm drops `xs` after binding `x` and
-  `rest`, and drops whichever of `x` / `rest` is unused in the
-  arm body.
-
-**C7. Handler-boundary rules interact with C5.** The rule "reuse does
-not cross a `PerformEffect`" (§3.7) is an M5 concern, not M4. M4
-only needs to ensure `drop_insert`'s live-across dup pass does not
-mistake a `PerformEffect` for an ordinary call. Concretely:
-`PerformEffect` and `WithHandler` contribute to the "live across"
-set exactly like an ordinary call, but they force the enclosing
-block to end (§3.7) so last-use analysis within the block is
-unaffected.
-
-### M4.5 — Borrow inference for hot parameters
-
-- [x] Extend `ownership_classify` to mark a parameter `borrowed` iff
-      all of the following hold:
-      (a) it is not returned,
-      (b) it is not stored into any heap allocation's field,
-      (c) every use is a read via `Var` that flows into a pure
-          operation (`BinOp`, `ListGet`, `TupleProject`,
-          `RecordProject`) or a call whose matching parameter is also
-          `borrowed`.
-      Condition (c) requires a fixpoint; iterate decl-by-decl.
-- [x] `drop_insert` skips `dup`/`drop` for borrowed parameters.
-- [x] Regression gate: new integration test `alloc_baseline` reads
-      `tests/alloc_baseline.txt` (one line per example:
-      `<example_basename> <max_total_bytes>`). The test runs each
-      example with `--debug-alloc-stats` and asserts
-      `total_bytes <= max_total_bytes`. The file is committed with the
-      M4.5 PR; values are measured at the M4.5 branch + 10% margin.
-- [x] **Acceptance (as-shipped):** `cargo test -p goby-wasm alloc_baseline`
-      passes with no number regressing beyond the 10% margin for the
-      currently GeneralLowered examples in `alloc_baseline.txt`. The original
-      `list_case.gb` reduction check remains inapplicable while that example
-      classifies as `NotRuntimeIo` and cannot emit debug alloc stats.
-
-M4.5 slice note (2026-04-21): the first borrow-classifier slice is in
-tree. It implements the optimistic module fixpoint for ordinary decls,
-borrowed-parameter Dup/Drop skipping, borrowed-call owner-side Drop for fresh
-owned lets, and focused `goby-core::perceus` tests. Precision still to reopen:
-`let` alias flow from C2, SCC-wide recursive parameter demotion from C3,
-general If/Case branch balancing, non-last-use Dup insertion, and the
-`alloc_baseline` / `perceus_loop_residency` gates.
-
-M4.5 completion note (2026-04-22): the remaining borrow-inference slice is
-now in tree. The classifier tracks simple `let alias = Var(source)` chains
-back to parameter owners and the existing optimistic module fixpoint covers
-recursive SCC demotion through call edges. `drop_insert` now handles owned
-parameter borrow-only bodies, If/Case dead-arm Drop balancing, live-across
-`let value` Dup insertion before consuming calls, and same-call repeated
-owned-argument Dup insertion for the syntax-directed cases that have
-borrow/consume evidence. Borrow evidence is intentionally conservative for
-`If` conditions, `ListGet`, `TupleProject`, interpolation, and scalar
-operators because source-level parameter types are often erased to `?` in IR.
-The `alloc_baseline` integration gate was added with the currently
-GeneralLowered programs `fold.gb`, `hof_fold_print.gb`, and
-`refcount_reuse_loop.gb`. `list_case.gb` is currently `NotRuntimeIo`, so it is
-not part of the executable alloc-stats baseline until that example moves onto
-the GeneralLowered path.
-
-#### M4.5 — Clarifications (added 2026-04-19)
-
-**C1. Fixpoint initial state.** Start every parameter `Borrowed` and
-**demote** on violation of (a)/(b)/(c). This is the "optimistic"
-direction. Rationale: a parameter that never appears in a `Dup` /
-heap-store / return position stays `Borrowed` at fixpoint. Starting
-from `Owned` would require a separate liveness witness for every
-borrow and never converges to the same set. Iterate decl-by-decl in
-any order until no decl's `OwnershipMap` changes in a full pass.
-
-**C2. "Flows into" (condition c) — operational definition.** A use of
-parameter `p` at occurrence `u` "flows into" operation `O` iff `u` is
-the direct operand of `O`, or `u` appears in a
-`CompExpr::Let { bind, value: u, body }` where every occurrence of
-`bind` in `body` also flows into some `O`. Concretely:
-
-- `p` read inside a `BinOp`, `ListGet`, `TupleProject`,
-  `RecordProject`, `Compare`, `Not`, or arithmetic operation —
-  **flows pure**.
-- `p` passed as argument to `Call f ... p ...` — flows pure iff `f`'s
-  matching parameter position is `Borrowed` in the current fixpoint
-  iterate.
-- `p` returned (appears in a tail `Value` position), stored in a
-  `ListLit` / `TupleLit` / `RecordLit` / `CreateClosure` field, used
-  in `AssignIndex` as the list target, or passed to an `Owned`
-  callee parameter — **demotes** `p` to `Owned`.
-- `p` used as scrutinee of `Case` — recurse: if every arm treats the
-  binding-forms it produces as a borrow (no further-violating use),
-  the scrutinee usage is a borrow.
-
-This is deliberately a local, syntax-directed analysis; no alias or
-escape analysis.
-
-**C3. Recursive and mutually recursive functions.** Treat every decl
-in a strongly connected component as one fixpoint subject. Initial
-state `Borrowed`; a violation in any decl demotes the matching
-parameter across **all** decls in the SCC before the next iterate.
-
-**C4. Where `tests/alloc_baseline.txt` lives.**
-`crates/goby-wasm/tests/alloc_baseline.txt`. The integration test
-file `crates/goby-wasm/tests/alloc_baseline.rs` iterates it, runs
-each example through the host-owned execution path (already supports
-`--debug-alloc-stats` reads via `Memory::read`), and compares
-`total_bytes`.
-
-**C5. Baseline-number recording procedure.** "Measured at the M4.5
-branch + 10% margin" is ambiguous; the normative procedure is:
-
-1. On the implementation branch for M4.5, after the borrow-inference
-   change is in place and all tests pass, run
-   `cargo test -p goby-wasm --features alloc_baseline_record`
-   (new cargo feature gate, just for this bootstrap) which regenerates
-   `alloc_baseline.txt` with the observed `total_bytes` for every
-   example.
-2. Multiply each value by 1.10 (round up to an integer) and commit
-   that file. Future runs fail if the observed number exceeds it.
-3. Record the M4-branch `total_bytes` for `fold.gb` and
-   `list_case.gb` in the PR description so the 20% reduction
-   claim is verifiable against a specific commit SHA. The 20%
-   reduction is checked against those recorded M4 numbers, not
-   against `alloc_baseline.txt`.
-
-**C6. Example coverage.** "Every example" means every `.gb` file in
-`examples/` that currently runs under the GeneralLowered Wasm path
-and terminates within the existing CI timeout. Examples that already
-require `--max-memory-mb` (e.g. `refcount_reuse_loop.gb`) are
-excluded from `alloc_baseline.txt` and covered separately by the M5
-acceptance test.
-
-### M5 — Reuse analysis
-
-M5 code work is complete (intra-block `reuse_pair`, tail-position
-cross-call ABI, inline `__goby_alloc_reuse` / `__goby_drop_reuse`,
-correctness tests). Two items remain and ride alongside M6:
-
-- [x] Un-ignore the M1 integration test for
-      `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` and add an assertion that
-      `total_bytes < 200 * 1024`. **Done 2026-04-26** in
-      `goby-wasm/tests/wasm_exports_and_smoke.rs::refcount_reuse_loop_example_compiles`.
-- [x] **Acceptance:** the M1 test passes with `total_bytes < 200 KiB`.
-      **Closed 2026-04-26** by M6 Step 7-d (final report:
-      `total_bytes=108704 reuse_hits=5000`).
-
-Notes carried into M6:
-
-- M5 list `AllocReuse` currently bumps a fresh chunk on every
-  allocation (`emit_alloc_reuse` payload-only reuse only covers the
-  header / single-chunk path). The `refcount_reuse_loop.gb` budget
-  cannot converge until chunk-level reuse lands, so M6 Step 7
-  reserves a sub-step for it.
-- `BackendIntrinsic::ListSetInPlace` already exists with a strict
-  aliasing contract (`gen_lower/backend_ir.rs:120-128`) gated by
-  `lower_supported_inline_list_fold_mutating_each`. M6 reuses this
-  primitive but must extend the gate, not bypass it.
-
-### M6 — `mut` lowering through reuse primitives (no semantics change)
-
-M6 routes the backend lowering of `xs[i] := v` through the same reuse
-primitives as immutable update. It does **not** change `mut` semantics:
-captured `mut` (cell-promoted, refcount > 1 by construction per §3.4)
-must keep observing path-copy behavior; non-captured `mut` switches to
-the reuse fast path when statically proven unique.
-
-#### Step 1 — Reuse-eligibility for `AssignIndex` in `perceus_reuse` ✅
-
-- [x] In `crates/goby-core/src/perceus_reuse.rs`, extend the intra-block
-      pass to recognize `CompExpr::AssignIndex { root, path, value }`
-      as a reuse site. The chosen IR shape is a `reuse_token` field on
-      `AssignIndex` of type `Option<AssignIndexReuse { root_token,
-      levels: Vec<Option<SizeClass>> }>` (commit 4f9f701, b00eab1):
-  - Within one basic block (§3.7), if `root` has a recorded
-    `SizeOrCell` shape (List header, possibly `FreshList`), the pass
-    emits a token plus a per-level size-class vector.
-  - **Skipped** when `root` is cell-promoted (`SizeOrCell::CellPromoted`).
-  - **Skipped** when `value` evaluation contains a conservative abort
-    (`PerformEffect` / `WithHandler` / `Resume` / effect-intersecting
-    `Call`).
-- [x] Focused tests in `perceus_reuse::tests`:
-  - `assign_index_unique_inserts_drop_reuse` (covered by
-    `assign_index_unique_with_anf_wrapped_initializer_inserts_reuse`).
-  - `assign_index_skipped_when_root_is_cell`.
-  - `assign_index_skipped_across_perform_effect` (covered by
-    `reuse_not_across_perform_effect`).
-  - `nested_assign_index_chains_drop_reuse_per_level`.
-  - Additional: `assign_index_fresh_nested_literal_records_inner_class`,
-    `assign_index_shared_inner_var_falls_back`,
-    `assign_index_first_none_stops_reuse` (Step 4 prep).
-
-#### Step 2 — Codex plan review
-
-- Send the Step 1 IR rewrite proposal to Codex. Confirm consistency
-  with §3.4 (semantics preservation under shared cells) and §3.7
-  (path breakpoints), and that the chosen IR shape does not require
-  cross-pass coordination beyond what `closure_capture` already
-  provides.
-
-#### Step 3 — Backend lowering: single-level `xs[i] := v` reuse path ✅
-
-- [x] In `crates/goby-wasm/src/gen_lower/lower.rs::lower_assign_index`,
-      branch on the Step 1 IR signal (commit 1de122d):
-  - **Reuse-eligible:** emit `__goby_drop_reuse` on `root`, perform an
-    in-place element store, and rebind via `alloc_reuse(token, S,
-    Retain)`. No descent / ascent path-copy.
-  - **Not reuse-eligible** (cell-promoted, shared, breakpoint): keep
-    the existing `ListGet` + `ListSet` path-copy lowering. Cell write-
-    back via `LoadCellValue` / `StoreCellValue` is unchanged.
-- [x] `BackendIntrinsic::ListSetInPlace` is now reachable when the
-      Step 1 reuse signal is present, in addition to the pre-existing
-      `lower_supported_inline_list_fold_mutating_each` site (which is
-      kept as an independent gate).
-- [x] Runtime tests in `crates/goby-wasm/src/compile_tests.rs`:
-  - `mut_assign_index_unique_reuses` (named
-    `lm_single_level_list_assign_updates_element` and
-    `lm_value_semantics_no_aliasing`).
-  - `mut_assign_index_shared_falls_through` — cell-promoted `mut`
-    fallback covered by `lm_value_semantics_no_aliasing` and
-    `lower_assign_index_cell_promoted_*` IR tests.
-
-#### Step 4 — Nested `xs[i][j] := v` reuse chain ✅
-
-- [x] Extend the `lower_assign_index` descent / ascent so reuse tokens
-      propagate per level (commits 747e1de, 91360ca). Outer unique →
-      `DropReuse` outer, ascent emits `ListSetInPlace` for every level
-      `i < reuse_depth`. Inner levels do **not** require additional
-      `DropReuse` / `AllocReuse(Retain)` because `ListGet` does not
-      bump the inner header's refcount, so the static `FreshList`
-      proof from `perceus_reuse` already guarantees inner refcount ==
-      1.
-- [x] Per-level fallback: "first None stops reuse" — once
-      `levels[i] == None`, every deeper level falls back to
-      copy-on-write `ListSet`. Outer (level 0) reuse is preserved
-      whenever it is statically proven.
-- [x] Runtime tests:
-  - `nested_assign_index_unique_reuses_outer_only`
-  - `nested_assign_index_fresh_literal_reuses_inner_in_place`
-  - `nested_assign_index_shared_inner_falls_back`
-  - IR-level: `lower_assign_index_two_levels_uniform_inner_reuses_all_levels`,
-    `lower_assign_index_two_levels_inner_none_after_outer_reuse_uses_listset`.
-
-#### Step 5 — `stdlib/goby/list.gb` `set` rewrite — won't-fix (2026-04-27)
-
-- [~] Originally scoped: rewrite `set xs i v` to the immutable-update
-      surface form so it picks up reuse automatically. **Closed as
-      won't-fix.** Not on the acceptance path (M6 Step 7-a/7-c met the
-      200 KiB budget without it). Re-open conditions and the required
-      ABI changes are recorded in `doc/PLAN.md` §4.2 so they survive
-      this document's eventual deletion.
-
-**Investigation summary (2026-04-27, retained for the record).** Two
-interdependent blockers prevent a drop-in rewrite:
-
-1. `backend_intrinsic_for("list", "set")` short-circuits every
-   `list.set` call to `BackendIntrinsic::ListSet` before the stdlib body
-   is reached. Removing the entry routes calls through the stdlib body
-   but exposes issue 2.
-
-2. `lower_assign_index_reuse` emits `ListSetInPlace` unconditionally
-   even when the runtime token returned by `RefCountDropReuse` is null
-   (rc was != 1). The guard relies on the static uniqueness proof from
-   `perceus_reuse`: `reuse_token` is only attached when the root is
-   statically owned. For `set xs i v`, `xs` is `Owned` only if the
-   ownership pass propagates the `LetMut` alias (`mut ys = xs`). Adding
-   `bind_alias` to `LetMut` in `perceus.rs` lights up the reuse, but
-   when the caller still references `xs` after `set xs 0 v` the inserted
-   `Dup(xs)` (rc:1→2) followed by `RefCountDropReuse(ys)` (rc:2→1)
-   leaves a shared chunk that `ListSetInPlace` then mutates —
-   corrupting the caller's `xs`.
-
-The correct fix is a runtime branch in `lower_assign_index_reuse`:
-`token != 0` keeps the current `ListSetInPlace` + `AllocReuse(Retain)`
-path; `token == 0` falls back to copy-on-write `ListSet`. This requires
-introducing if/else control flow at the `WasmBackendInstr` layer and
-redefining `BackendAllocInit::Retain` so the `token == 0` branch either
-copies the payload or is statically excluded. The effort is larger than
-M6 itself and produces no measurable benefit on current workloads, so
-the change is deferred indefinitely.
-
-Current state (frozen): `set xs i v = __goby_list_set xs i v`, lowered
-through the copy-on-write `ListSet` intrinsic for every call.
-
-#### Step 6 — Codex code review
-
-- Send the Step 1, 3, 4, 5 diffs to Codex. Focus areas:
-  - cell-promoted detection has no holes (every captured `mut` path
-    stays on copy-on-write);
-  - nested fallback preserves per-level uniqueness invariants;
-  - `ListSetInPlace` aliasing contract is still satisfied at every
-    new call site.
-
-#### Step 7 — Example output parity and acceptance
-
-- [x] Confirm `examples/mut_list.gb`, `examples/closure_mut.gb`,
-      `crates/goby-cli/tests/fixtures/mutable-captures/closure_mut_list.gb`,
-      `crates/goby-cli/tests/fixtures/mutable-captures/closure_mut_nested_list.gb` produce
-      byte-identical output (Step 4 lands without touching
-      `runtime_output_tests.rs` snapshots; the workspace test suite is
-      green at commit 91360ca).
-- [x] Measure `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` with
-      `cargo run -p goby-cli -- run --debug-alloc-stats`. Required:
-  - `total_bytes < 200 * 1024`,
-  - `peak_bytes` of the same order,
-  - checksum matches the value fixed in §1.1.
-  - **Status (2026-04-26): done.** Reports `total_bytes=108704
-    peak_bytes=108704 free_list_hits=0 reuse_hits=5000`, below the
-    200 KiB budget. See Step 7 execution plan for full landing
-    sequence (7-a / 7-a.5 / 7-b / 7-c / 7-d).
-- [x] Extend `comp_alloc_size_or_cell` (or the `SizeEnv` propagation
-      path) so `mut ys = xs` inherits `xs`'s outer size class when it
-      is known (function-parameter case). **Done 2026-04-26** via
-      `peek_binding_shape` + Owned-param `SizeEnv` seed in
-      `perceus_reuse::insert_reuse`. Synthetic test confirms reuse
-      fires; benchmark still blocked by Step 7-a.5 (intrinsic
-      ownership ABI).
-- [x] Close the §M5-deferred chunk-level reuse gap. **Done 2026-04-26**
-      via specialized lowering for tail-recursive prepend-accumulator
-      (`build` → builder-backed loop) and self-recursive list-case fold
-      (`xor_fold` → `ListFold`), which eliminated the actual ~149 MiB
-      allocation sources. `AllocReuse` chunk-level reuse not required.
-- [x] Un-ignore the `total_bytes < 200 * 1024` assertion in
-      `crates/goby-wasm/tests/wasm_exports_and_smoke.rs::refcount_reuse_loop_example_compiles`.
-      **Done 2026-04-26.**
-
-##### Step 7 execution plan (2026-04-26 decision log)
-
-The two outstanding sub-items above (`mut ys = xs` seed extension and
-chunk-level reuse) are sequenced as follows. Step 5 (`stdlib/goby/list.gb`
-`set` rewrite) is intentionally deferred until after acceptance lands.
-
-1. **Step 7-a — Seed `mut ys = xs` from the parameter's size class
-   (Owned-parameter case only).** Extend `comp_alloc_size_or_cell` (or
-   the `SizeEnv` seed) so that when `xs` is an `Owned` function
-   parameter with a known outer `SizeClass`, the binding `mut ys = xs`
-   inherits that class. Keep the change strictly conditional on the
-   M4.5 ownership classification: shared / `Borrowed` / unknown
-   parameters must continue returning `None`.
-   - *Rationale:* this is the smallest change that can fire reuse on
-     the benchmark loop and is exactly the precondition Step 7 already
-     reserves. Limiting the seed to `Owned` parameters preserves the
-     §3.4 invariant that reuse fires only on values statically proven
-     unique — a `mut ys = xs` over a shared `xs` would otherwise alias
-     and break value semantics. Broader `mut = Var` propagation is
-     deferred until a concrete second case demands it; YAGNI keeps the
-     proof surface narrow.
-   - *Verification:* expect `reuse_hits > 0` in
-     `goby run --debug-alloc-stats crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb`.
-     `total_bytes` is **not** expected to clear 200 KiB yet.
-   - **Status (2026-04-26): landed.** `insert_reuse` now takes a
-     per-decl `Owned`-param `HashSet<String>` and pre-seeds the
-     `SizeEnv` with `Header(1)` placeholders; a new
-     `peek_binding_shape` wrapper allows `Var(p)` passthrough only at
-     Let / LetMut / Assign rebind sites (the recursive
-     `value_alloc_size_or_cell` is unchanged, so `mut ys = [xs, xs]`
-     still falls back to outer-only). Synthetic
-     `step xs i = mut ys = xs; ys[0] := i; step ys (i-1)` (built via
-     a fresh `build` recursion, no `length` call) reports
-     `reuse_hits=5`. The benchmark itself is **still 0** —
-     `length(xs)` is the blocker; see Step 7-a.5 below.
-
-1.5. **Step 7-a.5 — Model read-only list intrinsics as borrowed.
-   Status (2026-04-26): landed.** Discovered while measuring Step 7-a:
-   `__goby_list_length` (and likely other read-only intrinsics) is
-   classified by the ownership pass as `Owned`-arg, so `drop_insert`
-   emits `Dup(xs); length(xs)` to keep `xs` live past the call. But
-   `emit_list_length_helper`
-   (`crates/goby-wasm/src/gen_lower/emit.rs::7532`) reads the header
-   and then drops nothing. The runtime refcount is therefore one
-   higher than the static analysis assumes after the call, and the
-   downstream `mut ys = xs; ys[i] := v` AssignIndex sees rc=2 at
-   `RefCountDropReuse`, taking the cold path and never incrementing
-   `reuse_hits`.
-
-   The selected fix is an intrinsic param ownership table in the
-   ownership pass: `__goby_list_length` argument 0 is treated as
-   `Borrowed`, and `drop_insert` consults the same table when deciding
-   whether a call consumes an owned value. GeneralLower also runs
-   Perceus with imported stdlib declarations in the module, so user
-   calls to `length(xs)` can see the wrapper's borrowed argument facts.
-   This removes the runtime drop-then-keep round-trip and matches the
-   spec's notion of length as a pure read.
-
-2. **Step 7-b — Re-measure and decide on chunk-level reuse.** With
-   header reuse firing, re-run the benchmark. `length=4096` over 5000
-   iterations almost certainly still exceeds 200 KiB because every
-   `AllocReuse` bumps a fresh chunk (M5-deferred), but we commit to a
-   measurement-driven decision rather than a pre-assumed one.
-   - *Rationale:* keeping 7-a and 7-b as separate landings means each
-     can be bisected and reviewed in isolation, and makes the
-     contribution of each mechanism observable in `total_bytes` /
-     `reuse_hits` deltas. If 7-a unexpectedly suffices, 7-b becomes a
-     pure cleanup task instead of an acceptance blocker.
-   - **Status (2026-04-26): measured.**
-     `cargo run -p goby-cli -- run --debug-alloc-stats --max-memory-mb 16
-     crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` reports
-     `total_bytes=149354768 peak_bytes=149354768 free_list_hits=0
-     reuse_hits=5000`. Header reuse is firing; chunk-level reuse remains
-     required for the `< 200 KiB` budget.
-
-3. **Step 7-c — Implement chunk-level reuse if 7-b shows it is
-   needed.** Extend `emit_alloc_reuse` so the chunk payload is taken
-   from the freed value's chunk(s) instead of bumping. The ListSet/
-   AssignIndex hot path then performs zero per-iteration heap growth.
-   - *Rationale:* this is the §M5 deferred item the PLAN already
-     reserves under Step 7. It is left until 7-b confirms necessity so
-     the work order matches measured impact.
-   - **Status (2026-04-26): superseded by measurement.** Header reuse
-     firing plus `iters=0` measurement showed the remaining ~149 MiB
-     was not the AssignIndex hot loop. The actual blockers were
-     `build 0 4096 []` (`[k, ..acc]` tail-recursive prepend
-     accumulator) and `xor_fold` (`[x, ..rest]` tail pattern). The
-     accepted fix keeps the measurement-driven intent of Step 7-c but
-     targets the real allocation sources: GeneralLower now lowers the
-     build shape through a builder-backed loop and lowers the
-     self-recursive list-case integer fold through `ListFold`. The
-     benchmark now reports `total_bytes=108704 peak_bytes=108704
-     free_list_hits=0 reuse_hits=5000`, below the 200 KiB budget.
-
-4. **Step 7-d — Un-ignore the `total_bytes < 200 * 1024` assertion.**
-   Only after 7-a (and 7-c if needed) bring the benchmark below
-   budget.
-   - **Status (2026-04-26): done.**
-     `wasm_exports_and_smoke.rs::refcount_reuse_loop_example_compiles`
-     now executes the example with debug alloc stats and asserts
-     `total_bytes < 200 * 1024`.
-
-5. **Step 5 (`stdlib/goby/list.gb` `set` rewrite) deferred until
-   post-acceptance.** Although Step 5 sits before Step 7 in the
-   numbered list, the benchmark does not exercise `list.set`, and Step
-   7 explicitly notes "Step 4 alone cannot close the budget" — i.e.
-   the acceptance gate depends on 7-a/7-c, not on Step 5. Reordering
-   minimises the surface under review for the benchmark landing and
-   isolates any `set` rewrite regressions from the reuse plumbing.
-   - *Rationale:* Step 5's surface form rewrite touches the stdlib and
-     can ripple through unrelated examples; bundling it with the
-     acceptance landing risks confounding alloc-baseline deltas. After
-     acceptance, Step 5 becomes a pure code-quality follow-up that can
-     be verified against a stable baseline.
-
-#### Step 8 — STATE / PLAN sync and commit
-
-- [x] Update `doc/STATE.md` to mark Perceus M5 acceptance and M6
-      complete; sync `memory/project_perceus_status.md`. **Done 2026-04-26.**
-- [x] Update `doc/PLAN.md` §4.2 Perceus track row for M6. **Done 2026-04-26.**
-- [x] Run `goby-invariants` (spec / examples / diagnostics gate)
-      before commit. **Done 2026-04-26** (doc-only change; no syntax /
-      diagnostics / runtime impact).
-
-#### Acceptance
-
-- `cargo test -p goby-wasm` green.
-- Four `mut` / `closure_mut*` example outputs byte-identical.
-- `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` `total_bytes < 200 KiB` and
-  checksum matches §1.1.
-- `tests/alloc_baseline.txt` deltas (if any) explained per entry in
-  the commit message.
-
-### M7 — Remove the bump-only fallback; document
-
-- [x] `emit.rs` chunk layout design-constraint comment rewritten to
-      describe refcount + free-list model (chunk free-list on last drop;
-      Large / oversized falls back to bump on miss). **Done 2026-04-26.**
-- [x] `host_bump_cursor` / `heap_floor` role confirmed: `heap_floor` is
-      a function-local cursor for the current allocation frame (not
-      bump-only); `host_bump_cursor` backs host-side string/list writes.
-      No redefinition needed — naming already reflects "backing" role.
-      **Confirmed 2026-04-26.**
-- [x] `doc/PLAN.md` §4.2 updated: Perceus track row now records M7
-      complete; "bump-only allocator" in section intro changed to past
-      tense. `doc/PLAN_IR.md` ListLit/TupleLit/RecordLit rows updated to
-      reflect refcount-tracked model (chunks free-listed; headers and
-      Tuple/Record bump-backed, no free-list slot). `AGENTS.md` had no
-      bump-only references. **Done 2026-04-26.**
-- [x] `doc/LANGUAGE_SPEC.md` performance note updated from "current bump
-      allocator" to "refcount-tracked heap, free-list backed allocator
-      (chunks recycled; headers bump-backed)".
-      **Done 2026-04-26.**
-- [x] `doc/STATE.md` records §1 goal as satisfied with measured numbers
-      (`total_bytes=108704 reuse_hits=5000`). **Done 2026-04-26.**
-- [x] **Acceptance (2026-04-26):** no active documentation reference to
-      "bump-only allocator, no free" remains; goal program runs under
-      200 KiB budget; `cargo test --workspace` green; alloc_baseline
-      unchanged (comment-only diff, no code path changed).
+M0 – M8 are shipped and listed compactly below — each as a one-line
+acceptance summary plus the key code locations. M9 is partially shipped
+(3a + 3c landed; M9 acceptance test green); the open work is rolled
+forward into M10 in §4.100. M9's verbose original prescription has been
+removed: it served its purpose during implementation and is now
+superseded by the design notes in §4.99 and the M10 plan in §4.100.
+The git history at commits `ece2e66` (M9 opening) and `6c87777` (M9
+step-by-step rewrite) preserves the long form for archaeology.
+
+### M0 – Precondition gate (shipped)
+
+**Acceptance:** memory64 migration complete; no `BUGS.md` entries
+touching allocator paths; `doc/STATE.md` records "Perceus plan
+unblocked".
+
+### M1 – Literal hoisting and goal harness (shipped)
+
+**Acceptance:** closed list / tuple / record literals are hoisted to a
+module-init static arena with the §3.1 sentinel refcount;
+`refcount_reuse_loop_example_compiles` (un-ignored 2026-04-18) green.
+
+Code: `crates/goby-core/src/literal_hoist.rs` (closed-literal detector);
+`crates/goby-wasm/src/gen_lower/emit.rs` (static arena).
+
+### M2 – Heap object header with refcount, allocation counter (shipped)
+
+**Acceptance:** every heap allocation prepends a refcount word; the
+shared allocator (`emit_alloc_from_top`) absorbs the prefix without
+changing the payload-pointer contract; existing `examples/*.gb` outputs
+byte-identical; `--debug-alloc-stats` emits the frozen
+`alloc-stats: …` line.
+
+Code: `crates/goby-wasm/src/gen_lower/emit.rs::emit_alloc_from_top`,
+`emit_alloc_stats_line`.
+
+### M3 – Free lists and `drop` runtime (shipped)
+
+**Acceptance:** static-sentinel-aware refcount adjust + per-size-class
+free-list helpers; `cargo test -p goby-wasm` green;
+`free_list_hits` exposed in `--debug-alloc-stats`.
+
+Code: `emit_refcount_dup_helper`, `emit_refcount_drop_helper`,
+`emit_chunk_free_list_pop` / `_push` in
+`crates/goby-wasm/src/gen_lower/emit.rs`.
+
+### M4 – Static drop insertion, effect-aware (shipped)
+
+**Acceptance (as-shipped):** all correctness tests pass; effect-aware
+last-use rules from §3.10 implemented; `multi_resume_captured_list_state_preserved_across_resumes`
+green. The residency test `perceus_loop_residency` is **won't-fix**
+(superseded by M3 proxy + M6 acceptance — see header).
+
+Code: `crates/goby-core/src/perceus.rs::drop_insert_module`,
+`balance_if_branch_drops`, `balance_case_branch_drops`,
+`insert_owned_let_drop`.
+
+### M4.5 – Borrow inference for hot parameters (shipped)
+
+**Acceptance (as-shipped):** `cargo test -p goby-wasm alloc_baseline`
+green within the 10% regression gate; `Borrowed` parameters skip the
+caller-side `Dup` / callee-side `Drop` pair.
+
+Code: `ownership_classify_module`, `ownership_classify_decl`,
+`collect_scalar_param_evidence` in
+`crates/goby-core/src/perceus.rs`. Note: ownership is decided by a
+fix-point over **syntactic** scalar-usage evidence, not by IR types,
+which is why M4.5 is unaffected by DI-1 (see §4.99).
+
+### M5 – Reuse analysis (shipped)
+
+**Acceptance:** the M1 goal program runs with `total_bytes < 200 KiB`
+under `refcount_reuse_loop` and `reuse_hits == 5000`. Tail-call
+cross-call reuse (§3.7.1) included.
+
+Code: `crates/goby-core/src/perceus_reuse.rs` (`SizeEnv`,
+`peek_binding_shape`, `insert_reuse_comp`,
+`insert_tail_reuse_module`); IR ops `AllocReuse`, `RefCountDropReuse`,
+`reuse_token`.
+
+### M6 – `mut` lowering through reuse primitives (shipped)
+
+**Acceptance:** `cargo test -p goby-wasm` green; the four
+`mut` / `closure_mut*` example outputs byte-identical;
+`refcount_reuse_loop.gb` `total_bytes < 200 KiB` and the §1.1
+checksum unchanged. M6 Step 5 (stdlib `list.set` rewrite) is
+**won't-fix** (see header).
+
+Code: `lower_list_each_mutating_assign`,
+`lower_supported_inline_list_fold_mutating_each`,
+`lower_assign_index_reuse` in
+`crates/goby-wasm/src/gen_lower/lower.rs`.
+
+### M7 – Remove the bump-only fallback; document (shipped)
+
+**Acceptance (2026-04-26):** no live documentation reference to "bump-only
+allocator, no free" remains; goal program runs under the 200 KiB budget;
+`cargo test --workspace` green; `alloc_baseline.txt` unchanged
+(comment-only diff).
+
+### M8 – Reuse and drop on real-world driver shapes (shipped)
+
+**Acceptance:** `perceus_real_world_driver_borrow_then_update_reuses_and_frees`
+green; `reuse_hits >= 200` and `total_bytes < 64 KiB` for the
+borrow-then-update driver. The original strict-equality bound was
+loosened to `>= 200` after M9's per-index reuse fired (DI-4).
+
+Code: widened Owned-parameter classification through `mut ys = xs`
+seeds in `crates/goby-core/src/perceus_reuse.rs`; reuse-token
+propagation into the `each` callback in
+`crates/goby-wasm/src/gen_lower/lower.rs::lower_list_each_mutating_assign`;
+imported-Var callee consultation in
+`crates/goby-core/src/perceus.rs::classify_call_args`.
+
+### M9 – Drop on tail-recursive self-calls and HOF-laundered last-use (partial)
+
+**Status:** acceptance test
+`perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round`
+is green at commit `a4c3d7a`. The implementation that landed:
+
+| Sub-fix | Status | Where |
+|---|---|---|
+| 3c TupleProject Owned propagation | shipped | `classify_return_value`, `classify_consumed_value` in `perceus.rs` |
+| 3a Self-tail-call param drop | shipped | `insert_self_tail_call_param_drops_comp` in `perceus.rs` |
+| 3b HOF closure-body-aware ownership | not shipped | not needed: M9 acceptance test passes without it |
+| 3d `mut ys = xs` upstream-borrow widening | not shipped | conditional, never entered |
+
+Three regressions surfaced during the rollout were diagnosed as design
+fault lines and recorded in §4.99:
+
+- DI-3 `peak_bytes` direction bug — fixed.
+- DI-4 strict-equality on M8 reuse_hits — relaxed.
+- DI-1 type information not reaching IR — partially mitigated; three
+  M9 tests remain red and roll into M10.
+- DI-2 tail-position drop demoting tail calls — flagged; M10 work item.
+
+**Open M9 acceptance items** (rolled into M10):
+
+1. `perceus_m9_simple_list_drop_increments_free_list_hits`
+2. `perceus_m9_build_list_has_chunks_when_dropped`
+3. `run_command_debug_alloc_stats_emits_stats_line_for_general_lowered_program`
+4. AoC2025 day 4 part 2 (138×138 input) under `--max-memory-mb 256`
+5. Step 4 fixture `crates/goby-wasm/tests/fixtures/alloc-baseline/m9_real_world_driver.gb`
+6. BUGS.md M9 entry move from "Open" to "Resolved"
+
+The detailed fix prescription is **§4.100 (M10)**.
 
 ---
 
-### M8 — Reuse and drop on real-world driver shapes
+## 4.99 Design Issues Surfaced During M9 (running notes)
 
-M0–M7 declared "Perceus done" against `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb`,
-which is a single-call driver: each iteration immediately consumes the
-parameter via `mut ys = xs; ys[i] := v; step ys ...`. Real programs
-write a slightly less linear shape — the driver borrows the same list
-for a read-only traversal *before* handing it to the mutating helper,
-e.g.
+Running log of design fault lines exposed during M9 implementation.
+Material for revisiting the ideal design before declaring M9 closed.
+Each entry follows the *symptom / root cause / stopgap* triplet.
+
+### DI-1. `IrDecl::result_ty` / `IrType` does not propagate into IR (2026-04-30)
+
+- **Symptom:** For a `Let { value: Call }` such as `xs = build_list 5`,
+  even though `build_list` returns `List Int`, `Let.ty` is left as
+  `IrType::Unknown`. Perceus's `classify_owned_result` cannot mark the
+  call result `Owned`, so no `Drop(xs)` is inserted at the end of `main`.
+  - Failing tests: `perceus_m9_simple_list_drop_increments_free_list_hits`,
+    `perceus_m9_build_list_has_chunks_when_dropped`,
+    `run_command_debug_alloc_stats_emits_stats_line_for_general_lowered_program`.
+  - All three fail with `free_list_hits=0`.
+- **Root cause:** `crates/goby-core/src/ir_lower.rs::lower_resolved_declaration`
+  hard-codes `result_ty: IrType::Unknown`. `infer_type_from_expr` only
+  classifies scalar literals. `typecheck_annotation.rs` exposes only
+  `find_can_keyword_index`; there is no API that turns the annotation
+  into a structured type. → At the IR level there is no way to know
+  whether a given `Call` returns a heap value.
+- **Stopgap in a4c3d7a:** Widened `classify_owned_result` to
+  `CompExpr::Call { .. } => Owned` regardless of type. This caused
+  scalar-returning calls (e.g. `walk`'s `Int`) to be treated as `Owned`,
+  emitting `RefCountDrop` on non-heap locals and breaking loop lowering
+  / tail-call detection (graphemes regression / walk → `DeclCall`
+  regression / `peak_bytes=0`).
+- **2026-04-30 follow-up:** Introduced `type_is_known_heap`, which
+  treats `IrType::Unknown` as `false`, rolling back to behaviour
+  equivalent to pre-M9 (call results are conservatively Borrowed).
+  Walk / graphemes are restored, but Owned classification of
+  heap-typed call results is still missing.
+- **Design options:**
+  - **A.** Lightweight parser for `type_annotation` to populate
+    `IrDecl::result_ty`. Hand a callee-name → return-type map to
+    Perceus. Medium-sized change.
+  - **B.** Walk decl bodies syntactically and infer "heap-returning"
+    from the tail expression. Reuse `value_is_fresh_heap`; on mutual
+    recursion either fix-point or fall back to `Unknown`.
+    Annotation-independent. Medium-sized change.
+  - **C.** Add a pass that reflows the typecheck inference results
+    into IR. Heaviest, but enables fully precise reuse / drop in the
+    future.
+
+### DI-2. Tail-position drop insertion can demote tail-call optimization (2026-04-30)
+
+- **Symptom:** `insert_drop_at_tail` either prepends `Drop(name)` to a
+  `Call` in tail position, or — when `name` appears in the call's
+  arguments — wraps the call as `let tmp = call in Drop; tmp`,
+  **destroying its tail-call status.**
+  → A self-recursive call sitting in tail position can be demoted from
+  `TailDeclCall` to `DeclCall`.
+- **Current mitigation:** `insert_drop_at_tail` only fires for `Owned`
+  bindings, so scalar-only functions are unaffected. But "heap-returning
+  tail-recursive function with an Owned parameter" still triggers the
+  demotion.
+- **Design discussion:** "Insert Drop before a tail call" is the
+  TRMC-with-Perceus territory in the original paper. Goby lowers tail
+  calls to wasm `return_call`, so Drop insertion must stay strictly
+  *before* the `TailDeclCall` (i.e. run in the caller frame); wrapping
+  the call itself is not an option.
+
+### DI-3. `peak_bytes` update direction bug (2026-04-30, fixed)
+
+- **Symptom:** `reuse_falls_through_when_shared` and friends report
+  `peak_bytes=0` permanently.
+- **Root cause:** The peak-update tail in `emit.rs` used `i64.gt_u`,
+  i.e. "update when peak > live" — the inverse of the intended
+  monotone-increasing rule.
+- **Fix:** Changed to `i64.lt_u`. Peak is now monotone non-decreasing.
+
+### DI-4. M9 fix overshot the M8 acceptance bound (2026-04-30)
+
+- **Symptom:** `perceus_real_world_driver_borrow_then_update_reuses_and_frees`
+  reports `reuse_hits=10000` (test expected `== 200`).
+- **Meaning:** M8 only expected per-call `mut ys = xs` seed reuse, but
+  M9 (3a + 3c) made per-index `AssignIndex` reuse fire (200 calls × 50
+  idx = 10000). This is an improvement.
+- **Fix:** Loosened the assertion to `>= 200` and kept it as M8's
+  trivial lower bound.
+
+### DI-5. M9 plan vs. implementation diff (2026-04-30)
+
+Mapping between the M9 Steps / fixes defined in §M9 and the
+implementation as of a4c3d7a:
+
+| Step / fix | Status | Notes |
+|---|---|---|
+| Step 0 baseline | done | numbers captured at the time |
+| Step 1.1 acceptance test | done | `perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round` added |
+| Step 1.2 IR dump | done | gated on `GOBY_DUMP_PERCEUS_IR` env var |
+| 3c TupleProject Owned propagation | done | `classify_return_value` / `classify_consumed_value` |
+| 3a Self-tail-call param drop | done | `insert_self_tail_call_param_drops_comp` |
+| 3b HOF closure-body-aware ownership | **not implemented** | no `list_hof_closure_signature` / `lambda_consumes_first_param`. M9 acceptance test passes with 3a + 3c alone, so necessity is open |
+| 3d `mut ys = xs` upstream-borrow widening | not started (conditional) |
+| Step 4 drop insertion audit | partially done | acceptance test passes; fixture (`m9_real_world_driver.gb`) not added |
+| Step 5 re-acceptance | **3 fail** | see DI-1: `perceus_m9_simple_list_drop_increments_free_list_hits`, `perceus_m9_build_list_has_chunks_when_dropped`, `run_command_debug_alloc_stats_emits_stats_line_for_general_lowered_program` |
+| Step 7 STATE / PLAN / BUGS sync | **not started** |
+
+(Per-step plan / code reviews from a second pair of eyes — whether
+human or AI — are part of the surrounding development workflow and
+are not tracked as separate plan steps. The original M9 plan listed
+them as Step 2 / Step 6; those rows are dropped from this
+retrospective.)
+
+**Out-of-plan additions in a4c3d7a:**
+- Widening `classify_owned_result` to `CompExpr::Call { .. } => Owned`
+  (now gated by `type_is_known_heap` as a DI-1 stopgap). Intended to
+  cover cases that 3c's TupleProject extension alone cannot, but ended
+  up exposing DI-1 / DI-2.
+- New `insert_drop_at_tail` (replacing `append_drop_preserving_result`'s
+  simple let-tmp wrap). Goal: ensure the drop also fires through tail
+  calls. Carries the DI-2 concern.
+- Real `peak_bytes` update logic in `emit.rs` (replacing the
+  total → peak placeholder copy). The direction bug was DI-3, now
+  fixed.
+- Trailing tail Drop in `emit.rs::emit_list_concat_helper`. Initially
+  suspected to cause the graphemes regression, but the actual culprit
+  was DI-1's `Call=Owned` widening; the tail Drop itself is a sound
+  M9 change (concat consumes the tail).
+
+### DI-6. `doc/PLAN.md` and `doc/STATE.md` are stale relative to PLAN_PERCEUS (2026-04-30)
+
+- **Symptom:** `doc/STATE.md` header still reads
+  "Perceus M0–M8 complete. §1 goal satisfied." (line 7) and
+  `doc/PLAN.md` §4.2 does not mention M9 partial / M10 reopened.
+- **Why it matters:** the project guidance in `AGENTS.md` requires
+  roadmap and state docs to stay aligned when core terminology
+  changes; the mismatch makes restart context misleading for any
+  future agent or contributor.
+- **Resolution:** rolled into M10 Step 4 (§4.100). One-pass sync
+  along with the standard close-time updates. No action required
+  in PLAN_PERCEUS proper — this entry exists so the misalignment
+  is visible until M10 Step 4 lands.
+
+---
+
+## 4.99.A. Regression / fault-line audit (2026-04-30)
+
+After fixing DI-1 through DI-4, the following angles were checked for
+remaining design hazards:
+
+1. **Does borrow inference work without type information?**
+   `ownership_classify_module` runs a fix-point that decides Owned /
+   Borrowed for each parameter, and `collect_scalar_param_evidence`
+   re-marks parameters as Borrowed based on **syntactic scalar usage**
+   (BinOp, comparison, etc). → Type-independent; unaffected by DI-1.
+2. **Can `drop_insert_params` mistakenly drop scalar parameters?**
+   No: it only targets `Owned`. After the DI-1 follow-up, scalars are
+   classified Borrowed, so no drop is emitted for scalar params.
+3. **Do `reuse_token` / `SizeEnv` propagation make any type
+   assumption?** `peek_binding_shape` / `value_alloc_size_or_cell`
+   only treat `ListLit` / `TupleLit` / `RecordLit` / `Interp` as reuse
+   candidates (Call is `None` from the start). Type-independent.
+4. **Are all `alloc_baseline.txt` fixtures still within budget?**
+   `cargo test --workspace alloc_baseline` is green. DI-3's switch to
+   monotone peak does not affect baselines because they are
+   `total_bytes`-based.
+5. **Effect handler tests (`reuse_not_across_perform_effect` /
+   `reuse_not_across_with_handler`)** — both green. 3a's
+   self-tail-call drop only targets `Owned` parameters and is safe
+   across effect-induced tail calls.
+
+**Conclusion:** The major Perceus pipeline stages (ownership classify
+/ drop insert / reuse) are designed to operate without type
+information, so DI-1's exposure is localised to the
+**call-result classification in `classify_owned_result`**. In other
+words, the inability to classify a heap-typed call result as Owned is
+the sole cause of the three remaining M9 failures (`build_list` /
+`simple_list_drop` / cli `debug_alloc_stats`); the blast radius of
+any fix is bounded.
+
+---
+
+## 4.100. M10 — Heap-typed call results, tail-call-safe drops, and M9 closure
+
+M10 is the forward-looking plan that closes M9. It addresses DI-1 and
+DI-2 from §4.99 and finishes M9's acceptance items. Each step is one
+commit's worth of work and ends with a verifiable check.
+
+### Scope
+
+In scope:
+
+1. Resolve DI-1 so heap-returning calls are classified `Owned` again,
+   without re-introducing the walk / graphemes / rr3 regressions.
+2. Resolve DI-2 so tail-call drops never demote a `TailDeclCall` to
+   `DeclCall`.
+3. Close the three open M9 acceptance tests and add the
+   alloc-baseline fixture.
+4. Close the BUGS.md M9 entry and run AoC2025 day 4 part 2 under the
+   256 MiB ceiling.
+
+Out of scope (still §M9 invariants):
+
+- Reuse across `perform` / `with_handler` boundaries.
+- Reuse on `set xs i v` (M6 Step 5 won't-fix conditions still stand).
+- Inter-procedural reuse beyond the §3.7.1 tail-call rule.
+
+### Design decision: DI-1 fix
+
+Three options were recorded in §4.99 DI-1. M10 picks **Option B**
+(syntactic decl-body inspection) and rejects A and C for the
+following reasons:
+
+- **Option A** (parse `type_annotation`) is brittle: Goby's type
+  annotation grammar allows `(A -> B) -> C`, parametric type
+  variables, and `can <Effects>` clauses. A regex-style parser will
+  silently miscount `->` arrows in higher-order signatures, producing
+  unsound `Owned` classifications. Building a proper parser
+  duplicates `typecheck_annotation.rs`.
+- **Option C** (reflow typecheck inferences) is the right long-term
+  answer but lands too much surface area (typecheck → IR data flow,
+  closure capture types, lambda inference) for a milestone whose
+  job is closing M9. Tracked as a future plan, not M10.
+- **Option B** is bounded: it adds a per-decl **`return_ownership`**
+  fact (`Owned` / `Borrowed`), computed by walking the decl body's
+  tail position. It reuses `value_is_fresh_heap` for the fresh-heap
+  case. Failure mode: any unproven shape stays `Borrowed`, which is
+  the pre-M9 behaviour and known to be sound.
+
+The fact is **ownership of the return reference**, not "shape of the
+return value". A function can return a heap pointer that aliases an
+input parameter (e.g. `passthrough xs = xs`) — that case must
+classify as `Borrowed`, otherwise drop insertion at the call site
+double-frees. The earlier draft of this section called the fact
+`returns_heap: bool`; that name is rejected because it invites the
+exact widening that caused DI-1 (heap-shaped ≠ owned). The data
+type is `OwnershipClass` (already defined in `perceus.rs`); the
+field name is `return_ownership`.
+
+### Step 0 — Sanity baseline
+
+```sh
+cargo test --workspace --release --no-fail-fast 2>&1 | tee tmp/m10_step0.log
+```
+
+Expected red set: exactly the three M9 acceptance items listed above.
+Anything else is a regression in the pre-M10 fixes; investigate before
+proceeding.
+
+### Step 1 — Decl-return ownership inference (DI-1)
+
+File: `crates/goby-core/src/perceus.rs` (or a new sibling
+`perceus_returns.rs` if it grows beyond ~80 LOC).
+
+(a) Add a module-level analysis pass:
+
+```rust
+/// Per-decl ownership of the returned reference. `Owned` only when
+/// every tail-position value in the body is provably a fresh
+/// heap allocation (or a call to another `Owned` decl) **and** does
+/// not alias an inbound parameter or any other `Borrowed` source.
+/// Default and conservative fallback: `Borrowed`.
+pub fn classify_decl_return_ownership(
+    module: &IrModule,
+) -> HashMap<String, OwnershipClass>;
+```
+
+The pass walks each decl's body, threading a **local return
+environment** `Γ : Var → OwnershipClass`. Initial Γ binds each
+parameter to its **already-classified** ownership from
+`ownership_classify_module` (the M4.5 fix-point), **not** to
+`Borrowed`. This is the rule that lets `build`'s base-case
+`acc` propagate to `Owned` when callers pass owned arguments to
+`build`.
+
+The walker has one entry point that classifies a tail-position
+`CompExpr` and one helper that classifies a `ValueExpr` against
+Γ. The transfer rules:
+
+- `CompExpr::Let { name, value, body }`:
+    1. Classify `value` against Γ to obtain `c_value`.
+       (Use the same conservative rules used at decl level —
+       `Call` to an `Owned` decl ⇒ `Owned`; `ListLit` /
+       `TupleLit` / `RecordLit` / `Interp` with no spread of a
+       Borrowed Var ⇒ `Owned`; everything else ⇒ `Borrowed`.)
+    2. Recurse into `body` under `Γ' = Γ[name ↦ c_value]`.
+       The result of the recursion is the result for the whole
+       `Let`. **Shadowing rule:** if `name` collides with an
+       existing binder in Γ, the inner binding wins for the
+       lifetime of `body`; restore the outer binding when the
+       walker leaves the `Let` node.
+- `CompExpr::LetMut { name, value, body }` — same as `Let`. The
+  mut-ness only matters for reuse analysis; ownership of the
+  *return* is independent.
+- `CompExpr::Seq { stmts: _, tail }` → recurse into `tail` under
+  unchanged Γ. Statements before the tail cannot affect the
+  return's ownership.
+- `CompExpr::If { cond: _, then_, else_ }` / `Case { arms }` →
+  classify each branch under Γ; result is `Owned` iff **every**
+  branch produces `Owned`. Any branch returning `Borrowed`
+  collapses the whole expression to `Borrowed`.
+- `CompExpr::Value(value)` → classify `value` against Γ.
+- `CompExpr::Call { callee, args: _ }` →
+    - If `callee == GlobalRef|Var(name)` and `name` resolves to a
+      module decl, look up `name` in the in-progress map (see
+      fix-point below).
+    - Otherwise (closure call, lambda, intrinsic with no recorded
+      ownership) ⇒ `Borrowed` conservative.
+- All other comp variants (`Drop`, `DropReuse`, `Dup`, `Assign`,
+  `AssignIndex`, `AllocReuse`, `PerformEffect`, `Resume`, `Handle`,
+  `WithHandler`) → `Borrowed`. They never produce a fresh owned
+  return at the IR level.
+
+For a `ValueExpr` against Γ:
+
+- `ValueExpr::Var(name)` → `Γ[name]` if present; else `Borrowed`.
+  Parameter ownership in Γ comes from M4.5 (`ownership_classify_module`),
+  not from this pass. So `passthrough xs = xs` classifies `Borrowed`
+  because M4.5 marks `xs` as Borrowed (no consume site in the body),
+  and `build`'s base case `acc` classifies `Owned` because M4.5 marks
+  `acc` as Owned (consumed by the recursive call's spread).
+- `ValueExpr::ListLit { spread: None, .. }` → `Owned` (fresh).
+- `ValueExpr::ListLit { spread: Some(s), .. }` → `Borrowed` if
+  `s` resolves (via Γ) to `Borrowed`; otherwise `Owned`. A spread
+  of a fresh literal stays fresh; a spread of a parameter does not.
+- `ValueExpr::TupleLit(items)` → `Owned` if **at least one** item
+  is `Owned`; the projection rule from §M9 3c is what eventually
+  exposes the heap part. Otherwise `Borrowed`.
+- `ValueExpr::RecordLit { fields, .. }` → same as `TupleLit`.
+- `ValueExpr::Interp(_)` → `Owned` (fresh string).
+- `ValueExpr::TupleProject { tuple, .. }` → classify `tuple`
+  against Γ. (3c already widens projection at the use site;
+  this rule lets a decl that returns `t.0` of a fresh tuple
+  classify as `Owned`.)
+- `ValueExpr::IntLit / BoolLit / StrLit / Unit / GlobalRef` →
+  `Borrowed`.
+- `ValueExpr::BinOp { .. }` / `ListGet { .. }` → `Borrowed`.
+- `ValueExpr::Lambda { .. }` → `Owned` (fresh closure object).
+
+(b) **Fix-point.** Initialise every decl's `return_ownership` to
+`Borrowed`. Iterate using **simultaneous recomputation**: snapshot
+the previous map, classify every decl against the snapshot, install
+the resulting map atomically. Stop when the map stabilises. Owned
+only ever turns on (never off), so the loop terminates in at most
+`|decls|` iterations.
+
+**SCCs and recursive cycles.** A cycle of decls that calls each
+other in tail position — with **no syntactic fresh-allocation base
+case** — never observes `Owned` from any neighbour and stays
+`Borrowed` for the whole cycle. This is sound but loses precision
+for shapes like `xs_acc = if done then result_list else go ...`
+where `result_list` is a fresh literal in some branch. The fix-point
+is intentionally simple; use SCC analysis only if a future workload
+demands tighter precision.
+
+(c) Pass the resulting `HashMap<String, OwnershipClass>` through
+`run_perceus_passes` into `classify_owned_result` and `classify_comp`.
+Threading is local — mirrors the existing `module_params` parameter.
+
+(d) Replace the current call-result branch in `classify_owned_result`:
+
+```rust
+// Before (DI-1 stopgap):
+CompExpr::Call { .. } if type_is_known_heap(ty) => OwnershipClass::Owned,
+
+// After (M10):
+CompExpr::Call { callee, .. } => match callee_decl_return_class(callee, module_returns) {
+    Some(OwnershipClass::Owned) => OwnershipClass::Owned,
+    _ => OwnershipClass::Borrowed,
+},
+```
+
+(e) Drop `type_is_known_heap` and the `_ty: &IrType` parameter from
+`classify_owned_result`'s signature once (d) is in place. The
+threading was a stopgap; replace it cleanly.
+
+#### Soundness gate
+
+Add unit tests in `crates/goby-core/src/perceus.rs` (the existing
+`#[cfg(test)] mod tests`) covering each of the following shapes:
 
 ```gb
-drive xs idxs iters =
-  if iters == 0
-    summarize xs                       -- borrow only
+-- (1) Passthrough of a Borrowed-classified parameter stays Borrowed.
+-- (M4.5 classifies `xs` as Borrowed because the body never consumes it.)
+passthrough : List Int -> List Int
+passthrough xs = xs
+-- Expected: passthrough → Borrowed.
+
+-- (2) Branch-mixed passthrough: Owned branch + Borrowed branch ⇒ Borrowed.
+-- The else branch returns a fresh ListLit (Owned); the then branch returns
+-- xs which is Borrowed by M4.5. Branches must agree.
+maybe_pass : List Int -> Bool -> List Int
+maybe_pass xs flag =
+  if flag
+    xs
   else
-    c = summarize xs                   -- borrow xs
-    new_xs = update_xs xs idxs         -- consume xs (mut ys = xs; each ...)
-    drive new_xs idxs (iters - 1)
+    [0, ..xs]
+-- Expected: maybe_pass → Borrowed.
+
+-- (3) Fresh literal ⇒ Owned.
+fresh : Unit -> List Int
+fresh _ = [1, 2, 3]
+-- Expected: fresh → Owned.
+
+-- (4) Tuple of (Owned-payload, scalar) ⇒ Owned (3c projection handles use site).
+fresh_tuple : Unit -> (List Int, Int)
+fresh_tuple _ = ([1], 0)
+-- Expected: fresh_tuple → Owned.
+
+-- (5) Recursive heap-returning function with `acc` consumed at every call.
+-- M4.5 classifies `acc` as Owned (it is consumed by the spread `[n, ..acc]`
+-- in the recursive call's argument). Body walk: base case returns Var(acc)
+-- ⇒ Γ[acc] = Owned ⇒ Owned. Recursive call returns Call to `build` itself,
+-- which the fix-point resolves as Owned in the next iteration. Both
+-- branches Owned ⇒ Owned.
+build : Int -> List Int -> List Int
+build n acc =
+  if n == 0
+    acc
+  else
+    build (n - 1) [n, ..acc]
+-- Expected: build → Owned. (This is the §1.1 goal program's `build`.)
+
+-- (6) Fresh-base recursive function ⇒ Owned.
+mk : Int -> List Int
+mk n =
+  if n == 0
+    []
+  else
+    [n, ..mk (n - 1)]
+-- Expected: mk → Owned. Both branches yield ListLit (fresh), even though
+-- the spread element is a recursive call.
+
+-- (7) Mutual recursion with no fresh base and Borrowed parameter ⇒ both Borrowed.
+left : List Int -> List Int
+left xs = right xs
+right : List Int -> List Int
+right xs = left xs
+-- Expected: left → Borrowed, right → Borrowed. M4.5 classifies xs as
+-- Borrowed (never consumed); the cycle has no fresh-allocation base.
 ```
 
-On this shape (`doc/BUGS.md` repro and AoC2025 day 4 part 2,
-2026-04-27) `--debug-alloc-stats` previously reported `reuse_hits=0`
-and `peak_bytes == total_bytes` with `free_list_hits=0`: the M6 reuse
-path did not fire.
+**Important dependency.** This pass *consumes* the M4.5 parameter
+ownership map produced by `ownership_classify_module`. The M4.5
+classifier is the source of truth for whether a parameter binding
+counts as `Owned` or `Borrowed` at function entry. The new
+return-ownership pass runs **after** M4.5 in the pipeline; do not
+re-derive parameter ownership locally.
 
-The acceptance benchmark missed this because it never re-reads `xs`
-after the `mut ys = xs` seed, so M5 Step 7-a's Owned-parameter seed
-condition is trivially satisfied. M8 widens the proof so the reuse
-path fires whenever the parameter is statically last-used at the
-mutating call site, regardless of earlier read-only uses in the same
-basic block.
+Each shape gets a focused test that runs `classify_decl_return_ownership`
+on the IR and asserts the expected `OwnershipClass`. The test names
+should encode the *why* (`return_ownership_passthrough_param_is_borrowed`,
+`return_ownership_branch_with_borrowed_arm_collapses_to_borrowed`, etc).
 
-#### Step 1 — Investigation: confirm the failure mode
-
-- [x] Add a `cargo test -p goby-wasm` runtime test (or smoke harness)
-      that runs the BUGS.md repro with `--debug-alloc-stats` and asserts
-      `reuse_hits > 0` and bounded allocation. Implemented as
-      `compile_tests::perceus_real_world_driver_borrow_then_update_reuses_and_frees`;
-      focused scale reports `reuse_hits=200`, `total_bytes=37016`.
-- [x] Dump the IR after `perceus_reuse::insert_reuse` for the helper
-      function (`update_xs`) and the driver function (`drive`).
-      Confirm at the IR level which of the following is missing:
-      (a) `update_xs`'s parameter `xs` is not classified `Owned` by
-      `crates/goby-core/src/perceus.rs::classify_call_args`; or
-      (b) `xs` *is* `Owned` but `LetMut` does not propagate the
-      Owned-parameter `SizeEnv` seed introduced in M6 Step 7-a; or
-      (c) the seed is propagated and `AssignIndex` carries a
-      `reuse_token`, but the lowering in
-      `crates/goby-wasm/src/gen_lower/lower.rs` does not pick the
-      `each + AssignIndex` specialisation under `mut ys = xs`'s
-      `LoadCellValue`/`StoreCellValue` framing.
-- [x] Finding: the failure was a combination of (a), (b), and (c).
-      `mut ys = xs` did not classify the source as consumed; imported
-      `Var` callees were not consulted for borrowed-call ownership,
-      leaving stale `Dup(xs)` before reuse; and reuse metadata was not
-      propagated into the `each` callback lambda / cell-promoted root
-      lowering.
-- [x] Independently confirm whether the `drop_insert` pass emits a
-      `Drop` on the per-iteration `update_xs` return value when it
-      becomes shadowed by `new_xs` on tail-call. `peak == total` says
-      it does not. This is reported as a separate symptom in BUGS.md
-      but is most likely the same root cause (parameter ownership
-      classification feeds both passes).
-- [x] M8 result: after reuse fires, `update_xs` no longer allocates a
-      replacement list per iteration at the focused scale. The remaining
-      `free_list_hits=0` observation is not the M8 blocker for this shape;
-      allocation is bounded by eliminating the per-iteration allocation.
-
-#### Step 2 — Codex plan review
-
-- [ ] Send Step 1's IR dumps and the chosen narrowing of the failure
-      mode (a / b / c above) to Codex. The questions for review:
-  - Does the proposed widening of Owned-parameter classification
-    preserve §3.4 (no in-place write under shared cells)?
-  - Is the widening expressible without breaking the "LetMut has no
-    `bind_alias`" invariant at `perceus.rs:306`, which M6 Step 5
-    deliberately preserves?
-  - Are there shapes the widening would mis-classify as Owned and
-    silently corrupt? In particular, what happens when the read-only
-    use after the mutating call is on the *original* binding rather
-    than the new one (i.e. the call is *not* a last-use on the
-    parameter's lexical name)?
-
-#### Step 3 — Fix the classification or the seed
-
-Exact wording deferred to Step 1's findings, but the design space is
-narrow:
-
-- **3a.** If `classify_call_args` is the gap: extend it so that a
-  parameter passed to a callee whose corresponding formal parameter is
-  later consumed by `mut ys = formal; ...` is classified `Owned` at
-  the call site, provided the actual argument is itself not used after
-  the call inside the same basic block. The "later consumed" property
-  must be derived from the callee's IR, not assumed; cache it on
-  `IrDecl` alongside `reuse_param`.
-- **3b.** If the `SizeEnv` seed is the gap: extend `peek_binding_shape`
-  (or the equivalent in `perceus_reuse.rs`) so that a `mut ys = xs`
-  inherits `xs`'s class whenever `xs` is `Owned` *or* the function's
-  Owned-parameter set explicitly lists `xs`. Step 7-a's introduction
-  of the per-decl `Owned`-param `HashSet<String>` already exists; M8
-  audits whether every entry point to `insert_reuse` actually uses it.
-- **3c.** If lowering is the gap: extend
-  `lower_list_each_mutating_assign` (and / or
-  `lower_supported_inline_list_fold_mutating_each`) to recognise the
-  `LoadCellValue`-framed root that `LetMut` introduces, instead of
-  bailing out to copy-on-write `ListSet`.
-
-In every variant, the acceptance test from Step 1 is the gate.
-
-The fix **must not** weaken these invariants:
-
-- `LetMut` does not call `bind_alias` (`perceus.rs:306`). The repro
-  must work without aliasing the original `xs` into the new `mut ys`,
-  because shared-cell `mut` capture must keep observing path-copy.
-- `lower_assign_index_reuse` only emits `ListSetInPlace` when the
-  static uniqueness proof has held since allocation (`perceus_reuse`
-  attaches `reuse_token` only on statically Owned roots — see M6 Step
-  5's Investigation summary for why a runtime token-null branch is
-  not free).
-- The `alloc_baseline.txt` regression gate must stay green for every
-  existing example, including the M6 goal program. M8 is allowed to
-  *improve* allocations on existing entries; widening must not
-  re-introduce per-iteration allocations elsewhere.
-
-#### Step 4 — Drop insertion audit
-
-- [ ] Inspect `drop_insert` for the same call shape and confirm the
-      per-iteration `update_xs` return value is `Drop`-emitted at the
-      right point, so `free_list_hits` becomes positive. If the same
-      ownership widening fixes both, document the link explicitly.
-- [ ] Add an alloc-baseline entry for the BUGS.md repro so future
-      regressions are caught.
-
-#### Step 5 — Re-acceptance
-
-- [x] BUGS.md repro: `reuse_hits > 0` and allocation bounded at the
-      focused scale (`reuse_hits=200`, `total_bytes=37016`).
-- [ ] AoC2025 day 4 part 2 (138 × 138 grid, full input) completes
-      under the default 1024 MiB ceiling. Captured as a smoke test
-      under `examples/` if license allows; otherwise referenced by
-      shape only.
-- [x] `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` budget unchanged
-      (`total_bytes < 200 * 1024`, `reuse_hits == 5000`).
-- [x] `cargo test --workspace` green; `alloc_baseline.txt` deltas
-      explained per entry.
-
-#### Step 6 — Codex code review
-
-- [ ] Send the Step 3 / Step 4 diffs. Focus areas:
-  - the widened ownership classification has no holes that admit
-    a shared root into `ListSetInPlace`;
-  - drop insertion changes do not double-free under effect handlers
-    (`reuse_not_across_perform_effect` / `reuse_not_across_with_handler`
-    must remain green);
-  - the BUGS.md repro and the AoC shape both pass; the M6 goal program
-    is unchanged.
-
-#### Step 7 — STATE / PLAN sync and commit
-
-- [x] Update `doc/STATE.md` and `doc/PLAN.md` §4.2 to record M8
-      outcome. Partially complete for `memory/project_perceus_status.md`:
-      `memory/project_perceus_status.md` is missing in this checkout, so
-      there is no repo-local file to update here.
-- [x] Move the BUGS.md entry from "Open" to "Resolved on YYYY-MM-DD"
-      with the fix summary.
-- [ ] Run `goby-invariants` before commit.
-
-#### Out of scope for M8
-
-- Reuse across `perform`/`with_handler` boundaries (still §3.5 / M5
-  invariant: a conservative abort at handler boundaries).
-- Reuse on `set xs i v` (the stdlib `list.set` surface form). Step 5's
-  re-open conditions in §M6 Step 5 still stand.
-- Inter-procedural reuse beyond the existing tail-call rule (§3.7.1).
-  M8 only widens the *intra*-procedural last-use proof so the
-  parameter-passing chain that already exists fires correctly.
-
----
-
-### M9 — Drop on tail-recursive self-calls and HOF-laundered last-use
-
-M8 closed the `mut ys = xs; each idxs (...)` reuse miss for a single
-helper-and-driver shape. The `doc/BUGS.md` repro (2026-04-28, full
-AoC2025 day 4 part 2 program) is a strict superset: it still exhausts
-1024 MiB and `--debug-alloc-stats` on a 10×10 reduction reports
-`peak_bytes == total_bytes`, `free_list_hits=0`, and `reuse_hits=9`
-(matching exactly the number of cells `update_rolls` blanks). M8's
-borrow-update reuse fires; nothing else does.
-
-The non-firing surface area, in order of likely impact:
-
-- **Tail-recursive self-call drops.** `check`, `count_valid_roll_acc`,
-  `reverse_positions_acc`, `reverse_strings_acc`, and `flatten_acc`
-  pass an old `rolls` / `acc` / `xs` argument to a recursive call to
-  themselves while another argument carries a freshly-allocated
-  successor. The old binding's last-use `Drop` must fire *before* the
-  tail-call so refcount can fall to zero ahead of the new allocation.
-  `free_list_hits=0` says these drops are not present on the
-  tail-recursion edge.
-- **HOF-laundered last-use.** `flatten_acc` writes its successor with
-  `fold row acc (fn a c -> [c, ..a])`; the closure's `a` is the only
-  consumer of `acc`, but the ownership classifier treats `fold` as
-  borrowing `acc` because `callee_param_classes` only knows about
-  module-level decls, not the closure-induced ownership of HOF
-  intrinsics. Same pattern in `check_around_rolls` for the per-call
-  8-element `around_diffs` literal that `fold` walks.
-- **Tuple-projected ownership.** `count_valid_roll` returns
-  `(List Int, Int)`. The `List Int` half is consumed by
-  `update_rolls`, but it reaches the consumer through `counted.0`.
-  In `crates/goby-core/src/perceus.rs:571` (`classify_return_value`
-  on `ValueExpr::TupleProject`) the tuple is classified
-  *Borrowed*, so the projected list never inherits `Owned`.
-- **`mut ys = xs` reuse vs. an upstream borrow in the same block.**
-  In `check` the same `rolls` is borrowed by `count_valid_roll rolls
-  ...` immediately before being consumed by
-  `update_rolls rolls removed_indices`. Possibly subsumed by 3a + 3c;
-  retain only if Step 1's IR dump still shows reuse missing after 3a
-  / 3c land.
-
-#### Why this section reads like a recipe
-
-M9 must be implementable by a Sonnet-class agent following the
-`codex-reviewed-stepwise-dev-flow` Skill without further architectural
-input. Each Step below is written in the form
-"file → function → exact change → how to verify". Where a fix has
-genuinely-undecided design questions, the Step calls them out and
-sends them to Codex via Step 2 / Step 6 — it does not paper over them.
-
-#### Repro program location
-
-The full M9 repro is committed in `doc/BUGS.md` ("Open bugs", 2026-04-28
-entry). For Steps that need the source as a string literal, copy from
-that block verbatim — it is self-contained. For runtime testing, save it
-to `crates/goby-wasm/tests/fixtures/alloc-baseline/m9_real_world_driver.gb`
-in Step 4.
-
-#### Step 0 — Sanity baseline
-
-Run before touching any code:
+#### Verification
 
 ```sh
-cargo test -p goby-wasm --release \
-  refcount_reuse_loop_owned_param_seed_reuses_assign_index \
-  perceus_real_world_driver_borrow_then_update_reuses_and_frees
-cargo test --workspace --release alloc_baseline
-```
-
-All three must pass on `main`. Capture the exact `total_bytes` /
-`reuse_hits` / `free_list_hits` numbers each test prints; M9 will
-compare against these to detect silent regressions.
-
-#### Step 1 — Investigation: red test + IR dumps
-
-**1.1 — Add the failing acceptance test (will start red).**
-
-File: `crates/goby-wasm/src/compile_tests.rs`. Place the new test
-immediately after `perceus_real_world_driver_borrow_then_update_reuses_and_frees`
-(currently around line 1864). Use that test as a structural template:
-the new test is the same shape but loads the BUGS.md repro source.
-
-```rust
-#[test]
-fn perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round() {
-    // Source: see doc/BUGS.md "Open bugs" 2026-04-28 entry. Inline the
-    // entire repro as a raw string literal, exactly as in BUGS.md.
-    let source = r#"
-        ... // copy from BUGS.md
-    "#;
-    // Stdin: a 10x10 grid of '@'/'.'. Generate deterministically rather
-    // than checking in another fixture file:
-    let stdin = (0..10)
-        .map(|y| (0..10).map(|x| if (x + y) % 3 == 0 { '@' } else { '.' }).collect::<String>())
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let module = parse_module(source).expect("M9 repro should parse");
-    let (_instrs, _aux) = crate::gen_lower::lower_module_to_instrs(&module)
-        .expect("lowering should succeed")
-        .expect("sample should use general lowering");
-    let output = execute_runtime_module_with_stdin_config_and_options_captured(
-        &module,
-        Some(stdin),
-        None,
-        CompileOptions { debug_alloc_stats: true },
-    )
-    .expect("M9 repro should execute")
-    .expect("M9 repro should run on runtime-owned Wasm");
-
-    let total_bytes  = parse_alloc_stats_field(&output.stderr, "total_bytes");
-    let peak_bytes   = parse_alloc_stats_field(&output.stderr, "peak_bytes");
-    let free_list_hits = parse_alloc_stats_field(&output.stderr, "free_list_hits");
-    let reuse_hits     = parse_alloc_stats_field(&output.stderr, "reuse_hits");
-
-    assert!(free_list_hits > 0,
-        "M9: chunks must return to the free-list once per round; got 0. stderr:\n{}", output.stderr);
-    assert!(peak_bytes * 2 < total_bytes,
-        "M9: peak must be < total/2 (working-set bounded). peak={peak_bytes} total={total_bytes}");
-    // reuse must scale with rounds (>= 1 reuse per round); for a 10x10 input,
-    // expect at least 5 rounds, so reuse_hits >= 5 * (cells removed per round).
-    // Tighten this once Step 1 measurements land.
-    assert!(reuse_hits >= 50,
-        "M9: reuse must scale per-round, not per-cell; got reuse_hits={reuse_hits}");
-}
-```
-
-Run only this test from now on for the inner loop:
-
-```sh
-cargo test -p goby-wasm --release \
+cargo test --release -p goby-core perceus
+cargo test --release -p goby-wasm \
+  perceus_m9_simple_list_drop_increments_free_list_hits \
+  perceus_m9_build_list_has_chunks_when_dropped \
   perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round \
-  -- --nocapture
-```
-
-It will fail. Save the failure's `stderr` line to
-`tmp/m9_step1_baseline.txt`.
-
-**1.2 — Dump the IR after Perceus passes for the five tail-recursive
-helpers and for the HOF call sites.**
-
-Add a feature-gated debug print inside
-`crates/goby-core/src/perceus.rs::run_perceus_passes` (line 28),
-guarded on `std::env::var("GOBY_DUMP_PERCEUS_IR").is_ok()`, that
-walks `module.decls` and writes `format!("{decl:#?}")` to stderr. Run:
-
-```sh
-GOBY_DUMP_PERCEUS_IR=1 cargo test -p goby-wasm --release \
-  perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round \
-  -- --nocapture 2> tmp/m9_step1_ir.txt
-```
-
-For each of `check`, `count_valid_roll_acc`, `reverse_positions_acc`,
-`reverse_strings_acc`, `flatten_acc`, record in `tmp/m9_step1_findings.md`:
-
-- Which parameters appear in the decl's `params` and what
-  `OwnershipClass` they hold (look in the
-  `drop_insert_module → drop_ownership` map; you may need to
-  similarly print `drop_ownership[decl.name]`).
-- Whether a `CompExpr::Drop { value: Var(p) }` precedes the recursive
-  `Call { callee: GlobalRef { name: <self> }, .. }`. If absent, that
-  decl is a candidate for fix 3a.
-- For `flatten_acc`'s `fold row acc (fn a c -> [c, ..a])`: at the
-  `Call` to `fold`, what does the second argument (`acc`) classify
-  as? Read by adding `dbg!(callee, idx, &class)` in
-  `classify_call_args` (line 472) gated on the same env var.
-- For `check`'s `counted.0` projection: confirm
-  `removed_indices` is `Borrowed` after Perceus, despite being
-  passed into `update_rolls` (which the IR shows as taking its
-  first formal `removed_indices` as `Owned`).
-
-If 1.2's findings show 3d's preconditions hold (that is, M8's
-widening is *not* firing for `update_rolls`'s `xs` parameter on this
-driver), record that explicitly. Otherwise mark 3d "won't fix in M9".
-
-#### Step 2 — Codex plan review
-
-Use Skill `codex-request`. Send:
-
-- The Step 1 baseline numbers (`tmp/m9_step1_baseline.txt`).
-- The IR findings narrative (`tmp/m9_step1_findings.md`).
-- This Step 3 plan verbatim.
-
-Required questions for Codex (do not paraphrase — these target known
-risks):
-
-1. For **3a**: is it sound to drop an `Owned` parameter `p`
-   immediately *before* a tail-recursive `Call self ...` when `p` is
-   not present in the call's `args` and is not live in any other
-   `args[i]`? Specifically: in
-   `gen_lower::lower::CompExpr::Call`, the tail-call optimisation
-   reads parameter slots before writing them — does inserting
-   `RefCountDrop(p)` before the call's argument evaluation interact
-   safely with that, given that `p`'s `local_get` may still be
-   needed transitively by an arg expression?
-2. For **3b**: when a HOF intrinsic (`fold` / `each` / `list.map`)
-   takes a closure `(fn a c -> body)`, treat the outer list/seed
-   argument as `Owned` iff `body` consumes its first formal `a` and
-   `a` does not escape `body`. Does this break any property tested
-   by `reuse_not_across_perform_effect` /
-   `reuse_not_across_with_handler` (i.e. a closure that performs an
-   effect)?
-3. For **3c**: rewriting `TupleProject` from `classify_borrowed_value`
-   to `classify_consumed_value` (line 571 / 638 / 694) sounds blunt.
-   What is the right rule when *both* projections of the same tuple
-   are consumed in the same block (e.g. `counted.0` and `counted.1`
-   both flow into owned positions)? Is it correct to mark each
-   projection's leaf consumed and decrement the tuple's refcount
-   only at *its* last-use?
-4. For **3d**: is M8's widening (per-decl `Owned`-param `HashSet`)
-   already block-scoped, or is it whole-decl? If whole-decl, would
-   restricting it to the basic block containing the consume site
-   break any existing `alloc-baseline` fixture?
-
-Block on Codex's response before proceeding to Step 3.
-
-#### Step 3 — Implement the fixes
-
-Each fix is its own commit. Run the Step 1.1 test and the Step 0
-suite after each commit. Land in the order 3c → 3a → 3b → (3d if
-needed).
-
-**3c — Tuple projection transfers `Owned`** *(land first; smallest)*
-
-File: `crates/goby-core/src/perceus.rs`.
-
-Three call sites of `ValueExpr::TupleProject` (lines 571, 638, 694):
-
-```rust
-ValueExpr::TupleProject { tuple, .. } => {
-    classify_borrowed_value(tuple, classes, params, aliases)
-}
-```
-
-In `classify_return_value` (line 532) and `classify_consumed_value`
-(line 654), change `classify_borrowed_value` → `classify_consumed_value`.
-Leave the call site in `classify_borrowed_value` (line 638) as
-`classify_borrowed_value` — projection appearing inside a borrowed
-position stays borrowed (e.g. `counted.0[i]`'s tuple read is just a
-borrow of the tuple).
-
-This makes a tuple flowing into `Owned` position transfer ownership
-to its components. A tuple consumed twice (`counted.0` and
-`counted.1` both in `Owned` position) is handled by the existing
-last-use machinery: each leaf `Var` use demotes its owner via
-`demote_owner` (line 661), and the existing
-`insert_non_last_call_arg_dups` / `count_var_uses` will insert a
-`Dup` at the first projection so the second projection's
-`demote_owner` still triggers.
-
-Verification:
-
-```sh
-cargo test -p goby-core perceus
-cargo test -p goby-wasm --release \
   refcount_reuse_loop_owned_param_seed_reuses_assign_index \
   perceus_real_world_driver_borrow_then_update_reuses_and_frees \
-  perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round
+  compile_module_scan_loop_lowering_eliminates_walk_self_call_in_wasm \
+  rr3_non_tail_recursive_scan_repro_survives_tight_stack_limit_after_loop_lowering \
+  rr3_callback_assisted_scan_repro_survives_tight_stack_limit_on_same_boundary \
+  recursive_multi_part_interpolated_print_after_graphemes_executes \
+  wb3_m7_read_split_map_graphemes_get_each_canonical_variant_executes \
+  wb3_m7_read_split_map_graphemes_get_each_alias_variant_executes
 cargo test --workspace --release alloc_baseline
 ```
 
-The M9 test may still fail on `free_list_hits` and `peak_bytes` (3a's
-job), but `reuse_hits` should already grow to "rounds × cells per
-round". Capture the new number in `tmp/m9_step3c_after.txt` for the
-commit message.
+The first three M9 tests must flip green; the remaining tests must
+stay green (regression guard for DI-1's previous over-widening).
 
-If `cargo test -p goby-core perceus` regresses, inspect the failing
-test under `crates/goby-core/src/perceus.rs` (search for `#[test]`
-near line 2128). The most likely new failure is a tuple-related test
-asserting `Borrowed` in a position that should now be `Owned` — fix
-the test's expectation if the behaviour change is intentional, do
-not roll back the fix.
+### Step 2 — Tail-call-safe drop placement (DI-2)
 
-**3a — Drop `Owned` parameters not forwarded by a self-tail-call**
+File: `crates/goby-core/src/perceus.rs::insert_drop_at_tail`.
 
-File: `crates/goby-core/src/perceus.rs`.
+The current `insert_drop_at_tail` has three relevant cases for a
+`Call` in tail position; each must be handled explicitly:
 
-The current `drop_insert_comp` `Call` arm (line 987) emits
-`insert_non_last_call_arg_dups` and otherwise leaves the call alone.
-M9 adds a *parameter drop* prefix when the call is a self-recursive
-tail-call.
+| Case | Where `name` appears | Current behaviour | M10 behaviour |
+|---|---|---|---|
+| C1 | nowhere | prepend `Drop(name)`; tail-call preserved | **keep** |
+| C2 | in `args[i]` | wrap as `let tmp = call in Drop; tmp` (demotes tail call) | **replace** with `Dup(name); Drop(name); TailDeclCall …` |
+| C3 | as `callee` (indirect/closure call) | wrap as `let tmp = call in Drop; tmp` (demotes tail call) | **conservative**: keep the wrap; do not attempt to preserve tail-call status |
 
-Step-by-step:
+Rationale for the per-case decisions:
 
-(a) Add a helper that decides whether a `Call` is the tail-call of
-the current decl. Add to `drop_insert_module` (line 760) a new
-`HashMap<String, &str>` `current_decl_name` lookup, or — simpler —
-thread `decl.name` through `drop_insert_comp` as a new `&str`
-parameter. The latter is more local and consistent with the
-existing parameter-passing style.
+- **C1** is sound today and remains so. No change.
+- **C2** is the case that demoted `walk` and the M9 tail-recursive
+  helpers (DI-2). The fix:
 
-(b) Define `tail_call_self_dropped_params`:
+  ```
+  Dup(name)             ; bump rc so args[i] = Var(name) sees rc > 0
+  Drop(name)            ; release the local slot's reference
+  TailDeclCall …        ; return_call, never returns to caller
+  ```
 
-```rust
-/// For a tail-call `<self_name>(args)`, return the `Owned`
-/// parameters of the current decl that are *not* mentioned in any
-/// `args[i]` and are still live (i.e. `ownership[p] == Owned`).
-fn tail_call_self_dropped_params<'a>(
-    self_name: &str,
-    callee: &ValueExpr,
-    args: &[ValueExpr],
-    ownership: &'a HashMap<String, OwnershipClass>,
-    self_params: &'a [String],
-) -> Vec<&'a str> {
-    let calling_self = matches!(
-        callee,
-        ValueExpr::GlobalRef { name, .. } | ValueExpr::Var(name) if name == self_name,
-    );
-    if !calling_self { return Vec::new(); }
+  Because `return_call` does not return to the caller frame, the
+  Drop before the call is the only opportunity to free `name` if its
+  rc reaches zero — but the `Dup` bumps rc to make sure the arg-side
+  reference survives the slot's drop.
 
-    let mut mentioned: HashSet<&str> = HashSet::new();
-    for arg in args {
-        collect_var_mentions(arg, &mut mentioned);
-    }
-    self_params
-        .iter()
-        .filter(|p| ownership.get(p.as_str()) == Some(&OwnershipClass::Owned))
-        .filter(|p| !mentioned.contains(p.as_str()))
-        .map(|p| p.as_str())
-        .collect()
-}
-```
+  **Equivalence check.** `Dup(name); Drop(name)` is a no-op on rc
+  when the slot was the only owner (rc 1 → 2 → 1) and matches the
+  original "release the slot, args still own a copy" semantics for
+  rc > 1.
 
-`collect_var_mentions` is a strict-subset of the existing
-`collect_owned_var_mentions` (line 1430-ish) that ignores
-`OwnershipClass`; either reuse that helper with a stub
-`HashMap` of `Owned`-only entries or copy it with the
-`ownership` filter removed.
+- **C3** (`name` is the callee expression itself, i.e. a Var bound
+  to a `Closure` or `Func` value) is **deliberately not** preserved
+  as a tail call. Reasons:
 
-(c) In `drop_insert_comp`'s `Call` arm (line 987), wrap the call:
+    1. Indirect tail calls (`return_call_indirect`) are not yet
+       wired through `gen_lower::backend_ir::WasmBackendInstr`;
+       Goby's `TailDeclCall` only supports direct calls (the
+       `decl_name` field).
+    2. `Dup(name); Drop(name); IndirectCall` would be sound for rc,
+       but the call itself has no tail-call form, so we'd still
+       demote.
+    3. Closure-typed self-recursion is rare in idiomatic Goby
+       programs (the recursive helpers in BUGS.md M9 all use
+       module-level decl names as callees).
 
-```rust
-CompExpr::Call { callee, args, reuse_token } => {
-    let call = CompExpr::Call { /* same as today */ };
-    let with_dups = insert_non_last_call_arg_dups(
-        call, ownership, module_ownership, param_order,
-    );
+  Action: keep the existing let-tmp wrap for C3. Add an explicit
+  comment in `insert_drop_at_tail` saying "C3 is not preserved
+  because indirect tail calls are not implemented; this is intentional
+  per PLAN_PERCEUS §4.100 Step 2." If a future workload demands it,
+  re-open under a separate milestone with `return_call_indirect` as
+  a prerequisite.
 
-    // M9: drop self-tail-call parameters that are not forwarded.
-    let drops = tail_call_self_dropped_params(
-        self_name, callee, args, ownership, self_params,
-    );
-    let mut prefix: Vec<CompExpr> = drops
-        .into_iter()
-        .map(|p| CompExpr::Drop { value: Box::new(ValueExpr::Var(p.to_string())) })
-        .collect();
-    if prefix.is_empty() {
-        return (with_dups, next_tmp);
-    }
-    (
-        CompExpr::Seq {
-            stmts: prefix,
-            tail: Box::new(with_dups),
-        },
-        next_tmp,
-    )
-}
-```
+(a) Implement the C1 / C2 / C3 split in `insert_drop_at_tail`. The
+    callee-vs-arg classification is local to the `Call` arm and only
+    needs `value_mentions_name(callee, name)` plus the existing
+    `args.iter().any(...)` check.
 
-(d) Soundness gate: a `Drop(p)` emitted here must not run before
-`p` is read by `args[i]`. The mention check in (b) ensures `p`
-isn't textually in any `args[i]`. But aliasing through `Let`
-bindings can still keep `p` live indirectly — that case is
-caught by `comp_consumes_name` already used elsewhere.
-**Defensive rule:** before emitting `Drop(p)`, also check
-`!comp_consumes_name(&CompExpr::Call{..}, p, module_ownership, param_order)`
-on the original (pre-`with_dups`) call. If the check returns
-`true`, skip the drop for that `p` — let downstream last-use
-handle it. Document this in a comment.
+(b) Add unit tests in `perceus.rs`:
+    - C2 regression: a tail-recursive function with an `Owned` param
+      mentioned in its self-call args lowers to `TailDeclCall`, not
+      `DeclCall`. (Mirrors the `walk` regression that surfaced DI-2.)
+    - C3 sanity: a closure-call shape stays in the let-tmp form and
+      does **not** lower to `TailDeclCall`. (Documents the deliberate
+      conservative behaviour.)
 
-Verification: same set as 3c. The M9 test's `free_list_hits` should
-flip from 0 to a number that scales with rounds. If `peak_bytes`
-still does not pass `peak * 2 < total`, run with
-`GOBY_DUMP_PERCEUS_IR=1` again and confirm 3a is firing on all five
-helpers. If a helper is not getting drops, it's because its `Owned`
-classification is missing — go back to Step 1's findings.
-
-**3b — HOF closure-body-aware ownership**
-
-File: `crates/goby-core/src/perceus.rs`.
-
-Goal: when classifying `Call { callee: list.fold, args }`, look at
-`args[2]` (the closure). If its body consumes its parameter and the
-parameter does not escape, treat `args[1]` (the seed/list) as if it
-flows into an `Owned` formal.
-
-Step-by-step:
-
-(a) Add an HOF table next to `intrinsic_arg_is_borrowed` (line 510):
-
-```rust
-/// HOF intrinsics whose closure argument's body governs the
-/// ownership of one of the data arguments.
-///
-/// Format: callee_name -> (data_arg_idx, closure_arg_idx,
-/// closure_param_idx_for_data).
-fn list_hof_closure_signature(name: &str)
-    -> Option<(usize /* data_arg_idx */, usize /* closure_arg_idx */, usize /* closure_param_idx */)> {
-    match name {
-        "__goby_list_fold"  => Some((1, 2, 0)), // fold xs acc f; closure (a, c) — `a` carries seed
-        "__goby_list_each"  => Some((0, 1, 0)), // each xs f; no seed, but xs flows through `a`
-        "__goby_list_map"   => Some((0, 1, 0)),
-        _ => None,
-    }
-}
-```
-
-The exact mangled names (`__goby_list_fold` etc.) — confirm against
-`crates/goby-stdlib/...` or whatever calling convention emits them.
-Grep `fold\|__goby_list_fold` in the codebase to find the
-authoritative names. If the stdlib uses unmangled `fold`, use that.
-
-(b) Add `lambda_consumes_first_param`:
-
-```rust
-/// Returns `true` iff `body` is statically known to consume `param`
-/// at last use and `param` does not appear in any escaping
-/// position (return value, captured by another closure, stored in
-/// a list/tuple/record literal that escapes).
-fn lambda_consumes_first_param(body: &CompExpr, param: &str) -> bool {
-    // Reuse the existing classifier: build a mini-`classes` map
-    // with `param -> Owned`, run `classify_comp` over `body`, and
-    // check whether `param` was demoted (i.e. ended in `classes`
-    // as `Owned` is preserved by `demote_owner` only when
-    // *consumed*; if `body` only borrows `param`, the entry stays
-    // `Owned` *but* `classify_borrowed_value` never demotes it).
-    //
-    // Simpler: walk `body` and answer
-    //   "is there a syntactic position for `param` that is
-    //    `consumed` (per `classify_consumed_value`'s rules)
-    //    and not also live afterwards?".
-    //
-    // For M9, ship the syntactic version: return `true` iff
-    // - `body` mentions `param` exactly once, and
-    // - that mention is in a `ListLit` spread, `TupleLit`,
-    //   `RecordLit`, or as a `Call` argument to a callee whose
-    //   formal is `Owned`.
-    todo!("implement during Step 3b — see comment above for exact criteria")
-}
-```
-
-The "exactly one mention" rule is conservative but correct: more
-than one mention requires a `Dup` and is not a candidate for
-"owned-passable through the HOF". Sonnet should not generalise this.
-
-(c) Extend `classify_call_args` (line 472):
-
-```rust
-fn classify_call_args(
-    callee: &ValueExpr,
-    args: &[ValueExpr],
-    /* ... */
-) {
-    let callee_params = callee_param_classes(callee, module_params);
-
-    // M9 3b: HOF closure-body-aware override.
-    let hof_owned_idx = match callee {
-        ValueExpr::GlobalRef { name, .. } | ValueExpr::Var(name) => {
-            list_hof_closure_signature(name).and_then(|(data_idx, clos_idx, param_idx)| {
-                let ValueExpr::Lambda { param, body } = args.get(clos_idx)? else {
-                    return None;
-                };
-                if param_idx != 0 {
-                    // Multi-param closures use IR's nested Lambda; walk
-                    // `param_idx` levels into `body`. M9 only handles
-                    // `param_idx == 0` because all stdlib HOFs hand the
-                    // data through the first closure arg.
-                    return None;
-                }
-                lambda_consumes_first_param(body, param).then_some(data_idx)
-            })
-        }
-        _ => None,
-    };
-
-    for (idx, arg) in args.iter().enumerate() {
-        let owned_by_hof = Some(idx) == hof_owned_idx;
-        if !owned_by_hof
-            && (intrinsic_arg_is_borrowed(callee, idx)
-                || callee_params
-                    .and_then(|p| p.get(idx))
-                    .is_some_and(|c| *c == OwnershipClass::Borrowed))
-        {
-            classify_borrowed_value(arg, classes, params, aliases);
-        } else {
-            classify_consumed_value(arg, classes, params, aliases);
-        }
-    }
-}
-```
-
-(d) Soundness gate: in `lambda_consumes_first_param`, also reject
-bodies that contain `PerformEffect` or `WithHandler` —
-`reuse_not_across_perform_effect` exists for a reason and HOF
-widening must respect that boundary.
-
-Verification: same set as before. The M9 test's `peak_bytes` should
-now stay bounded under 3b (the `around_diffs` per-call literal
-recycles). If not, the HOF intrinsic name in (a) is wrong — grep
-the IR dump for the actual `Call` callee strings on `flatten_acc` /
-`check_around_rolls`.
-
-**3d — `mut ys = xs` upstream-borrow widening (conditional)**
-
-Skip this fix unless Step 1.2 explicitly recorded that `update_xs`'s
-`xs` is classified `Borrowed` after 3a + 3c land. If it is, file a
-follow-up issue rather than implementing under M9 — the change
-touches `perceus_reuse.rs`'s seed logic and is the riskiest of the
-four. Sonnet **should not** attempt 3d without a Codex code review
-of the IR diff first.
-
-Acceptance for M9 closing without 3d: the M9 test passes, the
-138×138 input completes under 256 MiB, and the IR dump shows
-`update_rolls`'s parameter classified `Owned` (which 3a indirectly
-fixes by dropping `rolls` before `check`'s self-tail-call, removing
-the outstanding `rolls` reference at the `update_rolls` call site).
-
-#### Step 4 — Drop insertion audit on intermediate lists
-
-After Step 3, with `GOBY_DUMP_PERCEUS_IR=1` set:
-
-(a) Confirm by inspection of the IR dump that:
-- Each `*_acc` helper has `Drop(<param>)` immediately before its
-  recursive `Call` for the parameters not forwarded.
-- `flatten_acc`'s `fold row acc ...` keeps a single allocation
-  for `acc`'s tail; the per-iteration cons cells are reused
-  (look for `RefCountDropReuse` near the `[c, ..a]` lowering).
-- `check_around_rolls` drops `around_diffs` on return; the IR's
-  `result =` binding has a balancing `Drop(around_diffs)` after
-  the `fold` call.
-- `check` drops `rolls` before `check new_rolls ...`'s
-  recursive call.
-
-(b) Add the alloc-baseline fixture and its budget:
+(c) Verification:
 
 ```sh
-# Save the BUGS.md repro with a deterministic 10x10 input embedded
-# via `read_lines` patched out — actually, the existing fixture
-# format runs with empty stdin. Use the form that takes the grid
-# as a string literal inside the program:
-mkdir -p crates/goby-wasm/tests/fixtures/alloc-baseline
-# Write doc-derived program to:
-#   crates/goby-wasm/tests/fixtures/alloc-baseline/m9_real_world_driver.gb
+cargo test --release -p goby-wasm \
+  compile_module_scan_loop_lowering_eliminates_walk_self_call_in_wasm \
+  perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round \
+  refcount_reuse_loop_owned_param_seed_reuses_assign_index
 ```
 
-The program must not use `read_lines` (the alloc-baseline harness
-runs with empty stdin). Replace `lines = read_lines ()` with a
-hard-coded `lines = ["@.@..", "....@", ...]` — six rows of ten
-characters each is sufficient to exercise multiple rounds. Keep
-the rest of `solve2.gb` byte-for-byte identical to BUGS.md.
+All must remain green; the new unit tests must pass.
 
-Append to `crates/goby-wasm/tests/alloc_baseline.txt`:
+### Step 3 — Acceptance fixture (and optional AoC evidence)
 
-```
-alloc-baseline/m9_real_world_driver.gb <total_bytes_observed_after_m9>
-```
+(a) **Required.** Add
+    `crates/goby-wasm/tests/fixtures/alloc-baseline/m9_real_world_driver.gb`
+    derived from the BUGS.md M9 repro:
 
-Use the *post-fix* `total_bytes` value from the M9 test as the
-baseline. The harness uses `<=` against this, so it acts as a
-ceiling.
+    - Start from the BUGS.md "Open bugs" 2026-04-28 entry's program.
+    - Replace `read_lines ()` with a hard-coded six-row 10-character
+      grid literal so the alloc-baseline harness can run with empty
+      stdin (the harness invokes the test with no piped stdin).
+    - Keep the rest of the program byte-for-byte identical to BUGS.md
+      so the fixture exercises the same Perceus pathways.
+    - Append the post-fix `total_bytes` figure to
+      `crates/goby-wasm/tests/alloc_baseline.txt` as the ceiling.
 
-(c) Run the full baseline:
+    This fixture is the **reproducible** M10 closure gate. It lives in
+    the repository, runs with no external input, and is the artefact
+    future reviewers can run to verify M10 closure independently.
+
+(b) **Optional, evidence only.** If the contributor has access to the
+    AoC2025 day 4 part 2 input locally:
+
+    ```sh
+    goby run --max-memory-mb 256 --debug-alloc-stats solve2.gb < input
+    ```
+
+    Capture `total_bytes` / `peak_bytes` / `reuse_hits` in
+    `tmp/m10_aoc_acceptance.txt` and quote the numbers in the closure
+    commit message. The AoC input is not redistributable and not in
+    the repo, so this run is supporting evidence rather than a CI
+    gate.
+
+(c) Verification:
 
 ```sh
 cargo test --workspace --release alloc_baseline
 ```
 
 `refcount_reuse_loop.gb`'s row in `alloc_baseline.txt` must be
-unchanged (the M6 acceptance budget). If it changed, M9 has
-introduced a regression in M6's reuse — debug before proceeding.
+unchanged. The new `m9_real_world_driver.gb` row must pass.
 
-#### Step 5 — Re-acceptance
+Per-step plan / code reviews from a second pair of eyes (human or
+AI) are part of the surrounding development workflow and are
+intentionally **not** called out as separate Steps here — they are
+expected at every step, not specific to M10.
 
-- [ ] M9 acceptance test passes (`free_list_hits > 0`,
-      `peak * 2 < total`, `reuse_hits >= rounds * cells_per_round`).
-- [ ] AoC2025 day 4 part 2 (138×138 input) completes under
-      `--max-memory-mb 256`. Run from a private working copy:
-      `goby run --max-memory-mb 256 --debug-alloc-stats solve2.gb < input`.
-      Record final `total_bytes` / `peak_bytes` / `reuse_hits` in
-      `tmp/m9_aoc_acceptance.txt` for the commit message.
-- [ ] `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb`
-      budget unchanged in `alloc_baseline.txt`.
-- [ ] `cargo test --workspace --release` green.
-- [ ] Skill `goby-invariants` clean (run before the final commit).
-
-#### Step 6 — Codex code review
-
-Use Skill `codex-request`. Send the diff for the entire M9 series
-(3c + 3a + 3b + Step 4 fixture in one bundle, even if landed in
-multiple commits) and the Step 5 numbers. Required focus areas:
-
-- **3a tail-call drop** — no double-drop on parameters that are also
-  tail-call arguments. The mention check in
-  `tail_call_self_dropped_params` is the load-bearing line; ask
-  Codex to challenge it with a counter-example (e.g. an arg that
-  is `f(p)` for some pure function `f`).
-- **3b HOF widening** — closure escape detection. Ask Codex to
-  exhibit a closure that returns its parameter or stores it in a
-  list literal, and confirm `lambda_consumes_first_param` rejects it.
-- **3c tuple projection** — that a `Drop(t)` is not emitted while a
-  projected component is still live. Read `count_var_uses` in
-  context to confirm the existing last-use machinery handles the
-  multi-projection case.
-- **Effect handler interaction** — confirm
-  `reuse_not_across_perform_effect` and
-  `reuse_not_across_with_handler` still pass.
-
-#### Step 7 — STATE / PLAN sync, BUGS.md closure, commit
+### Step 4 — STATE / PLAN / BUGS sync, commit
 
 - [ ] Move the BUGS.md M9 entry from "Open" to "Resolved on
-      YYYY-MM-DD" with a one-paragraph fix summary listing 3a / 3b /
-      3c (and 3d if landed).
-- [ ] Update `doc/STATE.md` and `doc/PLAN.md` §4.2 to record M9
-      outcome and re-close Perceus.
-- [ ] Update `memory/project_perceus_status.md` if present in this
-      checkout.
-- [ ] Commit each fix as its own commit with the Step 5 numbers in
-      the message. Final commit message follows the repo style
-      (subject under 70 chars, body explains *why*).
-- [ ] Run Skill `goby-invariants` before the final commit.
+      YYYY-MM-DD" with a one-paragraph fix summary listing
+      DI-1 (Option B), DI-2, and the M10 acceptance items.
+- [ ] Update `doc/STATE.md` and `doc/PLAN.md` §4.2 to record M10
+      outcome and re-close Perceus. **Note:** these two docs are
+      already stale relative to PLAN_PERCEUS today (they still say
+      "M0–M8 complete", missing M9 partial and M10). This Step 4
+      sync should bring them current in one pass — see §4.99 DI-6.
+- [ ] Update `memory/project_perceus_status.md` if present.
+- [ ] Before the final commit, run the repository quality gate from
+      `AGENTS.md` ("Minimal Quality Gate"): `cargo fmt`, `cargo check`,
+      and `cargo test --workspace --release`. In addition, hand-check
+      the "Always-Global Invariants" listed in `AGENTS.md`: any
+      syntax / semantics change must be reflected in
+      `doc/LANGUAGE_SPEC.md`, `doc/PLAN.md`, and the relevant
+      `examples/*.gb`.
+- [ ] Commit each step as its own commit; final commit message
+      includes the alloc-baseline numbers from Step 3(c).
 
-#### Invariants the fix must preserve
+### Acceptance for M10 closure
+
+Hard gates (must all pass; closure is blocked otherwise):
+
+- [ ] All M9 open items in §4 ("Open M9 acceptance items") closed.
+- [ ] DI-1 stopgap (`type_is_known_heap`) deleted; replaced by
+      decl-return ownership inference.
+- [ ] DI-2 demotion eliminated; new unit test green.
+- [ ] `cargo test --workspace --release` green with no
+      `--no-fail-fast` needed.
+- [ ] Project invariants check clean (see Step 4).
+- [ ] `crates/goby-wasm/tests/fixtures/alloc-baseline/m9_real_world_driver.gb`
+      added with a recorded `total_bytes` ceiling in `alloc_baseline.txt`.
+      This is the **reproducible** acceptance bench; it exercises the
+      same shape as the AoC2025 program.
+
+Optional evidence (not a closure gate):
+
+- AoC2025 day 4 part 2 (138×138) under `--max-memory-mb 256`. The
+  AoC input is not in the repository, so this is supporting evidence
+  in the commit message rather than a CI-checkable gate. Capture
+  numbers in `tmp/m10_aoc_acceptance.txt` if the contributor has the
+  input on hand.
+
+### Invariants the fix must preserve
 
 - `LetMut` does not call `bind_alias` (`perceus.rs:306`).
 - `lower_assign_index_reuse` only emits `ListSetInPlace` when the
   static uniqueness proof has held since allocation.
 - `alloc_baseline.txt` is monotonically non-increasing for every
-  pre-existing fixture, including `refcount_reuse_loop.gb`.
+  pre-existing fixture.
 - `reuse_not_across_perform_effect` and
   `reuse_not_across_with_handler` stay green.
 - No fix may rely on inter-procedural analysis beyond `IrDecl`-level
-  metadata. Cross-decl reuse is out of scope.
+  metadata. The decl-body return-shape inference fits this rule
+  because it consults only the callee's IR, the same way M5's
+  reuse pass already does for `reuse_param`.
 
-#### Out of scope for M9
+### Out of scope for M10
 
-- Reuse across `perform` / `with_handler` boundaries (still §3.5
-  / M5 invariant).
-- Reuse on `set xs i v` (M6 Step 5 re-open conditions still stand).
-- Inter-procedural reuse beyond §3.7.1's tail-call rule.
-- Stack allocation of short-lived closures.
-- HOFs with `param_idx > 0` (multi-formal closures whose data flows
-  through the second closure parameter). The 3b table only handles
-  `param_idx == 0`.
+- Closure escape analysis for stack allocation.
+- HOF closure-body-aware ownership (the un-shipped M9 3b). Re-open
+  if a future workload demands it; the M9 acceptance test passes
+  without 3b.
+- Type-driven ownership (Option C). Tracked as the long-term
+  successor plan to PLAN_PERCEUS.
 
 ---
 
