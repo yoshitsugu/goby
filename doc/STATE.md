@@ -1,7 +1,7 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-30 (Perceus M10 reopen — regression net landed,
-naive fix reverted as unsafe)
+Last updated: 2026-04-30 (Perceus M10 reopen — root cause localized:
+host bump arena leaks via `goby:runtime/track-e` host imports)
 
 ## Current Focus
 
@@ -130,60 +130,154 @@ Even with the naive IR fix in place (now reverted for safety), the
   unrealistically low for ~2500 grapheme cells) and abrupt 1 GiB
   exhaustion at `n ≥ 70`.
 
-## Hypothesis
+## Root cause (localized 2026-04-30)
 
-The runtime-layer counter `GLOBAL_ALLOC_BYTES_TOTAL` is incremented
-only by `emit_alloc_from_top` (`crates/goby-wasm/src/gen_lower/emit.rs:5448`),
-which is the Perceus-aware refcounted heap path. The fact that
-`total_bytes=0` while a non-trivial grapheme list is in fact
-materialised at runtime suggests that **a substantial fraction of
-list / string / handler-state allocations bypass the Perceus
-refcounted heap altogether** and live in a separate buffer (host
-bump area, WASI/legacy allocator, or handler-continuation arena).
+The leak is a **runtime-layer leak of the host bump arena**, not a
+Perceus IR-level Drop placement bug. The Wasm linear memory has two
+disjoint allocators that share the page budget, and only one of them
+is freed:
 
-Likely culprits, in priority order:
+| Allocator | Site | Freed by | Counted in `total_bytes` |
+|-----------|------|----------|--------------------------|
+| Perceus refcounted heap | `emit_alloc_from_top` (`crates/goby-wasm/src/gen_lower/emit.rs:5319`) | `__goby_drop` (refcount→0 → free list) | yes (`emit.rs:5448`) |
+| Host bump arena | `alloc_from_host_bump` (`crates/goby-wasm/src/wasm_exec.rs:867`) | **never** (cursor is monotonic; only `memory.grow` extends it) | **no** |
 
-1. `__goby_string_each_grapheme` and friends — host-side intrinsics
-   that build per-grapheme strings outside the refcounted heap.
-2. `__goby_list_push_string` — used inside the `graphemes` handler
-   body to extend `step.parts`. The IR already emits the call as
-   `Call { callee: Var("__goby_list_push_string"), .. }`, but if
-   the runtime helper allocates from a separate heap, those chunks
-   accumulate without ever reaching `__goby_drop`.
-3. Effect-handler continuation / resume-frame allocation. Each
-   `yield grapheme step -> resume (...)` builds a fresh
-   `GraphemeState` record in the resume value. If those records
-   are allocated on a continuation-local buffer that is never
-   walked by `__goby_drop`, the per-grapheme leak is O(n) per call
-   and O(n²) across `list.map lines graphemes`.
+Every `goby:runtime/track-e` host import allocates from the host bump
+arena and never increments `GLOBAL_ALLOC_BYTES_TOTAL`. There is no
+`free` path: `alloc_from_host_bump` only does
+`bump.compare_exchange_weak` forward, and on capacity pressure calls
+`ensure_linear_memory_capacity` → `memory.grow`. That is exactly how
+`E-MEMORY-EXHAUSTION` is reached at the 1 GiB / 256 MiB ceiling without
+the Perceus stats showing any pressure.
 
-The asymmetric jump between `n = 50` (OK) and `n = 70` (1 GiB
-exhaustion) is consistent with an O(n²) leak whose constant factor
-is large enough to saturate the linear memory once per-grapheme
-state crosses ~5000 elements.
+The seven host imports that route through this arena are registered
+in `crates/goby-wasm/src/wasm_exec.rs:215-330` and listed in
+`crates/goby-wasm/src/host_runtime.rs:75-83`:
 
-## Verification plan for the hypothesis
+| Host import | Implementation | Allocates per call |
+|-------------|----------------|--------------------|
+| `__goby_value_to_string` | `value_to_string_host` (`wasm_exec.rs:354`) | one tagged String header (`encode_string_in_host_bump`) |
+| `__goby_string_each_grapheme_count` | `grapheme_count_host` | none (returns count) |
+| `__goby_string_each_grapheme_state` | `grapheme_state_host_inner` (`wasm_exec.rs:397`) | one fresh `(len, bytes)` String header **only when `span.start ∈ 1..=3`** (offsets that have no safe in-place 4-byte slot); `span.start == 0` reuses the source header, `span.start ≥ 4` mutates the source bytes in place |
+| `__goby_string_concat` | `string_concat_host` | one `(len, bytes)` String per call |
+| `__goby_list_join_string` | `list_join_string_host` | one `(len, bytes)` String per call |
+| `__goby_string_graphemes_list` | `graphemes_list_host` (`wasm_exec.rs:1016`) | full chunked list header + N chunks + N grapheme strings — **O(N) bytes per call, never freed** |
+| `__goby_string_split_lines` | `split_lines_host` (`wasm_exec.rs:1036`) | full chunked list header + chunks + N line strings — **O(input size) bytes per call, never freed** |
 
-The next investigation should:
+For the 138×138 reduction
+(`perceus_m10_list_map_graphemes_138_lines_runs_under_256mib`), the
+hot path is:
 
-1. Audit which intrinsics on the `graphemes` / `list.map` /
-   handler-resume hot path call `emit_alloc_from_top` (and
-   therefore are visible to `total_bytes`) versus those that do
-   not.
-2. For each intrinsic that does not, decide whether routing it
-   through `emit_alloc_from_top` (so `__goby_drop` can free it) is
-   safe and within M10 scope, or whether the fix belongs in a new
-   milestone targeting host-intrinsic allocator unification.
-3. If unification is out of M10 scope, surface that as a
-   PLAN_PERCEUS update and re-scope M10 to "Perceus IR-level fix +
-   regression net" (already landed) and a successor milestone for
-   the runtime-layer leak.
-4. Independently, design the Let / LetMut distinction in
-   `return_ownership_value` (and matching boundary in
-   `classify_call_result_ownership`) so the
+1. `lines = read_lines ()` calls `__goby_string_split_lines`. The
+   entire `List String` (header + chunks + 138 line strings ≈
+   `138 × (4 + 138)` bytes for the line bodies plus list metadata)
+   is allocated **once** in the host bump arena. It is not freed at
+   end-of-function. (`split_lines_host` allocates via
+   `alloc_list_string_host` → `alloc_from_host_bump`.) This is a
+   one-shot O(n²) cost in line-count × line-width.
+2. `rows = list.map lines graphemes` then calls the Goby-level
+   `graphemes` for each line. The stdlib `graphemes`
+   (`stdlib/goby/string.gb:127`) does **not** call
+   `__goby_string_graphemes_list`; it iterates with
+   `__goby_string_each_grapheme value initial` (the 2-arg form,
+   which is `StringEachGraphemeState` — a host import) and pushes
+   each grapheme into a Perceus-managed `List String` via
+   `__goby_list_push_string` (in-Wasm, `emit_list_push_string_helper`,
+   `emit.rs:7698`).
+3. For each grapheme yielded by the host, the host **may** allocate
+   a fresh String in the bump arena (only the `span.start ∈ 1..=3`
+   case). For ASCII input `"."` ×138 this is a small per-line cost,
+   but for the full real-world driver shape (`splitlines (read())`
+   of a typical text file with multi-byte graphemes) the per-call
+   cost becomes O(line_length).
+4. Even if step 3 is small, step 1 alone is large enough that the
+   *combined* live host-bump occupancy across a session of
+   N = 138 lines × repeated runs / closures is what tips the 256 MiB
+   ceiling — and crucially, **the bump cursor never retreats even
+   when `lines` and every `rows[i]` go out of scope.**
+
+This explains the observations in `## Problem` directly:
+
+- `total_bytes = 0` for `perceus_m10_graphemes_single_call_emits_free_list_hits`:
+  the regression test calls `read()` (consumes empty stdin → host bump
+  alloc only for the `Read` effect plumbing) and `graphemes "abc"`,
+  whose body uses `__goby_string_each_grapheme` 2-arg = host import,
+  not the Perceus heap. The grapheme list is built in-Wasm via
+  `__goby_list_push_string`, which does increment `total_bytes`. So
+  observing `total_bytes = 0` means execution **aborted before**
+  `emit_alloc_stats_line` ran — most likely a `memory.grow` failure
+  inside the host bump path tripped `RUNTIME_ERROR_MEMORY_EXHAUSTION`
+  and the `_start` epilogue never reached the alloc-stats line.
+  (`emit_alloc_stats_line` writes the line *before* the WASI exit, but
+  `set_runtime_error_once` + `emit_abort` short-circuits the epilogue.)
+- `n = 50` succeeds, `n = 70` fails at 1 GiB: the host bump arena
+  starts at `host_bump_start = initial_linear_memory_bytes -
+  host_bump_reserved_bytes`. Once it crosses
+  `host_bump_reserved_bytes = 49152`, every subsequent host import
+  triggers `memory.grow`. Because `__goby_string_split_lines` alone
+  allocates `O(n × line_width) + list_meta` per call and never frees,
+  the cliff between 50 and 70 is just where cumulative host bump
+  consumption × the constant factor saturates the 1 GiB ceiling.
+- The Perceus IR-level fix to `return_ownership_value::GlobalRef`
+  (the naive promotion) is **orthogonal**: it can only affect what
+  Perceus's `__goby_drop` walks, and `__goby_drop` does not touch
+  host bump memory. So no IR-level Drop placement change can release
+  host-bump-resident `lines`/`rows[i]` strings.
+
+## Implication for M10 scope
+
+The remaining work is **not** a Perceus IR-layer fix. Two independent
+fixes are required:
+
+1. **Runtime-allocator unification** — either (a) route the seven host
+   imports through the Perceus refcounted heap so `__goby_drop` can
+   walk them, or (b) give the host bump arena a free path
+   (per-call-frame reset, or refcounted host strings/lists). Option
+   (a) requires the host imports to write into refcount-prefixed
+   slots that `__goby_drop` understands; option (b) requires deciding
+   the lifetime story for host-bump-resident pointers when they
+   escape into Goby values.
+2. **Let / LetMut distinction in `return_ownership_value`** — still
+   needed independently to flip
    `return_ownership_local_shadowed_global_ref_with_owned_local_is_owned`
-   guard can be flipped back on without breaking
+   on without breaking
    `recursive_multi_part_interpolated_print_after_graphemes_executes`.
+   This is unblocked from (1) — it can land first and is the
+   originally-scoped M10 work.
+
+PLAN_PERCEUS §4.100 acceptance must be re-scoped: M10 closes on
+delivery of (2) plus the regression net (already landed); (1) belongs
+in a successor milestone (working title: **M11 — host-intrinsic
+allocator unification**).
+
+## Verification status
+
+The audit listed in the previous session's "Verification plan" is
+complete; results are summarized in `## Root cause` above. Concretely:
+
+- All seven `goby:runtime/track-e` host imports were traced to
+  `alloc_from_host_bump` and confirmed to **not** call
+  `emit_alloc_from_top` and **not** to update
+  `GLOBAL_ALLOC_BYTES_TOTAL`.
+- `__goby_list_push_string` (the in-Wasm path used by `graphemes`'s
+  handler body) was confirmed to use `emit_alloc_from_top` and is
+  therefore visible to Perceus drop / free-list reuse.
+- `RecordLit` (used to build `GraphemeState` in the resume value) was
+  confirmed to use `emit_alloc_from_top`. Effect-handler
+  resume-frame allocation is therefore **not** an additional
+  off-heap source — Hypothesis 3 from the prior session is
+  retracted.
+
+Open verification work, in priority order:
+
+1. Quantify host-bump consumption per call to `split_lines_host` and
+   `graphemes_list_host` for the 138×138 reduction (instrument
+   `alloc_from_host_bump` to log cumulative bytes; confirm the cliff
+   between `n = 50` and `n = 70` matches the predicted O(n²) shape).
+2. Confirm `total_bytes = 0` is "aborted before alloc-stats line",
+   not "Perceus heap genuinely unused" — capture stderr including
+   the abort prefix, or add a `#[ignore]`d test that prints a
+   pre-exit marker before the alloc-stats line.
 
 ## Known Red / Green State
 
@@ -216,24 +310,31 @@ Green after this session:
 
 ## Next Step
 
-Stay on Perceus M10 until the runtime-layer leak is either fixed
-inside M10 scope or explicitly deferred:
+The cause is identified; the next session is design + scope, not
+investigation:
 
-1. Run the runtime-allocator audit described in "Verification plan"
-   above to localise which intrinsic / handler construct allocates
-   outside the Perceus refcounted heap.
-2. Independently design the Let / LetMut distinction so the
-   `return_ownership_local_shadowed_global_ref_with_owned_local_is_owned`
-   guard can be enabled.
-3. Decide M10 scope: either land the runtime-layer fix here or
-   open a successor milestone in `doc/PLAN_PERCEUS.md`. Update
-   §4.100 acceptance accordingly.
-4. Once 138×138 is green under 256 MiB, un-`#[ignore]` the two
-   runtime guards added this session, and mirror the closure into
-   `doc/BUGS.md` (Open → Resolved) and
-   `memory/project_perceus_status.md`.
+1. Update `doc/PLAN_PERCEUS.md` §4.100 to reflect the split:
+   - **M10 (re-close path)**: Let / LetMut distinction in
+     `return_ownership_value` + matching
+     `classify_call_result_ownership` boundary, gated by the existing
+     regression net. Acceptance: flip
+     `return_ownership_local_shadowed_global_ref_with_owned_local_is_owned`
+     to active and keep
+     `recursive_multi_part_interpolated_print_after_graphemes_executes`
+     green.
+   - **M11 (new)**: host-intrinsic allocator unification. Acceptance:
+     `perceus_m10_graphemes_single_call_emits_free_list_hits` and
+     `perceus_m10_list_map_graphemes_138_lines_runs_under_256mib` go
+     green; `doc/BUGS.md` 2026-04-30 entry moves Open → Resolved.
+2. For M11, decide direction (a) refcount the host imports vs (b)
+   per-call-frame bump reset. (a) is the cleaner fit with existing
+   `__goby_drop`; (b) needs a clear story for host-bump pointers
+   that escape via Goby values (e.g. `read_lines ()` whose result
+   outlives the call).
+3. Implement (1) first since it is independent and unblocks the
+   originally-scoped M10 close. (2) follows as a separate milestone.
 
-After M10 fully closes, return to other active tracks (`doc/PLAN.md`
+After M11 fully closes, return to other active tracks (`doc/PLAN.md`
 §4):
 
 - Track D: `goby lint` (unused binding, shadowed effect op).
