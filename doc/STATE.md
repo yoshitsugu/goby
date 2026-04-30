@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-30 (Perceus M10 in progress — Step 2 implemented)
+Last updated: 2026-04-30 (Perceus M10 in progress — Step 3 complete, Step 4 pending)
 
 ## Current Focus
 
@@ -12,8 +12,10 @@ Primary plan reference: `doc/PLAN_PERCEUS.md` §4.99 / §4.100.
 
 ## Current Decision
 
-Step 1a/1b/1c landed in `9a9f502`. Step 2 is implemented in the
-working tree and should be committed next.
+Step 1a/1b/1c landed in `9a9f502`. Step 2 landed in `b4cccde`.
+Step 3 is complete: `real_world_driver.gb` fixture and
+`alloc_baseline.txt` ceiling (`150049`) are in place and the
+`alloc_baseline` test passes.
 
 The selected design changed during implementation: `__goby_list_map`
 is not seeded as unconditionally `Owned`. The outer list is fresh, but
@@ -95,9 +97,10 @@ child remains live.
 - [x] Step 2: fix DI-2 with tail-call-safe drop placement in
       `insert_drop_at_tail` (C1 / C2 / C3 split in
       `doc/PLAN_PERCEUS.md` §4.100).
-- [ ] Step 3: add
+- [x] Step 3: add
       `crates/goby-wasm/tests/fixtures/alloc-baseline/real_world_driver.gb`
       and record its ceiling in `crates/goby-wasm/tests/alloc_baseline.txt`.
+      Ceiling is `150049`; `cargo test --workspace --release alloc_baseline` passes.
 - [ ] Step 4: move the BUGS.md M9 entry to resolved, update
       `doc/PLAN.md` §4.2, refresh this state file, and run the final
       quality gate.
@@ -107,17 +110,6 @@ Optional evidence, not a closure gate: AoC2025 day 4 part 2 under
 
 ## Next Step
 
-Commit Step 2, then start Step 3:
-`crates/goby-wasm/tests/fixtures/alloc-baseline/real_world_driver.gb`
-plus its `alloc_baseline.txt` ceiling.
-
-Gate evidence:
-
-- `cargo fmt --all --check` — pass.
-- `cargo check` — pass.
-- `cargo test` — pass.
-- `cargo test -p goby-core tail_drop_for` — pass.
-- `cargo test -p goby-core borrowed_callee_arg_is_dropped_by_owner_after_call` — pass.
-- `cargo test --release -p goby-wasm compile_module_scan_loop_lowering_eliminates_walk_self_call_in_wasm` — pass.
-- `cargo test --release -p goby-wasm perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round` — pass.
-- `cargo test --release -p goby-wasm refcount_reuse_loop_owned_param_seed_reuses_assign_index` — pass.
+Start Step 4: sync `doc/BUGS.md`, `doc/PLAN.md` §4.2, and `doc/STATE.md`
+to record M10 outcome and re-close Perceus. Run the final quality gate
+before any commit.
