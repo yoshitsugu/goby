@@ -64,7 +64,7 @@ Green after Step 2:
 - M9 acceptance tests:
   - `perceus_m9_simple_list_drop_increments_free_list_hits`
   - `perceus_m9_build_list_has_chunks_when_dropped`
-  - `perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round`
+  - `perceus_real_world_driver_drops_intermediates_and_reuses_per_round`
 - `goby-core perceus` tests, including the return-ownership tests.
 - `goby-cli cli_integration::run_command_debug_alloc_stats_emits_stats_line_for_general_lowered_program`
 - Graphemes / split / walk / rr3 regression set.
@@ -72,7 +72,7 @@ Green after Step 2:
 - `cargo test -p goby-core tail_drop_for_name`.
 - Step 2 wasm checks:
   - `compile_module_scan_loop_lowering_eliminates_walk_self_call_in_wasm`
-  - `perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round`
+  - `perceus_real_world_driver_drops_intermediates_and_reuses_per_round`
   - `refcount_reuse_loop_owned_param_seed_reuses_assign_index`
 
 The critical projection-borrow shape is:
@@ -96,7 +96,7 @@ child remains live.
       `insert_drop_at_tail` (C1 / C2 / C3 split in
       `doc/PLAN_PERCEUS.md` §4.100).
 - [ ] Step 3: add
-      `crates/goby-wasm/tests/fixtures/alloc-baseline/m9_real_world_driver.gb`
+      `crates/goby-wasm/tests/fixtures/alloc-baseline/real_world_driver.gb`
       and record its ceiling in `crates/goby-wasm/tests/alloc_baseline.txt`.
 - [ ] Step 4: move the BUGS.md M9 entry to resolved, update
       `doc/PLAN.md` §4.2, refresh this state file, and run the final
@@ -108,7 +108,7 @@ Optional evidence, not a closure gate: AoC2025 day 4 part 2 under
 ## Next Step
 
 Commit Step 2, then start Step 3:
-`crates/goby-wasm/tests/fixtures/alloc-baseline/m9_real_world_driver.gb`
+`crates/goby-wasm/tests/fixtures/alloc-baseline/real_world_driver.gb`
 plus its `alloc_baseline.txt` ceiling.
 
 Gate evidence:

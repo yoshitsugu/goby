@@ -15,7 +15,7 @@ PLDI 2021, as used in Koka, Lean 4, and Roc).
   one-line acceptance summary of each.
 - **M9 partially shipped (2026-04-29).** 3a (self-tail-call param drops)
   and 3c (TupleProject Owned propagation) landed and the M9 acceptance
-  test (`perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round`)
+  test (`perceus_real_world_driver_drops_intermediates_and_reuses_per_round`)
   is green. The widening exposed two design fault lines (DI-1 / DI-2)
   recorded in §4.99.
 - **M10 (next).** Three remaining tests are red, all rooted in DI-1
@@ -592,7 +592,7 @@ imported-Var callee consultation in
 ### M9 – Drop on tail-recursive self-calls and HOF-laundered last-use (partial)
 
 **Status:** acceptance test
-`perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round`
+`perceus_real_world_driver_drops_intermediates_and_reuses_per_round`
 is green at commit `a4c3d7a`. The implementation that landed:
 
 | Sub-fix | Status | Where |
@@ -617,7 +617,7 @@ fault lines and recorded in §4.99:
 2. `perceus_m9_build_list_has_chunks_when_dropped`
 3. `run_command_debug_alloc_stats_emits_stats_line_for_general_lowered_program`
 4. AoC2025 day 4 part 2 (138×138 input) under `--max-memory-mb 256`
-5. Step 4 fixture `crates/goby-wasm/tests/fixtures/alloc-baseline/m9_real_world_driver.gb`
+5. Step 4 fixture `crates/goby-wasm/tests/fixtures/alloc-baseline/real_world_driver.gb`
 6. BUGS.md M9 entry move from "Open" to "Resolved"
 
 The detailed fix prescription is **§4.100 (M10)**.
@@ -714,13 +714,13 @@ implementation as of a4c3d7a:
 | Step / fix | Status | Notes |
 |---|---|---|
 | Step 0 baseline | done | numbers captured at the time |
-| Step 1.1 acceptance test | done | `perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round` added |
+| Step 1.1 acceptance test | done | `perceus_real_world_driver_drops_intermediates_and_reuses_per_round` added |
 | Step 1.2 IR dump | done | gated on `GOBY_DUMP_PERCEUS_IR` env var |
 | 3c TupleProject Owned propagation | done | `classify_return_value` / `classify_consumed_value` |
 | 3a Self-tail-call param drop | done | `insert_self_tail_call_param_drops_comp` |
 | 3b HOF closure-body-aware ownership | **not implemented** | no `list_hof_closure_signature` / `lambda_consumes_first_param`. M9 acceptance test passes with 3a + 3c alone, so necessity is open |
 | 3d `mut ys = xs` upstream-borrow widening | not started (conditional) |
-| Step 4 drop insertion audit | partially done | acceptance test passes; fixture (`m9_real_world_driver.gb`) not added |
+| Step 4 drop insertion audit | partially done | acceptance test passes; fixture (`real_world_driver.gb`) not added |
 | Step 5 re-acceptance | **3 fail** | see DI-1: `perceus_m9_simple_list_drop_increments_free_list_hits`, `perceus_m9_build_list_has_chunks_when_dropped`, `run_command_debug_alloc_stats_emits_stats_line_for_general_lowered_program` |
 | Step 7 STATE / PLAN / BUGS sync | **not started** |
 
@@ -1097,7 +1097,7 @@ cargo test --release -p goby-core perceus
 cargo test --release -p goby-wasm \
   perceus_m9_simple_list_drop_increments_free_list_hits \
   perceus_m9_build_list_has_chunks_when_dropped \
-  perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round \
+  perceus_real_world_driver_drops_intermediates_and_reuses_per_round \
   refcount_reuse_loop_owned_param_seed_reuses_assign_index \
   perceus_real_world_driver_borrow_then_update_reuses_and_frees \
   compile_module_scan_loop_lowering_eliminates_walk_self_call_in_wasm \
@@ -1266,7 +1266,7 @@ Rationale for the per-case decisions:
 ```sh
 cargo test --release -p goby-wasm \
   compile_module_scan_loop_lowering_eliminates_walk_self_call_in_wasm \
-  perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round \
+  perceus_real_world_driver_drops_intermediates_and_reuses_per_round \
   refcount_reuse_loop_owned_param_seed_reuses_assign_index
 ```
 
@@ -1281,7 +1281,7 @@ All must remain green; the new unit tests must pass.
 ### Step 3 — Acceptance fixture (and optional AoC evidence)
 
 (a) **Required.** Add
-    `crates/goby-wasm/tests/fixtures/alloc-baseline/m9_real_world_driver.gb`
+    `crates/goby-wasm/tests/fixtures/alloc-baseline/real_world_driver.gb`
     derived from the BUGS.md M9 repro:
 
     - Start from the BUGS.md "Open bugs" 2026-04-28 entry's program.
@@ -1317,7 +1317,7 @@ cargo test --workspace --release alloc_baseline
 ```
 
 `refcount_reuse_loop.gb`'s row in `alloc_baseline.txt` must be
-unchanged. The new `m9_real_world_driver.gb` row must pass.
+unchanged. The new `real_world_driver.gb` row must pass.
 
 Per-step plan / code reviews from a second pair of eyes (human or
 AI) are part of the surrounding development workflow and are
@@ -1356,7 +1356,7 @@ Hard gates (must all pass; closure is blocked otherwise):
 - [ ] `cargo test --workspace --release` green with no
       `--no-fail-fast` needed.
 - [ ] Project invariants check clean (see Step 4).
-- [ ] `crates/goby-wasm/tests/fixtures/alloc-baseline/m9_real_world_driver.gb`
+- [ ] `crates/goby-wasm/tests/fixtures/alloc-baseline/real_world_driver.gb`
       added with a recorded `total_bytes` ceiling in `alloc_baseline.txt`.
       This is the **reproducible** acceptance bench; it exercises the
       same shape as the AoC2025 program.

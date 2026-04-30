@@ -1955,7 +1955,7 @@ main =
 }
 
 #[test]
-fn perceus_m9_real_world_driver_drops_intermediates_and_reuses_per_round() {
+fn perceus_real_world_driver_drops_intermediates_and_reuses_per_round() {
     // Source: doc/BUGS.md "Open bugs" 2026-04-28 entry — full AoC2025 day 4 part 2 repro.
     let source = r#"
 import goby/list (each, fold, length)
