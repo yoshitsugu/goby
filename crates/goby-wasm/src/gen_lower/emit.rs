@@ -1875,6 +1875,18 @@ pub(crate) fn emit_general_module_with_aux_and_options(
             test_reuse_hits_func_idx,
         );
         exports.export("__goby_drop", ExportKind::Func, goby_drop_func_idx);
+        // M10: expose user aux decls so perceus tests can call them
+        // directly (e.g. `build_list` in
+        // `perceus_m9_build_list_has_chunks_when_dropped`). Without this,
+        // wasmtime's `instance.get_typed_func(name)` cannot resolve aux
+        // decls — the name section alone is not sufficient.
+        for (i, decl) in aux_decls.iter().enumerate() {
+            exports.export(
+                &decl.decl_name,
+                ExportKind::Func,
+                main_func_idx + 1 + i as u32,
+            );
+        }
     }
     module.section(&exports);
 

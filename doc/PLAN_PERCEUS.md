@@ -811,11 +811,14 @@ In scope:
 
 1. Resolve DI-1 so heap-returning calls are classified `Owned` again,
    without re-introducing the walk / graphemes / rr3 regressions.
-2. Resolve DI-2 so tail-call drops never demote a `TailDeclCall` to
+2. Model heap-returning stdlib intrinsics and the projection-borrow
+   lifetime they expose (`ListGet` from an owned parent followed by
+   later use of the projected child).
+3. Resolve DI-2 so tail-call drops never demote a `TailDeclCall` to
    `DeclCall`.
-3. Close the three open M9 acceptance tests and add the
+4. Close the three open M9 acceptance tests and add the
    alloc-baseline fixture.
-4. Close the BUGS.md M9 entry and run AoC2025 day 4 part 2 under the
+5. Close the BUGS.md M9 entry and run AoC2025 day 4 part 2 under the
    256 MiB ceiling.
 
 Out of scope (still §M9 invariants):
@@ -846,15 +849,17 @@ following reasons:
   case. Failure mode: any unproven shape stays `Borrowed`, which is
   the pre-M9 behaviour and known to be sound.
 
-The fact is **ownership of the return reference**, not "shape of the
+The fact is **ownership of the returned reference**, not "shape of the
 return value". A function can return a heap pointer that aliases an
-input parameter (e.g. `passthrough xs = xs`) — that case must
-classify as `Borrowed`, otherwise drop insertion at the call site
-double-frees. The earlier draft of this section called the fact
-`returns_heap: bool`; that name is rejected because it invites the
-exact widening that caused DI-1 (heap-shaped ≠ owned). The data
-type is `OwnershipClass` (already defined in `perceus.rs`); the
-field name is `return_ownership`.
+input parameter (for example `passthrough xs = xs`). That result is
+`Owned` only when the parameter's entry classification is `Owned`;
+the call transfers ownership into the callee and the callee transfers
+the same reference back to the caller. It is `Borrowed` when the
+source binding is `Borrowed`. The earlier draft of this section
+called the fact `returns_heap: bool`; that name is rejected because
+it invites the exact widening that caused DI-1 (heap-shaped does not
+imply owned). The data type is `OwnershipClass` (already defined in
+`perceus.rs`); the field name is `return_ownership`.
 
 ### Step 0 — Sanity baseline
 
@@ -934,10 +939,11 @@ For a `ValueExpr` against Γ:
 
 - `ValueExpr::Var(name)` → `Γ[name]` if present; else `Borrowed`.
   Parameter ownership in Γ comes from M4.5 (`ownership_classify_module`),
-  not from this pass. So `passthrough xs = xs` classifies `Borrowed`
-  because M4.5 marks `xs` as Borrowed (no consume site in the body),
-  and `build`'s base case `acc` classifies `Owned` because M4.5 marks
-  `acc` as Owned (consumed by the recursive call's spread).
+  not from this pass. So `passthrough xs = xs` follows Γ exactly:
+  it is `Owned` when M4.5 classifies `xs` as `Owned`, and `Borrowed`
+  when Γ marks `xs` as `Borrowed`. `build`'s base case `acc`
+  classifies `Owned` because M4.5 marks `acc` as Owned (consumed by
+  the recursive call's spread).
 - `ValueExpr::ListLit { spread: None, .. }` → `Owned` (fresh).
 - `ValueExpr::ListLit { spread: Some(s), .. }` → `Borrowed` if
   `s` resolves (via Γ) to `Borrowed`; otherwise `Owned`. A spread
@@ -956,21 +962,31 @@ For a `ValueExpr` against Γ:
 - `ValueExpr::BinOp { .. }` / `ListGet { .. }` → `Borrowed`.
 - `ValueExpr::Lambda { .. }` → `Owned` (fresh closure object).
 
-(b) **Fix-point.** Initialise every decl's `return_ownership` to
-`Borrowed`. Iterate using **simultaneous recomputation**: snapshot
-the previous map, classify every decl against the snapshot, install
-the resulting map atomically. Stop when the map stabilises. Owned
-only ever turns on (never off), so the loop terminates in at most
-`|decls|` iterations.
+(b) **Fix-point.** Use a greatest-fix-point style iteration for
+return ownership:
 
-**SCCs and recursive cycles.** A cycle of decls that calls each
-other in tail position — with **no syntactic fresh-allocation base
-case** — never observes `Owned` from any neighbour and stays
-`Borrowed` for the whole cycle. This is sound but loses precision
-for shapes like `xs_acc = if done then result_list else go ...`
-where `result_list` is a fresh literal in some branch. The fix-point
-is intentionally simple; use SCC analysis only if a future workload
-demands tighter precision.
+1. Initialise every decl's `return_ownership` to `Owned`.
+2. Iterate using **simultaneous recomputation**: snapshot the previous
+   map, classify every decl against the snapshot, install the
+   resulting map atomically.
+3. Stop when the map stabilises.
+
+This is intentionally different from the earlier LFP draft
+(`Borrowed` initial state, `Owned` monotone growth). LFP cannot prove
+`Owned` for accumulator-building recursive helpers such as `build`:
+the recursive call starts as `Borrowed`, causing the branch join to
+collapse to `Borrowed` and pin there. The GFP form treats `Owned` as
+the hypothesis and removes it when a tail-position path is
+structurally `Borrowed` (`ListGet`, scalar `BinOp`, `Var` whose local
+environment says `Borrowed`, or a call to a Borrowed-confirmed
+sibling).
+
+**SCCs and recursive cycles.** A cycle of decls that only calls each
+other in tail position and has no returning base case may remain
+`Owned` under the GFP. This is acceptable for M10 because such a
+cycle never returns at runtime, so the classification has no
+observable drop-safety effect. Any cycle with a reachable
+tail-position `Borrowed` source still collapses to `Borrowed`.
 
 (c) Pass the resulting `HashMap<String, OwnershipClass>` through
 `run_perceus_passes` into `classify_owned_result` and `classify_comp`.
@@ -999,22 +1015,24 @@ Add unit tests in `crates/goby-core/src/perceus.rs` (the existing
 `#[cfg(test)] mod tests`) covering each of the following shapes:
 
 ```gb
--- (1) Passthrough of a Borrowed-classified parameter stays Borrowed.
--- (M4.5 classifies `xs` as Borrowed because the body never consumes it.)
+-- (1) Passthrough of an Owned-classified parameter returns Owned.
+-- M4.5 may classify `xs` as Owned at the callee boundary because the
+-- caller transfers ownership into the call; returning the same reference
+-- transfers that ownership back to the caller.
 passthrough : List Int -> List Int
 passthrough xs = xs
--- Expected: passthrough → Borrowed.
+-- Expected: passthrough → Owned when Γ[xs] = Owned.
 
--- (2) Branch-mixed passthrough: Owned branch + Borrowed branch ⇒ Borrowed.
+-- (2) Branch-mixed projection: Owned branch + Borrowed branch ⇒ Borrowed.
 -- The else branch returns a fresh ListLit (Owned); the then branch returns
--- xs which is Borrowed by M4.5. Branches must agree.
-maybe_pass : List Int -> Bool -> List Int
-maybe_pass xs flag =
+-- a projected child list from `xss`, which is Borrowed. Branches must agree.
+maybe_project : List (List Int) -> Bool -> List Int
+maybe_project xss flag =
   if flag
-    xs
+    list.get xss 0
   else
-    [0, ..xs]
--- Expected: maybe_pass → Borrowed.
+    [0]
+-- Expected: maybe_project → Borrowed.
 
 -- (3) Fresh literal ⇒ Owned.
 fresh : Unit -> List Int
@@ -1050,13 +1068,13 @@ mk n =
 -- Expected: mk → Owned. Both branches yield ListLit (fresh), even though
 -- the spread element is a recursive call.
 
--- (7) Mutual recursion with no fresh base and Borrowed parameter ⇒ both Borrowed.
+-- (7) Mutual recursion with no returning base case may remain Owned.
 left : List Int -> List Int
 left xs = right xs
 right : List Int -> List Int
 right xs = left xs
--- Expected: left → Borrowed, right → Borrowed. M4.5 classifies xs as
--- Borrowed (never consumed); the cycle has no fresh-allocation base.
+-- Expected: left → Owned, right → Owned under the GFP when Γ[xs] = Owned.
+-- The cycle has no observable returning path; this is acceptable for M10.
 ```
 
 **Important dependency.** This pass *consumes* the M4.5 parameter
@@ -1068,8 +1086,9 @@ re-derive parameter ownership locally.
 
 Each shape gets a focused test that runs `classify_decl_return_ownership`
 on the IR and asserts the expected `OwnershipClass`. The test names
-should encode the *why* (`return_ownership_passthrough_param_is_borrowed`,
-`return_ownership_branch_with_borrowed_arm_collapses_to_borrowed`, etc).
+should encode the *why* (`return_ownership_passthrough_owned_param_is_owned`,
+`return_ownership_branch_with_projected_borrowed_arm_collapses_to_borrowed`,
+etc).
 
 #### Verification
 
@@ -1092,6 +1111,85 @@ cargo test --workspace --release alloc_baseline
 
 The first three M9 tests must flip green; the remaining tests must
 stay green (regression guard for DI-1's previous over-widening).
+
+### Step 1c — Conditional `list.map` ownership and projection-borrow liveness
+
+Step 1a/1b resolves user-decl return ownership but leaves stdlib
+wrappers whose bodies end in intrinsics such as `__goby_list_map`
+conservative unless the intrinsic return can be proven owned at the
+call site. `list.map` is the first required case, and it is
+conditional: the outer list is fresh, but dropping it also drops its
+elements, so the result is safe to classify as `Owned` only when the
+callback returns owned elements.
+
+The rejected simpler rule is "seed `__goby_list_map` as always
+Owned". That makes the debug-alloc-stats integration test pass, but
+it also breaks callback shapes whose result aliases input-owned data:
+
+```gb
+rolls = list.map lines graphemes
+row2  = list.get rolls 2
+list.each row2 println
+```
+
+In that shape, `graphemes` is not currently proven to return owned
+elements. Treating the `map` result as unconditionally owned lets the
+drop pass free data that the projected child path may still observe.
+
+For callback-owned shapes such as:
+
+```gb
+rendered = list.map nums (fn n -> "${n + 1}")
+```
+
+the callback body is a fresh string interpolation, so the `map` result
+can be classified `Owned` and dropped by the caller.
+
+Once a `map` result is classified `Owned`, `ListGet` still creates the
+next ownership boundary. `row2 = list.get rolls 2` creates a projected
+reference into the parent. A later `list.each row2 println` still uses
+the projected child, so `Drop(rolls)` must not be inserted immediately
+after the `ListGet` merely because `rolls` itself has no later direct
+textual use.
+
+M10 therefore treats Step 1c as part of the DI-1 closure, not as an
+optional follow-up. Do not commit Step 1a/1b as a green-lighted design
+while this test remains red; the intended commit boundary is after
+Step 1c makes the workspace green again.
+
+Design direction for M10:
+
+- Add an explicit, conservative model for **projection borrows**:
+  `ListGet(parent, index)` may create a child reference whose lifetime
+  depends on `parent`.
+- Extend last-use/drop placement so a parent binding remains live while
+  any binding derived from it by projection remains live.
+- Keep the model conservative. It is acceptable to delay a parent drop
+  until after the projected child is last used; it is not acceptable to
+  free the parent before that child use.
+- Do not seed `__goby_list_map` unconditionally. Instead, classify a
+  `list.map` / `__goby_list_map` call result as `Owned` only when the
+  visible callback argument is known to return `Owned` values
+  (for example, a lambda whose body is a fresh interpolation).
+- Keep the intrinsic registry for unconditional heap-returning
+  intrinsics only. Add entries one at a time with regression tests.
+
+Alternative design noted but not selected for M10: model `ListGet` as
+an ownership transfer with a matching `Dup` on the source. That may
+become useful later, but it is more invasive than the projection-borrow
+liveness rule and is not required to restore the current acceptance
+path.
+
+Required regression test shape:
+
+- A program equivalent to the `rolls` / `row2` / `list.each row2`
+  pipeline above must continue to execute.
+- A callback-owned `list.map` result must be dropped late enough that a
+  `ListGet`-derived child is still valid at its last use.
+- `run_command_debug_alloc_stats_emits_stats_line_for_general_lowered_program`
+  must pass without weakening its allocation-stat assertion.
+- The graphemes / split / walk / rr3 regression set from Step 1 must
+  remain green.
 
 ### Step 2 — Tail-call-safe drop placement (DI-2)
 

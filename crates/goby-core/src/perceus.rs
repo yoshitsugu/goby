@@ -26,7 +26,7 @@ pub fn assert_perceus_pipeline_order(pass_names: &[&'static str]) {
 }
 
 pub fn run_perceus_passes(module: &IrModule) -> IrModule {
-    let ownership = ownership_classify_module(module);
+    let (ownership, decl_returns) = ownership_classify_module(module);
     if std::env::var("GOBY_DUMP_PERCEUS_IR").is_ok() {
         for decl in &module.decls {
             if let Some(classes) = ownership.get(&decl.name) {
@@ -35,8 +35,15 @@ pub fn run_perceus_passes(module: &IrModule) -> IrModule {
                     eprintln!("  param {param:?} => {:?}", classes.get(param));
                 }
             }
+            if let Some(class) = decl_returns.get(&decl.name) {
+                eprintln!("=== return_ownership[{}] = {:?} ===", decl.name, class);
+            }
         }
     }
+    // `decl_returns` is consumed inside `ownership_classify_module`'s
+    // joint fix-point; downstream passes only need `ownership` (the
+    // M4.5 param ownership map).
+    drop(decl_returns);
     let dropped = drop_insert_module(module, &ownership);
     if std::env::var("GOBY_DUMP_PERCEUS_IR").is_ok() {
         for decl in &dropped.decls {
@@ -77,7 +84,10 @@ pub fn run_perceus_passes(module: &IrModule) -> IrModule {
 
 fn ownership_classify_module(
     module: &IrModule,
-) -> HashMap<String, HashMap<String, OwnershipClass>> {
+) -> (
+    HashMap<String, HashMap<String, OwnershipClass>>,
+    HashMap<String, OwnershipClass>,
+) {
     let mut param_ownership: HashMap<String, Vec<OwnershipClass>> = module
         .decls
         .iter()
@@ -91,18 +101,49 @@ fn ownership_classify_module(
             )
         })
         .collect();
+    // §4.100 Step 1b: threaded into `classify_owned_result` so a `Call`
+    // to a decl whose return ownership is `Owned` produces an `Owned`
+    // local binding (replacing the M9 `type_is_known_heap` stopgap).
+    // Greatest-fixed-point: start every decl `Owned`; descend on
+    // structural Borrowed evidence. See `classify_decl_return_ownership`.
+    let mut decl_returns: HashMap<String, OwnershipClass> = module
+        .decls
+        .iter()
+        .map(|decl| (decl.name.clone(), OwnershipClass::Owned))
+        .collect();
+    for name in HEAP_RETURNING_INTRINSICS {
+        decl_returns.insert((*name).to_string(), OwnershipClass::Owned);
+    }
 
     loop {
+        // Build per-decl param ownership map keyed by param name (the
+        // shape `classify_decl_return_ownership` consumes).
+        let param_map: HashMap<String, HashMap<String, OwnershipClass>> = module
+            .decls
+            .iter()
+            .map(|decl| {
+                let mut m = HashMap::new();
+                if let Some(classes) = param_ownership.get(&decl.name) {
+                    for ((name, _), class) in decl.params.iter().zip(classes.iter()) {
+                        m.insert(name.clone(), *class);
+                    }
+                }
+                (decl.name.clone(), m)
+            })
+            .collect();
+
         let classified: HashMap<String, HashMap<String, OwnershipClass>> = module
             .decls
             .iter()
             .map(|decl| {
                 (
                     decl.name.clone(),
-                    ownership_classify_decl(decl, &param_ownership),
+                    ownership_classify_decl(decl, &param_ownership, &decl_returns),
                 )
             })
             .collect();
+
+        let next_returns = classify_decl_return_ownership(module, &param_map);
 
         let mut changed = false;
         for decl in &module.decls {
@@ -122,10 +163,21 @@ fn ownership_classify_module(
                     changed = true;
                 }
             }
+            let entry = decl_returns
+                .get_mut(&decl.name)
+                .expect("decl return ownership must be seeded");
+            let next = next_returns
+                .get(&decl.name)
+                .copied()
+                .unwrap_or(OwnershipClass::Owned);
+            if *entry != next {
+                *entry = next;
+                changed = true;
+            }
         }
 
         if !changed {
-            return classified;
+            return (classified, decl_returns);
         }
     }
 }
@@ -133,6 +185,7 @@ fn ownership_classify_module(
 fn ownership_classify_decl(
     decl: &IrDecl,
     module_params: &HashMap<String, Vec<OwnershipClass>>,
+    decl_returns: &HashMap<String, OwnershipClass>,
 ) -> HashMap<String, OwnershipClass> {
     let mut classes = HashMap::new();
     let mut params = HashSet::new();
@@ -149,6 +202,7 @@ fn ownership_classify_decl(
         &mut classes,
         &params,
         module_params,
+        decl_returns,
         &mut aliases,
     );
     for scalar_param in collect_scalar_param_evidence(&decl.body, &params) {
@@ -306,58 +360,56 @@ fn classify_comp(
     classes: &mut HashMap<String, OwnershipClass>,
     params: &HashSet<String>,
     module_params: &HashMap<String, Vec<OwnershipClass>>,
+    decl_returns: &HashMap<String, OwnershipClass>,
     aliases: &mut HashMap<String, String>,
 ) {
     match comp {
         CompExpr::Value(value) => classify_return_value(value, classes, params, aliases),
         CompExpr::Let {
-            name,
-            ty,
-            value,
-            body,
+            name, value, body, ..
         } => {
-            classify_bound_comp(value, classes, params, module_params, aliases);
+            classify_bound_comp(value, classes, params, module_params, decl_returns, aliases);
             classes.insert(
                 name.clone(),
-                classify_owned_result(value, ty, classes, aliases),
+                classify_owned_result(value, classes, decl_returns, aliases),
             );
             let previous_alias = bind_alias(name, value, params, aliases);
-            classify_comp(body, classes, params, module_params, aliases);
+            classify_comp(body, classes, params, module_params, decl_returns, aliases);
             restore_alias(name, previous_alias, aliases);
         }
         CompExpr::LetMut {
             name, value, body, ..
         } => {
-            classify_bound_comp(value, classes, params, module_params, aliases);
+            classify_bound_comp(value, classes, params, module_params, decl_returns, aliases);
             classify_consumed_let_mut_source(value, body, classes, params, aliases);
             classes.insert(name.clone(), OwnershipClass::Borrowed);
             let previous_alias = aliases.remove(name);
-            classify_comp(body, classes, params, module_params, aliases);
+            classify_comp(body, classes, params, module_params, decl_returns, aliases);
             restore_alias(name, previous_alias, aliases);
         }
         CompExpr::Seq { stmts, tail } => {
             for stmt in stmts {
-                classify_comp(stmt, classes, params, module_params, aliases);
+                classify_comp(stmt, classes, params, module_params, decl_returns, aliases);
             }
-            classify_comp(tail, classes, params, module_params, aliases);
+            classify_comp(tail, classes, params, module_params, decl_returns, aliases);
         }
         CompExpr::If { cond, then_, else_ } => {
             classify_borrowed_value(cond, classes, params, aliases);
-            classify_comp(then_, classes, params, module_params, aliases);
-            classify_comp(else_, classes, params, module_params, aliases);
+            classify_comp(then_, classes, params, module_params, decl_returns, aliases);
+            classify_comp(else_, classes, params, module_params, decl_returns, aliases);
         }
         CompExpr::Call { callee, args, .. } => {
             classify_borrowed_value(callee, classes, params, aliases);
             classify_call_args(callee, args, classes, params, module_params, aliases);
         }
         CompExpr::Assign { value, .. } => {
-            classify_bound_comp(value, classes, params, module_params, aliases)
+            classify_bound_comp(value, classes, params, module_params, decl_returns, aliases)
         }
         CompExpr::AssignIndex { path, value, .. } => {
             for index in path {
                 classify_borrowed_value(index, classes, params, aliases);
             }
-            classify_bound_comp(value, classes, params, module_params, aliases);
+            classify_bound_comp(value, classes, params, module_params, decl_returns, aliases);
         }
         CompExpr::Case { scrutinee, arms } => {
             classify_borrowed_value(scrutinee, classes, params, aliases);
@@ -366,7 +418,14 @@ fn classify_comp(
                 classify_case_pattern_bindings(&arm.pattern, classes);
                 let shadowed_aliases =
                     remove_aliases(&collect_pattern_bindings(&arm.pattern), aliases);
-                classify_comp(&arm.body, classes, params, module_params, aliases);
+                classify_comp(
+                    &arm.body,
+                    classes,
+                    params,
+                    module_params,
+                    decl_returns,
+                    aliases,
+                );
                 restore_aliases(shadowed_aliases, aliases);
             }
         }
@@ -385,13 +444,27 @@ fn classify_comp(
         CompExpr::Handle { clauses } => {
             for clause in clauses {
                 let shadowed_aliases = remove_aliases(&clause.params, aliases);
-                classify_comp(&clause.body, classes, params, module_params, aliases);
+                classify_comp(
+                    &clause.body,
+                    classes,
+                    params,
+                    module_params,
+                    decl_returns,
+                    aliases,
+                );
                 restore_aliases(shadowed_aliases, aliases);
             }
         }
         CompExpr::WithHandler { handler, body } => {
-            classify_comp(handler, classes, params, module_params, aliases);
-            classify_comp(body, classes, params, module_params, aliases);
+            classify_comp(
+                handler,
+                classes,
+                params,
+                module_params,
+                decl_returns,
+                aliases,
+            );
+            classify_comp(body, classes, params, module_params, decl_returns, aliases);
         }
     }
 }
@@ -401,11 +474,12 @@ fn classify_bound_comp(
     classes: &mut HashMap<String, OwnershipClass>,
     params: &HashSet<String>,
     module_params: &HashMap<String, Vec<OwnershipClass>>,
+    decl_returns: &HashMap<String, OwnershipClass>,
     aliases: &mut HashMap<String, String>,
 ) {
     match comp {
         CompExpr::Value(value) => classify_bound_value(value, classes, params, aliases),
-        _ => classify_comp(comp, classes, params, module_params, aliases),
+        _ => classify_comp(comp, classes, params, module_params, decl_returns, aliases),
     }
 }
 
@@ -751,8 +825,8 @@ fn classify_lambda_capture(
 
 fn classify_owned_result(
     comp: &CompExpr,
-    ty: &crate::ir::IrType,
     classes: &HashMap<String, OwnershipClass>,
+    decl_returns: &HashMap<String, OwnershipClass>,
     aliases: &HashMap<String, String>,
 ) -> OwnershipClass {
     match comp {
@@ -764,7 +838,14 @@ fn classify_owned_result(
                 .copied()
                 .unwrap_or(OwnershipClass::Borrowed)
         }
-        CompExpr::Value(ValueExpr::TupleProject { tuple, .. }) if type_may_be_heap(ty) => {
+        // Tuple projection from a `Var` whose underlying tuple is `Owned`
+        // is itself `Owned`. We no longer gate on `type_may_be_heap(ty)`:
+        // the §M9 3c rule's intent is purely structural (project from an
+        // owned composite). The drop machinery downstream will still
+        // ignore non-heap projections at the *use site* via its existing
+        // `type_may_be_heap` checks (`drop_instrumentation_ownership`,
+        // `insert_owned_let_drop`).
+        CompExpr::Value(ValueExpr::TupleProject { tuple, .. }) => {
             if let ValueExpr::Var(name) = tuple.as_ref() {
                 let owner = aliases.get(name).map_or(name, |root| root);
                 classes
@@ -775,28 +856,93 @@ fn classify_owned_result(
                 OwnershipClass::Borrowed
             }
         }
-        // Call results: only Owned when the binding type is *known* to be heap.
-        // `Let` bindings introduced by `ir_lower` (e.g. `__goby_ir_binop_right_*`,
-        // `__goby_ir_if_condition_*`) carry `IrType::Unknown` even for scalar
-        // results, so widening Unknown → Owned would emit RefCountDrop on
-        // non-heap locals and break loop lowering. Stay conservative for Unknown.
-        CompExpr::Call { .. } if type_is_known_heap(ty) => OwnershipClass::Owned,
+        // M10 §4.100 Step 1: `Call` result ownership is the callee's
+        // declared return ownership, not a heap-shape heuristic. The
+        // `type_is_known_heap` stopgap that lived here under M9 is
+        // removed; `decl_returns` is computed by
+        // `classify_decl_return_ownership` and threaded through the
+        // M4.5 fix-point in `ownership_classify_module`.
+        CompExpr::Call { callee, args, .. } => {
+            classify_call_result_ownership(callee, args, classes, decl_returns)
+        }
         _ => OwnershipClass::Borrowed,
     }
 }
 
-/// Strict heap predicate: `true` only when the type is *definitely* a heap
-/// reference. Unlike `type_may_be_heap`, `Unknown` returns `false`.
-fn type_is_known_heap(ty: &crate::ir::IrType) -> bool {
-    match ty {
-        crate::ir::IrType::Int
-        | crate::ir::IrType::Bool
-        | crate::ir::IrType::Str
-        | crate::ir::IrType::Unit
-        | crate::ir::IrType::Unknown => false,
-        crate::ir::IrType::Opaque(name) => {
-            !matches!(name.as_str(), "Int" | "Bool" | "String" | "Unit")
+fn classify_call_result_ownership(
+    callee: &ValueExpr,
+    args: &[ValueExpr],
+    classes: &HashMap<String, OwnershipClass>,
+    decl_returns: &HashMap<String, OwnershipClass>,
+) -> OwnershipClass {
+    if is_list_map_callee(callee)
+        && args
+            .get(1)
+            .is_some_and(|callback| callback_returns_owned(callback, classes, decl_returns))
+    {
+        return OwnershipClass::Owned;
+    }
+
+    callee_decl_return_class(callee, classes, decl_returns)
+}
+
+fn is_list_map_callee(callee: &ValueExpr) -> bool {
+    matches!(
+        callee,
+        ValueExpr::GlobalRef { name, .. } | ValueExpr::Var(name)
+            if matches!(name.as_str(), "map" | "__goby_list_map")
+    )
+}
+
+fn callback_returns_owned(
+    callback: &ValueExpr,
+    classes: &HashMap<String, OwnershipClass>,
+    decl_returns: &HashMap<String, OwnershipClass>,
+) -> bool {
+    match callback {
+        ValueExpr::Lambda { param, body } => {
+            let mut env = HashMap::from([(param.clone(), OwnershipClass::Borrowed)]);
+            return_ownership_comp(body, &mut env, decl_returns) == OwnershipClass::Owned
         }
+        ValueExpr::GlobalRef { name, .. } => {
+            decl_returns.get(name).copied() == Some(OwnershipClass::Owned)
+        }
+        ValueExpr::Var(name) if !classes.contains_key(name) => {
+            decl_returns.get(name).copied() == Some(OwnershipClass::Owned)
+        }
+        _ => false,
+    }
+}
+
+/// Resolve a `Call`'s callee to its decl-level return ownership.
+///
+/// `Var(name)` is a module decl reference only when `name` is not
+/// shadowed by a local binding; otherwise the call is closure / indirect
+/// and conservatively `Borrowed`. `GlobalRef` always names a module decl.
+fn callee_decl_return_class(
+    callee: &ValueExpr,
+    classes: &HashMap<String, OwnershipClass>,
+    decl_returns: &HashMap<String, OwnershipClass>,
+) -> OwnershipClass {
+    match callee {
+        ValueExpr::Var(name) => {
+            // Shadowing check: any local binding for `name` (param, let,
+            // case binder) shows up in `classes` for this decl. Module
+            // decl names that are never bound locally do not.
+            if classes.contains_key(name) {
+                OwnershipClass::Borrowed
+            } else {
+                decl_returns
+                    .get(name)
+                    .copied()
+                    .unwrap_or(OwnershipClass::Borrowed)
+            }
+        }
+        ValueExpr::GlobalRef { name, .. } => decl_returns
+            .get(name)
+            .copied()
+            .unwrap_or(OwnershipClass::Borrowed),
+        _ => OwnershipClass::Borrowed,
     }
 }
 
@@ -816,6 +962,283 @@ fn value_is_fresh_heap(value: &ValueExpr) -> bool {
         | ValueExpr::Unit
         | ValueExpr::TupleProject { .. }
         | ValueExpr::ListGet { .. } => false,
+    }
+}
+
+/// Heap-returning runtime intrinsic registry. Used by
+/// `classify_decl_return_ownership` to seed `decl_returns` with `Owned`
+/// for intrinsics whose return is structurally a fresh heap allocation.
+/// Anything not in this list defaults to `Borrowed`, matching the
+/// pre-M10 behaviour for intrinsics that the analysis cannot reason
+/// about (e.g. `__goby_list_fold`, whose accumulator type determines
+/// ownership of the result).
+const HEAP_RETURNING_INTRINSICS: &[&str] = &[
+    // M10 Step 1c deliberately does not seed `__goby_list_map`
+    // unconditionally. The outer list is fresh, but dropping it also drops
+    // its elements; that is only safe when the callback returns owned values.
+    // `classify_call_result_ownership` handles map at the call site where the
+    // callback argument is visible.
+    // Intentionally omitted (in-place / consume-and-return idioms):
+    // - `__goby_list_push_string`: returns the same heap reference as
+    //   arg-0 when there is room to push in place.
+    // - `__goby_list_join_string`, `__goby_string_concat`,
+    //   `__goby_string_graphemes_list`, `__goby_string_split_lines`,
+    //   `__goby_env_fetch_env_var`: deferred because graphemes-pipeline
+    //   regressions during Step 1b suggest at least one of these
+    //   intrinsics consumes its arg or returns an aliased reference.
+    //   Conservative Borrowed retains pre-M10 behaviour while the
+    //   per-intrinsic ownership semantics are documented and verified
+    //   one at a time. Re-add an entry only with a regression test in
+    //   the same commit.
+];
+
+/// Per-decl ownership of the returned reference (M10 §4.100 Step 1).
+///
+/// `Owned` means the caller owns the result reference: every tail-position
+/// value in the body is provably a fresh heap allocation, a fresh closure,
+/// or a call to another `Owned`-returning decl (or projects an `Owned`
+/// composite). `Borrowed` is the conservative default — used whenever any
+/// branch returns a `Var` whose M4.5 ownership is `Borrowed`, or any other
+/// shape that does not produce a fresh owned reference.
+///
+/// This pass *consumes* the M4.5 parameter ownership map produced by
+/// `ownership_classify_module`. Initial Γ binds each parameter to its
+/// already-classified ownership; this is what lets a recursive helper's
+/// base case (e.g. `build`'s `acc`) propagate to `Owned` even though the
+/// body itself does not freshly allocate it.
+///
+/// **Fix-point direction (greatest fixed point).** Initialise every decl
+/// to `Owned`, then iteratively recompute against a snapshot of the
+/// previous map. A decl's class only moves `Owned → Borrowed` (monotone
+/// in the descending direction), so the loop terminates in at most
+/// `|decls|` iterations. This direction matters because `build`-shaped
+/// recursive helpers ("base case is `acc`, recursive case is a self-call
+/// with a fresh spread") need the recursive call to be *assumed* Owned in
+/// iteration 1, then *confirmed* Owned in iteration 2 once both branches
+/// of the body classify as Owned.
+fn classify_decl_return_ownership(
+    module: &IrModule,
+    param_ownership: &HashMap<String, HashMap<String, OwnershipClass>>,
+) -> HashMap<String, OwnershipClass> {
+    let mut returns: HashMap<String, OwnershipClass> = module
+        .decls
+        .iter()
+        .map(|decl| (decl.name.clone(), OwnershipClass::Owned))
+        .collect();
+    // Heap-returning runtime intrinsics. Stdlib decls forward many
+    // language operations to these intrinsics (e.g. `list.map xs f =
+    // __goby_list_map xs f`), so without seeding the intrinsic's return
+    // ownership the stdlib wrapper would classify Borrowed and the
+    // caller would never emit a Drop on the freshly allocated result.
+    //
+    // Conservative subset: only intrinsics whose signature is *known*
+    // to return a freshly allocated heap object regardless of inputs.
+    // Intrinsics whose return ownership depends on argument shape (e.g.
+    // `__goby_list_fold` over a heap accumulator) stay default Borrowed
+    // until a future per-intrinsic registry can express the dependency.
+    for name in HEAP_RETURNING_INTRINSICS {
+        returns.insert((*name).to_string(), OwnershipClass::Owned);
+    }
+
+    // Bound iterations strictly above |decls| to defend against an
+    // implementation regression that would break monotonicity.
+    for _ in 0..=module.decls.len() {
+        let snapshot = returns.clone();
+        let mut changed = false;
+        for decl in &module.decls {
+            let mut env: HashMap<String, OwnershipClass> = HashMap::new();
+            if let Some(params) = param_ownership.get(&decl.name) {
+                for (name, class) in params {
+                    env.insert(name.clone(), *class);
+                }
+            }
+            let class = return_ownership_comp(&decl.body, &mut env, &snapshot);
+            let entry = returns
+                .get_mut(&decl.name)
+                .expect("seeded above for every decl");
+            // Greatest-fixed-point: only ever flip Owned → Borrowed.
+            if class == OwnershipClass::Borrowed && *entry == OwnershipClass::Owned {
+                *entry = OwnershipClass::Borrowed;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    returns
+}
+
+/// Walk a `CompExpr` tail-position to derive its ownership against `env` and
+/// the in-progress per-decl `returns` snapshot. Caller-side `env` mutation
+/// (let / case bindings) is balanced by snapshot/restore so the walker is
+/// effectively pure on `env` once it returns.
+fn return_ownership_comp(
+    comp: &CompExpr,
+    env: &mut HashMap<String, OwnershipClass>,
+    returns: &HashMap<String, OwnershipClass>,
+) -> OwnershipClass {
+    match comp {
+        CompExpr::Value(value) => return_ownership_value(value, env, returns),
+        CompExpr::Let {
+            name, value, body, ..
+        }
+        | CompExpr::LetMut {
+            name, value, body, ..
+        } => {
+            let value_class = return_ownership_comp(value, env, returns);
+            let previous = env.insert(name.clone(), value_class);
+            let result = return_ownership_comp(body, env, returns);
+            match previous {
+                Some(prev) => {
+                    env.insert(name.clone(), prev);
+                }
+                None => {
+                    env.remove(name);
+                }
+            }
+            result
+        }
+        CompExpr::Seq { tail, .. } => return_ownership_comp(tail, env, returns),
+        CompExpr::If { then_, else_, .. } => {
+            let t = return_ownership_comp(then_, env, returns);
+            if t == OwnershipClass::Borrowed {
+                return OwnershipClass::Borrowed;
+            }
+            return_ownership_comp(else_, env, returns)
+        }
+        CompExpr::Case { arms, .. } => {
+            if arms.is_empty() {
+                return OwnershipClass::Borrowed;
+            }
+            let mut acc = OwnershipClass::Owned;
+            for arm in arms {
+                // Pattern-bound names own the projected sub-parts.
+                let pattern_binders = collect_pattern_bindings(&arm.pattern);
+                let mut shadowed: Vec<(String, Option<OwnershipClass>)> = Vec::new();
+                for name in &pattern_binders {
+                    let prev = env.insert(name.clone(), OwnershipClass::Owned);
+                    shadowed.push((name.clone(), prev));
+                }
+                let arm_class = return_ownership_comp(&arm.body, env, returns);
+                for (name, prev) in shadowed.into_iter().rev() {
+                    match prev {
+                        Some(p) => {
+                            env.insert(name, p);
+                        }
+                        None => {
+                            env.remove(&name);
+                        }
+                    }
+                }
+                if arm_class == OwnershipClass::Borrowed {
+                    acc = OwnershipClass::Borrowed;
+                }
+            }
+            acc
+        }
+        CompExpr::Call { callee, .. } => match callee.as_ref() {
+            // A `Var(name)` callee is a *module decl reference* only when
+            // `name` does not currently shadow a local binder. If `env`
+            // already binds `name` (param, let, let-mut, case binder),
+            // this is a closure / indirect call and we cannot consult the
+            // module return map — its decl-name resolution would be wrong.
+            ValueExpr::Var(name) => {
+                if env.contains_key(name) {
+                    OwnershipClass::Borrowed
+                } else {
+                    returns
+                        .get(name)
+                        .copied()
+                        .unwrap_or(OwnershipClass::Borrowed)
+                }
+            }
+            // `GlobalRef` always names a module decl in callee position.
+            ValueExpr::GlobalRef { name, .. } => returns
+                .get(name)
+                .copied()
+                .unwrap_or(OwnershipClass::Borrowed),
+            _ => OwnershipClass::Borrowed,
+        },
+        // Drop / DropReuse / Dup / Assign / AssignIndex / AllocReuse /
+        // PerformEffect / Resume / Handle / WithHandler never produce a
+        // fresh owned tail-position value; conservative Borrowed.
+        CompExpr::Drop { .. }
+        | CompExpr::DropReuse { .. }
+        | CompExpr::Dup { .. }
+        | CompExpr::Assign { .. }
+        | CompExpr::AssignIndex { .. }
+        | CompExpr::AllocReuse { .. }
+        | CompExpr::PerformEffect { .. }
+        | CompExpr::Resume { .. }
+        | CompExpr::Handle { .. }
+        | CompExpr::WithHandler { .. } => OwnershipClass::Borrowed,
+    }
+}
+
+#[allow(dead_code)]
+fn return_ownership_value(
+    value: &ValueExpr,
+    env: &HashMap<String, OwnershipClass>,
+    returns: &HashMap<String, OwnershipClass>,
+) -> OwnershipClass {
+    match value {
+        ValueExpr::Var(name) => env.get(name).copied().unwrap_or(OwnershipClass::Borrowed),
+        // `GlobalRef` in *value* position is a *reference to* a module
+        // decl (used as a first-class function value). It is **not** the
+        // decl's return value; that would require a `Call` form. We must
+        // not borrow `returns[name]` here — otherwise returning a
+        // function value of an `Owned`-returning decl would spuriously
+        // classify as `Owned` and the caller would emit a Drop on a
+        // function reference.
+        ValueExpr::GlobalRef { .. } => OwnershipClass::Borrowed,
+        ValueExpr::ListLit { spread: None, .. } => OwnershipClass::Owned,
+        ValueExpr::ListLit {
+            spread: Some(s), ..
+        } => {
+            // A spread of a fresh list keeps the result fresh; a spread of a
+            // Borrowed param does not.
+            return_ownership_value(s, env, returns)
+        }
+        ValueExpr::TupleLit(items) => {
+            // Mixed-payload tuple is Owned iff at least one item is Owned;
+            // the §M9 3c projection rule widens at the use site.
+            if items
+                .iter()
+                .any(|item| return_ownership_value(item, env, returns) == OwnershipClass::Owned)
+            {
+                OwnershipClass::Owned
+            } else {
+                OwnershipClass::Borrowed
+            }
+        }
+        ValueExpr::RecordLit { fields, .. } => {
+            if fields
+                .iter()
+                .any(|(_, v)| return_ownership_value(v, env, returns) == OwnershipClass::Owned)
+            {
+                OwnershipClass::Owned
+            } else {
+                OwnershipClass::Borrowed
+            }
+        }
+        ValueExpr::Interp(_) => OwnershipClass::Owned,
+        ValueExpr::Lambda { .. } => OwnershipClass::Owned,
+        // Tuple projection: conservatively `Borrowed`. We do not have a
+        // per-field type or per-field ownership map at this layer, so we
+        // cannot prove the projected field is itself heap-shaped. The
+        // §M9 3c rule widens projections only at the *use site* where
+        // `type_may_be_heap(field_ty)` is checked; replicating that here
+        // would require threading per-field types through the value
+        // walker, which is out of scope for §4.100 Step 1.
+        ValueExpr::TupleProject { .. } => OwnershipClass::Borrowed,
+        ValueExpr::IntLit(_)
+        | ValueExpr::BoolLit(_)
+        | ValueExpr::StrLit(_)
+        | ValueExpr::Unit
+        | ValueExpr::BinOp { .. }
+        | ValueExpr::ListGet { .. } => OwnershipClass::Borrowed,
     }
 }
 
@@ -1653,7 +2076,9 @@ fn append_drop_preserving_result(name: &str, body: CompExpr, next_tmp: usize) ->
 /// - `Call { .. }` where `name` not in args/callee — prepend Drop.
 /// - `Call { .. }` where `name` in args/callee — wrap: `let tmp = call in Drop; tmp`.
 /// - `PerformEffect` — same as Call.
-/// - `Let { name: n, .. }` — if `n == name`, stop (shadowed); else recurse into body.
+/// - `Let { name: n, .. }` — if `n == name`, stop (shadowed); if `value`
+///   projects from `name` and `n` is later live, drop after the whole Let;
+///   otherwise recurse into body.
 /// - `LetMut` — same as Let.
 /// - `Seq { tail, .. }` — recurse into tail.
 /// - `If` / `Case` — recurse into every branch.
@@ -1671,7 +2096,7 @@ fn insert_drop_at_tail(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr
         }],
         tail: Box::new(c),
     };
-    let wrap_after_call = |c: CompExpr, t: &mut usize| {
+    let wrap_after_expr = |c: CompExpr, t: &mut usize| {
         let tmp = format!("__perceus_drop_tmp_{}", *t);
         *t += 1;
         CompExpr::Let {
@@ -1696,7 +2121,7 @@ fn insert_drop_at_tail(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr
             let name_in_call = value_mentions_name(callee, name)
                 || args.iter().any(|a| value_mentions_name(a, name));
             if name_in_call {
-                wrap_after_call(body, &mut next_tmp)
+                wrap_after_expr(body, &mut next_tmp)
             } else {
                 prepend(body)
             }
@@ -1704,7 +2129,7 @@ fn insert_drop_at_tail(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr
         CompExpr::PerformEffect { ref args, .. } => {
             let name_in_args = args.iter().any(|a| value_mentions_name(a, name));
             if name_in_args {
-                wrap_after_call(body, &mut next_tmp)
+                wrap_after_expr(body, &mut next_tmp)
             } else {
                 prepend(body)
             }
@@ -1722,6 +2147,16 @@ fn insert_drop_at_tail(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr
                     value,
                     body,
                 }
+            } else if comp_projects_from_name(&value, name) && count_var_uses(&body, &n) > 0 {
+                wrap_after_expr(
+                    CompExpr::Let {
+                        name: n,
+                        ty,
+                        value,
+                        body,
+                    },
+                    &mut next_tmp,
+                )
             } else {
                 let new_body = recurse(*body, &mut next_tmp);
                 CompExpr::Let {
@@ -1795,6 +2230,20 @@ fn insert_drop_at_tail(name: &str, body: CompExpr, next_tmp: usize) -> (CompExpr
         | CompExpr::WithHandler { .. } => prepend(body),
     };
     (result, next_tmp)
+}
+
+fn comp_projects_from_name(comp: &CompExpr, name: &str) -> bool {
+    match comp {
+        CompExpr::Value(value) => value_projects_from_name(value, name),
+        _ => false,
+    }
+}
+
+fn value_projects_from_name(value: &ValueExpr, name: &str) -> bool {
+    match value {
+        ValueExpr::ListGet { list, .. } => value_mentions_name(list, name),
+        _ => false,
+    }
 }
 
 fn balance_if_branch_drops(
@@ -2461,8 +2910,13 @@ fn count_var_uses_value(value: &ValueExpr, name: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{assert_perceus_pipeline_order, run_perceus_passes};
-    use crate::ir::{CompExpr, IrDecl, IrModule, IrType, ValueExpr, fmt_ir};
+    use super::{
+        OwnershipClass, assert_perceus_pipeline_order, classify_decl_return_ownership,
+        ownership_classify_module, run_perceus_passes,
+    };
+    use crate::ir::{
+        CompExpr, IrCaseArm, IrCasePattern, IrDecl, IrModule, IrType, ValueExpr, fmt_ir,
+    };
 
     #[test]
     fn accepts_expected_pipeline_order() {
@@ -3287,6 +3741,84 @@ mod tests {
     }
 
     #[test]
+    fn projection_borrow_delays_parent_drop_until_child_last_use() {
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "main".to_string(),
+                params: vec![],
+                result_ty: IrType::Unit,
+                residual_effects: vec![],
+                reuse_param: None,
+                body: CompExpr::Let {
+                    name: "rolls".to_string(),
+                    ty: IrType::Unknown,
+                    value: Box::new(CompExpr::Call {
+                        callee: Box::new(ValueExpr::GlobalRef {
+                            module: "".to_string(),
+                            name: "__goby_list_map".to_string(),
+                        }),
+                        args: vec![
+                            ValueExpr::ListLit {
+                                elements: vec![ValueExpr::ListLit {
+                                    elements: vec![ValueExpr::IntLit(1)],
+                                    spread: None,
+                                }],
+                                spread: None,
+                            },
+                            ValueExpr::Lambda {
+                                param: "n".to_string(),
+                                body: Box::new(CompExpr::Value(ValueExpr::ListLit {
+                                    elements: vec![ValueExpr::Var("n".to_string())],
+                                    spread: None,
+                                })),
+                            },
+                        ],
+                        reuse_token: None,
+                    }),
+                    body: Box::new(CompExpr::Let {
+                        name: "row2".to_string(),
+                        ty: IrType::Unknown,
+                        value: Box::new(CompExpr::Value(ValueExpr::ListGet {
+                            list: Box::new(ValueExpr::Var("rolls".to_string())),
+                            index: Box::new(ValueExpr::IntLit(0)),
+                        })),
+                        body: Box::new(CompExpr::Call {
+                            callee: Box::new(ValueExpr::GlobalRef {
+                                module: "".to_string(),
+                                name: "__goby_list_each".to_string(),
+                            }),
+                            args: vec![
+                                ValueExpr::Var("row2".to_string()),
+                                ValueExpr::GlobalRef {
+                                    module: "".to_string(),
+                                    name: "println".to_string(),
+                                },
+                            ],
+                            reuse_token: None,
+                        }),
+                    }),
+                },
+            }],
+        };
+
+        let rewritten = run_perceus_passes(&module);
+        let ir_str = fmt_ir(&rewritten);
+        let list_get_pos = ir_str
+            .find("list.get rolls 0")
+            .expect("rewritten IR should still bind row2 from rolls");
+        let each_pos = ir_str
+            .find("__goby_list_each")
+            .expect("rewritten IR should still call list.each intrinsic");
+        let drop_pos = ir_str
+            .rfind("drop rolls")
+            .expect("owned map result should eventually drop rolls");
+        assert!(
+            list_get_pos < each_pos && each_pos < drop_pos,
+            "parent rolls must be dropped after projected child row2 is used:\n{ir_str}"
+        );
+    }
+
+    #[test]
     fn repeated_owned_call_arg_gets_dup_before_call() {
         let module = IrModule {
             decls: vec![
@@ -3719,6 +4251,558 @@ mod tests {
         assert!(
             !ir_str.contains("@reuse("),
             "source binding is still live, so mut ys = xs must not seed reuse:\n{ir_str}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // M10 §4.100 Step 1 — `classify_decl_return_ownership` soundness gate
+    //
+    // The shapes mirror the spec block in PLAN_PERCEUS §4.100 Step 1
+    // "Soundness gate". Each test names *why* the expected class is what
+    // it is, so future readers can see the rule under examination.
+    // -------------------------------------------------------------------
+
+    fn list_int_ty() -> IrType {
+        IrType::Opaque("List".to_string())
+    }
+
+    fn return_ownership_for(decl_name: &str, module: &IrModule) -> OwnershipClass {
+        let (params, _decl_returns) = ownership_classify_module(module);
+        let returns = classify_decl_return_ownership(module, &params);
+        *returns.get(decl_name).expect("decl must be classified")
+    }
+
+    #[test]
+    fn return_ownership_passthrough_with_owned_param_is_owned() {
+        // (1) passthrough xs = xs
+        //     M4.5 marks `xs: Owned` (no demote evidence in the body — `xs`
+        //     is simply returned, not borrowed by a callee). The pass picks
+        //     `Owned` from Γ, so the call site treats the return as a
+        //     transferred reference. This is sound: the arg `xs` is moved
+        //     into the call, and the return is the same heap pointer with
+        //     ownership now back on the caller — the caller drops it once.
+        //     The §4.99 DI-1 "passthrough double-frees" worry was a mis-
+        //     reading of M4.5: there is no separate caller-side drop on
+        //     the moved arg.
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "passthrough".to_string(),
+                params: vec![("xs".to_string(), list_int_ty())],
+                result_ty: list_int_ty(),
+                residual_effects: vec![],
+                reuse_param: None,
+                body: CompExpr::Value(ValueExpr::Var("xs".to_string())),
+            }],
+        };
+        assert_eq!(
+            return_ownership_for("passthrough", &module),
+            OwnershipClass::Owned
+        );
+    }
+
+    #[test]
+    fn return_ownership_branch_with_owned_param_in_both_arms_is_owned() {
+        // (2) maybe_pass xs flag = if flag then xs else [0, ..xs]
+        //     M4.5 marks `xs: Owned` (the else-branch spread `[0, ..xs]`
+        //     consumes it, but on the then-branch the same Var(xs) is
+        //     simply returned; both arms produce an Owned reference).
+        //     Result: Owned. The Borrowed-collapse shape is exercised
+        //     by the mutual-recursion test below where M4.5 itself
+        //     already returns Borrowed for the param.
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "maybe_pass".to_string(),
+                params: vec![
+                    ("xs".to_string(), list_int_ty()),
+                    ("flag".to_string(), IrType::Bool),
+                ],
+                result_ty: list_int_ty(),
+                residual_effects: vec![],
+                reuse_param: None,
+                body: CompExpr::If {
+                    cond: Box::new(ValueExpr::Var("flag".to_string())),
+                    then_: Box::new(CompExpr::Value(ValueExpr::Var("xs".to_string()))),
+                    else_: Box::new(CompExpr::Value(ValueExpr::ListLit {
+                        elements: vec![ValueExpr::IntLit(0)],
+                        spread: Some(Box::new(ValueExpr::Var("xs".to_string()))),
+                    })),
+                },
+            }],
+        };
+        assert_eq!(
+            return_ownership_for("maybe_pass", &module),
+            OwnershipClass::Owned
+        );
+    }
+
+    #[test]
+    fn return_ownership_fresh_list_lit_is_owned() {
+        // (3) fresh _ = [1, 2, 3] — pure ListLit (no spread) is fresh-heap.
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "fresh".to_string(),
+                params: vec![("_".to_string(), IrType::Unit)],
+                result_ty: list_int_ty(),
+                residual_effects: vec![],
+                reuse_param: None,
+                body: CompExpr::Value(ValueExpr::ListLit {
+                    elements: vec![
+                        ValueExpr::IntLit(1),
+                        ValueExpr::IntLit(2),
+                        ValueExpr::IntLit(3),
+                    ],
+                    spread: None,
+                }),
+            }],
+        };
+        assert_eq!(
+            return_ownership_for("fresh", &module),
+            OwnershipClass::Owned
+        );
+    }
+
+    #[test]
+    fn return_ownership_tuple_with_owned_payload_is_owned() {
+        // (4) fresh_tuple _ = ([1], 0)
+        //     At least one item Owned ⇒ tuple Owned. The §M9 3c rule lets
+        //     downstream projection extract the heap part.
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "fresh_tuple".to_string(),
+                params: vec![("_".to_string(), IrType::Unit)],
+                result_ty: IrType::Opaque("Tuple".to_string()),
+                residual_effects: vec![],
+                reuse_param: None,
+                body: CompExpr::Value(ValueExpr::TupleLit(vec![
+                    ValueExpr::ListLit {
+                        elements: vec![ValueExpr::IntLit(1)],
+                        spread: None,
+                    },
+                    ValueExpr::IntLit(0),
+                ])),
+            }],
+        };
+        assert_eq!(
+            return_ownership_for("fresh_tuple", &module),
+            OwnershipClass::Owned
+        );
+    }
+
+    #[test]
+    fn return_ownership_scalar_only_tuple_is_borrowed() {
+        // (4-neg) Codex review supplemental: a tuple with no Owned items
+        //         must NOT classify as Owned. Otherwise we would emit a
+        //         spurious Drop on a scalar pair.
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "scalar_tuple".to_string(),
+                params: vec![("_".to_string(), IrType::Unit)],
+                result_ty: IrType::Opaque("Tuple".to_string()),
+                residual_effects: vec![],
+                reuse_param: None,
+                body: CompExpr::Value(ValueExpr::TupleLit(vec![
+                    ValueExpr::IntLit(1),
+                    ValueExpr::IntLit(2),
+                ])),
+            }],
+        };
+        assert_eq!(
+            return_ownership_for("scalar_tuple", &module),
+            OwnershipClass::Borrowed
+        );
+    }
+
+    #[test]
+    fn return_ownership_recursive_build_with_owned_acc_is_owned() {
+        // (5) build n acc = if n == 0 then acc else build (n-1) [n, ..acc]
+        //     M4.5 marks `acc` Owned (consumed by spread in recursive call).
+        //     Base case Var(acc) under env[acc=Owned] ⇒ Owned. Recursive
+        //     branch is a Call to `build` itself — fix-point resolves it
+        //     to Owned in iteration 2.
+        use crate::ir::IrBinOp;
+
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "build".to_string(),
+                params: vec![
+                    ("n".to_string(), IrType::Int),
+                    ("acc".to_string(), list_int_ty()),
+                ],
+                result_ty: list_int_ty(),
+                residual_effects: vec![],
+                reuse_param: None,
+                body: CompExpr::If {
+                    cond: Box::new(ValueExpr::BinOp {
+                        op: IrBinOp::Eq,
+                        left: Box::new(ValueExpr::Var("n".to_string())),
+                        right: Box::new(ValueExpr::IntLit(0)),
+                    }),
+                    then_: Box::new(CompExpr::Value(ValueExpr::Var("acc".to_string()))),
+                    else_: Box::new(CompExpr::Call {
+                        callee: Box::new(ValueExpr::Var("build".to_string())),
+                        args: vec![
+                            ValueExpr::BinOp {
+                                op: IrBinOp::Sub,
+                                left: Box::new(ValueExpr::Var("n".to_string())),
+                                right: Box::new(ValueExpr::IntLit(1)),
+                            },
+                            ValueExpr::ListLit {
+                                elements: vec![ValueExpr::Var("n".to_string())],
+                                spread: Some(Box::new(ValueExpr::Var("acc".to_string()))),
+                            },
+                        ],
+                        reuse_token: None,
+                    }),
+                },
+            }],
+        };
+        assert_eq!(
+            return_ownership_for("build", &module),
+            OwnershipClass::Owned
+        );
+    }
+
+    #[test]
+    fn return_ownership_fresh_base_recursion_is_owned() {
+        // (6) mk n = if n == 0 then [] else [n, ..mk (n-1)]
+        //     Both arms produce ListLit (fresh). The spread element is a
+        //     recursive call, but the *return* of `mk` is the literal,
+        //     not the call. Owned.
+        use crate::ir::IrBinOp;
+
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "mk".to_string(),
+                params: vec![("n".to_string(), IrType::Int)],
+                result_ty: list_int_ty(),
+                residual_effects: vec![],
+                reuse_param: None,
+                body: CompExpr::If {
+                    cond: Box::new(ValueExpr::BinOp {
+                        op: IrBinOp::Eq,
+                        left: Box::new(ValueExpr::Var("n".to_string())),
+                        right: Box::new(ValueExpr::IntLit(0)),
+                    }),
+                    then_: Box::new(CompExpr::Value(ValueExpr::ListLit {
+                        elements: vec![],
+                        spread: None,
+                    })),
+                    else_: Box::new(CompExpr::Let {
+                        name: "tail".to_string(),
+                        ty: list_int_ty(),
+                        value: Box::new(CompExpr::Call {
+                            callee: Box::new(ValueExpr::Var("mk".to_string())),
+                            args: vec![ValueExpr::BinOp {
+                                op: IrBinOp::Sub,
+                                left: Box::new(ValueExpr::Var("n".to_string())),
+                                right: Box::new(ValueExpr::IntLit(1)),
+                            }],
+                            reuse_token: None,
+                        }),
+                        body: Box::new(CompExpr::Value(ValueExpr::ListLit {
+                            elements: vec![ValueExpr::Var("n".to_string())],
+                            spread: Some(Box::new(ValueExpr::Var("tail".to_string()))),
+                        })),
+                    }),
+                },
+            }],
+        };
+        assert_eq!(return_ownership_for("mk", &module), OwnershipClass::Owned);
+    }
+
+    #[test]
+    fn return_ownership_mutual_recursion_without_base_case_remains_owned() {
+        // (7) left xs = right xs ; right xs = left xs
+        //
+        // Greatest-fixed-point note: a no-base-case mutual cycle is
+        // optimistically classified `Owned` because no branch ever
+        // structurally returns a Borrowed reference (every tail position
+        // is a sibling self-call, whose return is `Owned` by the GFP
+        // assumption). At runtime such a cycle never returns, so the
+        // classification has no observable safety consequence — drops
+        // are never emitted on a value that does not exist.
+        //
+        // The Borrowed-collapse path is exercised by
+        // `return_ownership_call_to_borrowed_returning_decl_is_borrowed`
+        // below, where a callee whose body *structurally* returns a
+        // Borrowed value forces the cycle to descend.
+        let left = IrDecl {
+            name: "left".to_string(),
+            params: vec![("xs".to_string(), list_int_ty())],
+            result_ty: list_int_ty(),
+            residual_effects: vec![],
+            reuse_param: None,
+            body: CompExpr::Call {
+                callee: Box::new(ValueExpr::Var("right".to_string())),
+                args: vec![ValueExpr::Var("xs".to_string())],
+                reuse_token: None,
+            },
+        };
+        let right = IrDecl {
+            name: "right".to_string(),
+            params: vec![("xs".to_string(), list_int_ty())],
+            result_ty: list_int_ty(),
+            residual_effects: vec![],
+            reuse_param: None,
+            body: CompExpr::Call {
+                callee: Box::new(ValueExpr::Var("left".to_string())),
+                args: vec![ValueExpr::Var("xs".to_string())],
+                reuse_token: None,
+            },
+        };
+        let module = IrModule {
+            decls: vec![left, right],
+        };
+        assert_eq!(return_ownership_for("left", &module), OwnershipClass::Owned);
+        assert_eq!(
+            return_ownership_for("right", &module),
+            OwnershipClass::Owned
+        );
+    }
+
+    #[test]
+    fn return_ownership_call_to_borrowed_returning_decl_is_borrowed() {
+        // Borrowed-confirmation path: a sibling decl whose body returns a
+        // structurally Borrowed value (here `ListGet`, which only ever
+        // produces a borrow into a list element) forces every caller in
+        // its SCC to descend `Owned → Borrowed` in the gfp loop.
+        //
+        //   borrowed_helper xs = list_get xs 0     -- Borrowed shape
+        //   uses_helper xs = borrowed_helper xs    -- Borrowed (collapsed)
+        let helper = IrDecl {
+            name: "borrowed_helper".to_string(),
+            params: vec![("xs".to_string(), list_int_ty())],
+            result_ty: IrType::Int,
+            residual_effects: vec![],
+            reuse_param: None,
+            body: CompExpr::Value(ValueExpr::ListGet {
+                list: Box::new(ValueExpr::Var("xs".to_string())),
+                index: Box::new(ValueExpr::IntLit(0)),
+            }),
+        };
+        let user = IrDecl {
+            name: "uses_helper".to_string(),
+            params: vec![("xs".to_string(), list_int_ty())],
+            result_ty: IrType::Int,
+            residual_effects: vec![],
+            reuse_param: None,
+            body: CompExpr::Call {
+                callee: Box::new(ValueExpr::Var("borrowed_helper".to_string())),
+                args: vec![ValueExpr::Var("xs".to_string())],
+                reuse_token: None,
+            },
+        };
+        let module = IrModule {
+            decls: vec![helper, user],
+        };
+        assert_eq!(
+            return_ownership_for("borrowed_helper", &module),
+            OwnershipClass::Borrowed
+        );
+        assert_eq!(
+            return_ownership_for("uses_helper", &module),
+            OwnershipClass::Borrowed
+        );
+    }
+
+    #[test]
+    fn return_ownership_lambda_value_is_owned() {
+        // Supplemental: a decl whose body is a Lambda value classifies as
+        // Owned (a fresh closure object). Documents the explicit Lambda
+        // arm in `return_ownership_value`.
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "make_adder".to_string(),
+                params: vec![("n".to_string(), IrType::Int)],
+                result_ty: IrType::Opaque("Closure".to_string()),
+                residual_effects: vec![],
+                reuse_param: None,
+                body: CompExpr::Value(ValueExpr::Lambda {
+                    param: "x".to_string(),
+                    body: Box::new(CompExpr::Value(ValueExpr::IntLit(0))),
+                }),
+            }],
+        };
+        assert_eq!(
+            return_ownership_for("make_adder", &module),
+            OwnershipClass::Owned
+        );
+    }
+
+    #[test]
+    fn return_ownership_call_via_shadowed_var_does_not_consult_module_decl() {
+        // Codex pass-1 finding: a `Var(name)` callee that *shadows* a
+        // module decl name with a local binding (param / let / case
+        // binder) is a closure or indirect call. It must NOT pick up the
+        // module decl's return ownership, otherwise an `Owned`-returning
+        // decl would lend its Owned-ness to an unrelated indirect call.
+        //
+        //   build n acc = ...                          -- Owned-returning decl
+        //   shadow build = build ()                    -- `build` here is a
+        //                                                  param shadowing
+        //                                                  the module decl.
+        //                                                  Result must be
+        //                                                  Borrowed.
+        let build = IrDecl {
+            name: "build".to_string(),
+            params: vec![("acc".to_string(), list_int_ty())],
+            result_ty: list_int_ty(),
+            residual_effects: vec![],
+            reuse_param: None,
+            body: CompExpr::Value(ValueExpr::Var("acc".to_string())),
+        };
+        let shadow = IrDecl {
+            name: "shadow".to_string(),
+            // `build` is a *parameter* here — shadows the module decl.
+            params: vec![("build".to_string(), IrType::Opaque("Closure".to_string()))],
+            result_ty: list_int_ty(),
+            residual_effects: vec![],
+            reuse_param: None,
+            body: CompExpr::Call {
+                callee: Box::new(ValueExpr::Var("build".to_string())),
+                args: vec![ValueExpr::Unit],
+                reuse_token: None,
+            },
+        };
+        let module = IrModule {
+            decls: vec![build, shadow],
+        };
+        // `build` (the module decl) classifies Owned.
+        assert_eq!(
+            return_ownership_for("build", &module),
+            OwnershipClass::Owned
+        );
+        // `shadow`'s body is `Call { callee: Var("build") }` but `build`
+        // is the local param, not the module decl. Indirect calls
+        // classify Borrowed.
+        assert_eq!(
+            return_ownership_for("shadow", &module),
+            OwnershipClass::Borrowed
+        );
+    }
+
+    #[test]
+    fn return_ownership_global_ref_value_is_borrowed() {
+        // Codex pass-1 finding: returning a `GlobalRef` *value* (a first-
+        // class function reference) must classify Borrowed, regardless of
+        // whether the decl's body would otherwise classify as Owned. The
+        // value here is a function pointer / closure handle, not the
+        // result of calling that decl.
+        let build = IrDecl {
+            name: "build".to_string(),
+            params: vec![("acc".to_string(), list_int_ty())],
+            result_ty: list_int_ty(),
+            residual_effects: vec![],
+            reuse_param: None,
+            body: CompExpr::Value(ValueExpr::Var("acc".to_string())),
+        };
+        let pick_build = IrDecl {
+            name: "pick_build".to_string(),
+            params: vec![("_".to_string(), IrType::Unit)],
+            result_ty: IrType::Opaque("Closure".to_string()),
+            residual_effects: vec![],
+            reuse_param: None,
+            body: CompExpr::Value(ValueExpr::GlobalRef {
+                module: "self".to_string(),
+                name: "build".to_string(),
+            }),
+        };
+        let module = IrModule {
+            decls: vec![build, pick_build],
+        };
+        assert_eq!(
+            return_ownership_for("build", &module),
+            OwnershipClass::Owned
+        );
+        assert_eq!(
+            return_ownership_for("pick_build", &module),
+            OwnershipClass::Borrowed
+        );
+    }
+
+    #[test]
+    fn return_ownership_tuple_project_is_borrowed_conservatively() {
+        // Codex pass-1 finding: projecting a field from an Owned tuple
+        // does not make the projection itself Owned at this layer (we
+        // have no per-field type information). The §M9 3c rule widens
+        // projections at the *use site*, not in this analysis.
+        //
+        //   project_first _ = ([1, 2, 3], 0).0   -- conservatively Borrowed
+        //
+        // Even though the inner tuple is Owned (TupleLit with a fresh
+        // ListLit payload), the projection result must classify Borrowed
+        // here.
+        let module = IrModule {
+            decls: vec![IrDecl {
+                name: "project_first".to_string(),
+                params: vec![("_".to_string(), IrType::Unit)],
+                result_ty: list_int_ty(),
+                residual_effects: vec![],
+                reuse_param: None,
+                body: CompExpr::Value(ValueExpr::TupleProject {
+                    tuple: Box::new(ValueExpr::TupleLit(vec![
+                        ValueExpr::ListLit {
+                            elements: vec![
+                                ValueExpr::IntLit(1),
+                                ValueExpr::IntLit(2),
+                                ValueExpr::IntLit(3),
+                            ],
+                            spread: None,
+                        },
+                        ValueExpr::IntLit(0),
+                    ])),
+                    index: 0,
+                }),
+            }],
+        };
+        assert_eq!(
+            return_ownership_for("project_first", &module),
+            OwnershipClass::Borrowed
+        );
+    }
+
+    #[test]
+    fn return_ownership_case_with_borrowed_arm_collapses() {
+        // Case-arm Borrowed collapse: one arm returns a structurally
+        // Borrowed value (`ListGet`, which always produces a borrow), the
+        // other a fresh `[1]`. Any-Borrowed-arm collapses the case.
+        //
+        //   wrap xs = case xs of
+        //     [] => list.get xs 0   -- Borrowed (returns Int but heap-shape
+        //                              is irrelevant for the rule; the
+        //                              Borrowed-classification happens
+        //                              regardless of result type)
+        //     _  => [1]
+        let wrap = IrDecl {
+            name: "wrap".to_string(),
+            params: vec![("xs".to_string(), list_int_ty())],
+            result_ty: list_int_ty(),
+            residual_effects: vec![],
+            reuse_param: None,
+            body: CompExpr::Case {
+                scrutinee: Box::new(ValueExpr::Var("xs".to_string())),
+                arms: vec![
+                    IrCaseArm {
+                        pattern: IrCasePattern::EmptyList,
+                        body: CompExpr::Value(ValueExpr::ListGet {
+                            list: Box::new(ValueExpr::Var("xs".to_string())),
+                            index: Box::new(ValueExpr::IntLit(0)),
+                        }),
+                    },
+                    IrCaseArm {
+                        pattern: IrCasePattern::Wildcard,
+                        body: CompExpr::Value(ValueExpr::ListLit {
+                            elements: vec![ValueExpr::IntLit(1)],
+                            spread: None,
+                        }),
+                    },
+                ],
+            },
+        };
+        let module = IrModule { decls: vec![wrap] };
+        assert_eq!(
+            return_ownership_for("wrap", &module),
+            OwnershipClass::Borrowed
         );
     }
 }
