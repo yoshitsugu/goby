@@ -4,7 +4,119 @@ This document tracks confirmed, reproducible bugs in the current Goby toolchain.
 
 Open bugs:
 
-- None currently.
+- **2026-05-01.** A function whose result is a `case` over a list pattern can
+  return `Unit` or the empty-list-arm result instead of evaluating the matching
+  non-empty list arm on the current `goby run` path.
+
+  Confirmed repro:
+
+  Save the following complete program as `solve.gb`:
+
+  ```goby
+  import goby/list (push)
+  import goby/stdio
+
+  parse_inner : List String -> List String -> List String -> Bool -> (List String, List String) can Print
+  parse_inner lines ranges ids ranges_end =
+    println "l2:${lines}"
+    case lines
+      [] -> (ranges, ids)
+      [x, ...xs] ->
+        if x == ""
+          parse_inner xs ranges ids True
+        else
+          if ranges_end
+            new_ids = push ids x
+            parse_inner xs ranges new_ids ranges_end
+          else
+            new_ranges = push ranges x
+            parse_inner xs new_ranges ids ranges_end
+
+  parse : List String -> (List String, List String) can Print
+  parse lines =
+    println "l:${lines}"
+    parse_inner lines [] [] False
+
+  main : Unit -> Unit can Print, Read
+  main =
+    lines = read_lines ()
+    ranges_and_ids = parse(lines)
+    println "a:${ranges_and_ids}"
+  ```
+
+  Run it with this stdin:
+
+  ```text
+  3-5
+  10-14
+  16-20
+  12-18
+
+  1
+  5
+  8
+  11
+  17
+  32
+  ```
+
+  Command:
+
+  ```sh
+  cat sample | goby run solve.gb
+  ```
+
+  Observed output:
+
+  ```text
+  parsed and typechecked 3 declarations from solve.gb
+  l:["3-5", "10-14", "16-20", "12-18", "", "1", "5", "8", "11", "17", "32"]
+  a:Unit
+  ```
+
+  Expected behavior:
+
+  - `parse_inner` should execute, so at least one `l2:...` line should be
+    printed.
+  - `ranges_and_ids` should be the tuple returned by `parse_inner`, not `Unit`.
+
+  Smaller reduction:
+
+  ```goby
+  import goby/stdio
+
+  head_or : List Int -> Int
+  head_or xs =
+    case xs
+      [] -> 0
+      [x, ...rest] -> x
+
+  main : Unit -> Unit can Print
+  main =
+    v = head_or [7, 8]
+    println "v:${v}"
+  ```
+
+  Observed:
+
+  ```text
+  v:0
+  ```
+
+  Expected:
+
+  ```text
+  v:7
+  ```
+
+  Notes:
+
+  - The original `solve.gb` also had an extra discarded recursive call before
+    the `if` in the `[x, ...xs]` arm. Removing that call is correct, but it is
+    not the root cause of this bug.
+  - Inline `case` examples such as `examples/list_case.gb` still pass, so the
+    current failure appears to involve list-pattern `case` inside a called
+    function returning a value.
 
 Resolved bugs:
 
