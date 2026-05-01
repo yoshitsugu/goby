@@ -83,6 +83,18 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
     );
     insert_global_symbol(
         &mut globals,
+        "__goby_list_concat".to_string(),
+        Ty::Fun {
+            params: vec![
+                Ty::List(Box::new(Ty::Var("a".to_string()))),
+                Ty::List(Box::new(Ty::Var("a".to_string()))),
+            ],
+            result: Box::new(Ty::List(Box::new(Ty::Var("a".to_string())))),
+        },
+        "runtime intrinsic `__goby_list_concat`".to_string(),
+    );
+    insert_global_symbol(
+        &mut globals,
         "__goby_list_join_string".to_string(),
         Ty::Fun {
             params: vec![Ty::List(Box::new(Ty::Str)), Ty::Str],

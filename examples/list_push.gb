@@ -1,0 +1,14 @@
+import goby/int as int
+import goby/list (length, push)
+
+# list.push: functional immutable append-one update.
+# Returns a new list with the element added at the end.
+# The original list is unchanged.
+
+main : Unit -> Unit
+main =
+  xs = [1, 2]
+  ys = push xs 3
+  print (int.to_string (length xs))
+  print (int.to_string (length ys))
+  print (int.to_string ys[2])

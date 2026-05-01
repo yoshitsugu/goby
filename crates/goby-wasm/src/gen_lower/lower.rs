@@ -4156,6 +4156,7 @@ fn backend_intrinsic_for_bare(name: &str, arg_count: usize) -> Option<BackendInt
         "__goby_list_length" => Some(BackendIntrinsic::ListLength),
         "__goby_list_fold" if arg_count == 3 => Some(BackendIntrinsic::ListFold),
         "__goby_list_map" if arg_count == 2 => Some(BackendIntrinsic::ListMap),
+        "__goby_list_concat" if arg_count == 2 => Some(BackendIntrinsic::ListConcat),
         // M6: explicit immutable point-update intrinsic for functional-style use.
         "__goby_list_set" if arg_count == 3 => Some(BackendIntrinsic::ListSet),
         _ => None,

@@ -14,6 +14,10 @@ map xs f = __goby_list_map xs f
 length : List a -> Int
 length xs = __goby_list_length xs
 
+# Appends one element to the end of a list and returns a new list.
+push : List a -> a -> List a
+push xs v = __goby_list_concat xs [v]
+
 # Left fold. The callback receives the accumulator first: f acc elem.
 fold : List a -> b -> (b -> a -> b) -> b
 fold xs acc f = __goby_list_fold xs acc f

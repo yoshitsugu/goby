@@ -1340,6 +1340,32 @@ main =
 }
 
 #[test]
+fn list_push_appends_one_element_and_preserves_input_list() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/int as int
+import goby/list (length, push)
+
+main : Unit -> Unit can Print
+main =
+  xs = [1, 2]
+  ys = push xs 3
+  print (int.to_string (length xs))
+  print (int.to_string (length ys))
+  print (int.to_string ys[2])
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let typed = assert_mode_parity(&module, "list.push append-one");
+    assert_eq!(typed.stdout.as_deref(), Some("233"));
+    assert_eq!(typed.runtime_error_kind, None);
+
+    let wasm = crate::compile_module(&module).expect("list.push should compile");
+    let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+        .expect("list.push wasm should execute");
+    assert_eq!(output, "233");
+}
+
+#[test]
 fn list_join_single_element_returns_element_without_sep() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"

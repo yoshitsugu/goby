@@ -630,6 +630,17 @@ impl<'m> RuntimeOutputResolver<'m> {
                 }
                 Some(RuntimeValue::List(mapped))
             }
+            "__goby_list_concat" => {
+                if args.len() != 2 {
+                    return None;
+                }
+                let prefix = args[0].as_list()?;
+                let tail = args[1].as_list()?;
+                let mut items = Vec::with_capacity(prefix.len() + tail.len());
+                items.extend(prefix.iter().cloned());
+                items.extend(tail.iter().cloned());
+                Some(RuntimeValue::List(items))
+            }
             "__goby_list_join_string" => {
                 if args.len() != 2 {
                     return None;

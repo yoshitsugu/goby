@@ -26,6 +26,7 @@ Small Goby programs intended for users to read and run.
 
 - `list_case.gb`: list pattern matching.
 - `list_index.gb`: indexed access.
+- `list_push.gb`: immutable append-one update with `list.push`.
 - `list_set.gb`: immutable point update with `list.set`.
 - `list_spread.gb`: expression-side list spread.
 - `fold.gb`: left fold with named callbacks.

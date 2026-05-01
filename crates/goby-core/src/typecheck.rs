@@ -2473,6 +2473,23 @@ f =
     }
 
     #[test]
+    fn accepts_list_concat_intrinsic_inside_stdlib_root() {
+        let sandbox = TempDirGuard::new("list_concat_inside_stdlib");
+        let stdlib_root = sandbox.path.join("stdlib");
+        let source_path = stdlib_root.join("goby/list.gb");
+        fs::create_dir_all(source_path.parent().expect("parent should exist"))
+            .expect("stdlib path should be creatable");
+        let source = "\
+push : List a -> a -> List a
+push xs x = __goby_list_concat xs [x]
+";
+        fs::write(&source_path, source).expect("fixture file should be writable");
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&source_path), Some(&stdlib_root))
+            .expect("`__goby_list_concat` should be accepted under stdlib root");
+    }
+
+    #[test]
     fn rejects_unknown_intrinsic_calls_inside_stdlib_root() {
         let sandbox = TempDirGuard::new("unknown_intrinsic_inside_stdlib");
         let stdlib_root = sandbox.path.join("stdlib");

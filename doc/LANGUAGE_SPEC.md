@@ -351,6 +351,11 @@ syntax/semantics.
       in all execution paths until effect propagation through HOFs is formally designed.
   - `length : List a -> Int`
     - returns the number of elements in the list.
+  - `push : List a -> a -> List a`
+    - immutable append-one update: returns a new list with the element added at
+      the end.
+    - copies the existing list contents into the returned list; the input list is
+      unchanged.
   - `get : List a -> Int -> a`
     - returns the element at zero-based index i.
     - negative or out-of-bounds index aborts the program.

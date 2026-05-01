@@ -633,7 +633,10 @@ fn intrinsic_arg_is_borrowed(callee: &ValueExpr, idx: usize) -> bool {
         (
             ValueExpr::GlobalRef { name, .. } | ValueExpr::Var(name),
             0
-        ) if matches!(name.as_str(), "__goby_list_length" | "__goby_list_fold")
+        ) if matches!(
+            name.as_str(),
+            "__goby_list_length" | "__goby_list_fold" | "__goby_list_concat"
+        )
     )
 }
 
@@ -1002,6 +1005,7 @@ const HEAP_RETURNING_INTRINSICS: &[&str] = &[
     // callback argument is visible.
     "__goby_value_to_string",
     "__goby_string_concat",
+    "__goby_list_concat",
     "__goby_list_join_string",
     "__goby_string_graphemes_list",
     "__goby_string_split_lines",

@@ -597,6 +597,7 @@ fn is_known_runtime_intrinsic_name(name: &str) -> bool {
             | "__goby_env_fetch_env_var"
             | "__goby_string_each_grapheme"
             | "__goby_list_push_string"
+            | "__goby_list_concat"
             | "__goby_list_join_string"
             | "__goby_embeded_effect_stdout_handler"
             | "__goby_embeded_effect_stdin_handler"
