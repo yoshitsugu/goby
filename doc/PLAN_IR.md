@@ -602,6 +602,10 @@ Suggested phases:
   Resolve effect operations to lexical handler targets after type/effect
   checking, so lowering consumes capability metadata rather than raw handler
   names.
+  Initial slice landed 2026-05-01: shared IR has `EffectOpId`, handler clauses
+  lowered from resolved source carry optional `effect + op` identity, and the
+  handler legality mutable-capture analysis uses that identity before falling
+  back to legacy raw op-name matching for unresolved/manual IR.
 - **WB-4D: Reference continuation objects.**
   Implement continuation objects in the reference/interpreter runtime first.
   Allow sequential multi-shot where no ordinary mutable local is captured.

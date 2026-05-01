@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-01 (effect handler-use classifier started)
+Last updated: 2026-05-01 (effect operation identity metadata started)
 
 ## Current Focus
 
@@ -19,6 +19,11 @@ The effect-runtime roadmap has been revised in docs:
   multi-shot, reentrant-looking, and multi-shot-with-mutable-capture shapes.
   The existing one-shot optimized-path gate remains compatible with the old
   `has_unsupported` / `all_one_shot_tail_resumptive` queries.
+- The next WB-4C prep slice has started: shared IR now has `EffectOpId`, and
+  handler clauses lowered from resolved source can carry resolved
+  effect-operation identity. Handler legality mutable-capture analysis now
+  uses `effect + op` identity when available, preserving the old op-name
+  fallback only for unresolved/manual IR and AST-only analysis paths.
 
 Perceus M10's reopened IR boundary and the M11 138x138 memory
 exhaustion are fixed. The temporary Perceus execution plan is closed
@@ -339,10 +344,10 @@ Green after this session:
 
 ## Next Step
 
-Continue effect runtime preparation from the classifier into lexical target
-metadata. The next useful slice is to attach stable handler-operation identity
-to handler installation / effect operation use sites, so later lowering
-consumes capability metadata instead of raw operation-name matching.
+Continue WB-4C lexical target metadata beyond operation identity. The next
+useful slice is to assign explicit lexical handler target records to
+`WithHandler` / `PerformEffect` pairs, so later lowering can consume
+capability metadata instead of searching handler stacks by raw operation name.
 
 Other active tracks remain available (`doc/PLAN.md` §4):
 

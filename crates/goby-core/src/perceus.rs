@@ -1948,6 +1948,7 @@ fn drop_insert_comp(
                     next_tmp_mut = new_next_tmp;
                     IrHandlerClause {
                         op_name: clause.op_name.clone(),
+                        op_id: clause.op_id.clone(),
                         params: clause.params.clone(),
                         body,
                     }
@@ -3480,6 +3481,7 @@ mod tests {
                         handler: Box::new(CompExpr::Handle {
                             clauses: vec![IrHandlerClause {
                                 op_name: "op".to_string(),
+                                op_id: None,
                                 params: vec!["v".to_string()],
                                 body: CompExpr::Resume {
                                     value: Box::new(ValueExpr::Var("v".to_string())),
@@ -4238,6 +4240,7 @@ mod tests {
                     handler: Box::new(CompExpr::Handle {
                         clauses: vec![IrHandlerClause {
                             op_name: "op".to_string(),
+                            op_id: None,
                             params: vec!["v".to_string()],
                             body: CompExpr::Resume {
                                 value: Box::new(ValueExpr::Var("v".to_string())),

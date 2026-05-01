@@ -291,6 +291,7 @@ mod tests {
                 CompExpr::Handle {
                     clauses: vec![IrHandlerClause {
                         op_name: "tick".to_string(),
+                        op_id: None,
                         params: vec!["v".to_string()],
                         body: direct_call("handler_tail"),
                     }],

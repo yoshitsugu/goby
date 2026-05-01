@@ -6,7 +6,7 @@
 
 use crate::ast::{BinOpKind, Declaration, Module};
 use crate::ir::{
-    CompExpr, IrBinOp, IrCaseArm, IrCasePattern, IrDecl, IrHandlerClause, IrInterpPart,
+    CompExpr, EffectOpId, IrBinOp, IrCaseArm, IrCasePattern, IrDecl, IrHandlerClause, IrInterpPart,
     IrListPatternItem, IrListPatternTail, IrModule, IrType, ValueExpr,
 };
 use crate::resolved::{
@@ -743,7 +743,11 @@ fn lower_handler_expr(
     for clause in clauses {
         let body = lower_stmts(ctx, &clause.body)?;
         ir_clauses.push(IrHandlerClause {
-            op_name: clause.name.clone(),
+            op_name: clause.op_name(),
+            op_id: clause
+                .effect
+                .as_ref()
+                .map(|effect| EffectOpId::new(effect.clone(), clause.op_name())),
             params: clause.params.clone(),
             body,
         });
@@ -1035,10 +1039,12 @@ fn mutable_ref_name(reference: &ResolvedRef) -> Result<&str, LowerError> {
 mod tests {
     use super::*;
     use crate::ast::{
-        BinOpKind, CaseArm, CasePattern, Declaration, Expr, InterpolatedPart, ListPatternItem,
-        ListPatternTail, Span, Stmt,
+        BinOpKind, CaseArm, CasePattern, Declaration, EffectDecl, EffectMember, Expr,
+        HandlerClause, InterpolatedPart, ListPatternItem, ListPatternTail, Module, Span, Stmt,
     };
-    use crate::ir::{CompExpr, IrCasePattern, IrModule, ValueExpr, fmt_ir, validate_ir};
+    use crate::ir::{
+        CompExpr, EffectOpId, IrCasePattern, IrModule, ValueExpr, fmt_ir, validate_ir,
+    };
 
     /// Build a minimal Declaration with a pre-parsed body.
     fn decl_with_body(name: &str, stmts: Vec<Stmt>) -> Declaration {
@@ -1132,6 +1138,62 @@ mod tests {
         };
         assert!(validate_ir(&m).is_ok());
         insta::assert_snapshot!(fmt_ir(&m));
+    }
+
+    #[test]
+    fn lower_handler_clauses_attach_effect_operation_identity() {
+        let effect = |name: &str| EffectDecl {
+            name: name.to_string(),
+            type_params: vec![],
+            members: vec![EffectMember {
+                name: "tick".to_string(),
+                type_annotation: "Unit -> Unit".to_string(),
+                span: Span::point(1, 1),
+            }],
+            span: Span::point(1, 1),
+        };
+        let clause = |name: &str| HandlerClause {
+            name: name.to_string(),
+            params: vec![],
+            body: String::new(),
+            parsed_body: Some(vec![expr_stmt(Expr::Resume {
+                value: Box::new(Expr::TupleLit(vec![])),
+            })]),
+            span: Span::point(1, 1),
+        };
+        let module = Module {
+            imports: vec![],
+            embed_declarations: vec![],
+            type_declarations: vec![],
+            effect_declarations: vec![effect("A"), effect("B")],
+            declarations: vec![decl_with_body(
+                "main",
+                vec![expr_stmt(Expr::With {
+                    handler: Box::new(Expr::Handler {
+                        clauses: vec![clause("A.tick"), clause("B.tick")],
+                    }),
+                    body: vec![expr_stmt(Expr::TupleLit(vec![]))],
+                })],
+            )],
+        };
+
+        let ir_module = lower_module(&module).expect("module should lower");
+        let CompExpr::WithHandler { handler, .. } = &ir_module.decls[0].body else {
+            panic!("expected with handler, got {:?}", ir_module.decls[0].body);
+        };
+        let CompExpr::Handle { clauses } = handler.as_ref() else {
+            panic!("expected inline handler, got {handler:?}");
+        };
+        assert_eq!(
+            clauses
+                .iter()
+                .map(|clause| clause.op_id.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                Some(EffectOpId::new("A", "tick")),
+                Some(EffectOpId::new("B", "tick")),
+            ]
+        );
     }
 
     #[test]

@@ -274,6 +274,7 @@ fn insert_reuse_comp(
                     next = updated;
                     crate::ir::IrHandlerClause {
                         op_name: clause.op_name,
+                        op_id: clause.op_id,
                         params: clause.params,
                         body,
                     }

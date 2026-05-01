@@ -904,6 +904,7 @@ fn rename_comp_var(comp: &CompExpr, from: &str, to: &str) -> CompExpr {
                 .iter()
                 .map(|clause| goby_core::ir::IrHandlerClause {
                     op_name: clause.op_name.clone(),
+                    op_id: clause.op_id.clone(),
                     params: clause.params.clone(),
                     body: rename_comp_var(&clause.body, from, to),
                 })

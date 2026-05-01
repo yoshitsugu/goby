@@ -554,6 +554,7 @@ fn rewrite_comp_fold_prepend_callbacks(
                 .iter()
                 .map(|clause| IrHandlerClause {
                     op_name: clause.op_name.clone(),
+                    op_id: clause.op_id.clone(),
                     params: clause.params.clone(),
                     body: rewrite_comp_fold_prepend_callbacks(
                         &clause.body,

@@ -77,8 +77,18 @@ pub enum ResolvedStmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedHandlerClause {
     pub name: String,
+    pub effect: Option<String>,
     pub params: Vec<String>,
     pub body: Vec<ResolvedStmt>,
+}
+
+impl ResolvedHandlerClause {
+    pub fn op_name(&self) -> String {
+        self.name
+            .split_once('.')
+            .map(|(_effect, op)| op.to_string())
+            .unwrap_or_else(|| self.name.clone())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -539,9 +549,17 @@ impl Resolver {
         self.pop_scope();
         ResolvedHandlerClause {
             name: clause.name.clone(),
+            effect: self.resolve_handler_clause_effect(&clause.name),
             params: clause.params.clone(),
             body,
         }
+    }
+
+    fn resolve_handler_clause_effect(&self, name: &str) -> Option<String> {
+        if let Some((effect, _op)) = name.split_once('.') {
+            return Some(effect.to_string());
+        }
+        self.bare_effect_ops.get(name).cloned()
     }
 
     fn resolve_case_arm(&mut self, arm: &CaseArm) -> ResolvedCaseArm {

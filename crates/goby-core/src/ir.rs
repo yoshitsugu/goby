@@ -15,6 +15,22 @@
 
 use crate::size_class::SizeClass;
 
+/// Stable identity for an effect operation after name resolution.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EffectOpId {
+    pub effect: String,
+    pub op: String,
+}
+
+impl EffectOpId {
+    pub fn new(effect: impl Into<String>, op: impl Into<String>) -> Self {
+        Self {
+            effect: effect.into(),
+            op: op.into(),
+        }
+    }
+}
+
 /// A type annotation carried by IR nodes.
 ///
 /// `IrType` does not mirror the private typechecker `Ty` enum. It carries
@@ -257,6 +273,11 @@ pub enum CompExpr {
 pub struct IrHandlerClause {
     /// The operation name handled (e.g. `"read"`, `"print"`).
     pub op_name: String,
+    /// Resolved effect-operation identity when available.
+    ///
+    /// `None` is kept for manually-built IR and legacy AST-only analysis paths
+    /// that have not gone through effect owner resolution.
+    pub op_id: Option<EffectOpId>,
     /// Parameter names for this operation clause.
     pub params: Vec<String>,
     /// Body of the clause.
@@ -1005,6 +1026,16 @@ fn validate_comp(c: &CompExpr, decl_name: &str) -> Result<(), IrValidateError> {
                 });
             }
             for clause in clauses {
+                if let Some(op_id) = &clause.op_id
+                    && (op_id.effect.is_empty() || op_id.op.is_empty())
+                {
+                    return Err(IrValidateError {
+                        message: format!(
+                            "in decl `{}`: Handler clause op_id must not be empty",
+                            decl_name
+                        ),
+                    });
+                }
                 validate_comp(&clause.body, decl_name)?;
             }
             Ok(())
@@ -1447,6 +1478,7 @@ mod tests {
             CompExpr::Handle {
                 clauses: vec![IrHandlerClause {
                     op_name: "read".into(),
+                    op_id: None,
                     params: vec!["resume".into()],
                     body: CompExpr::Resume {
                         value: Box::new(ValueExpr::StrLit("hello".into())),
@@ -1466,6 +1498,7 @@ mod tests {
                 handler: Box::new(CompExpr::Handle {
                     clauses: vec![IrHandlerClause {
                         op_name: "print".into(),
+                        op_id: None,
                         params: vec!["msg".into(), "resume".into()],
                         body: CompExpr::Resume {
                             value: Box::new(ValueExpr::Unit),
@@ -1590,6 +1623,7 @@ mod tests {
                 handler: Box::new(CompExpr::Handle {
                     clauses: vec![IrHandlerClause {
                         op_name: "read".into(),
+                        op_id: None,
                         params: vec![],
                         body: val(ValueExpr::Unit),
                     }],

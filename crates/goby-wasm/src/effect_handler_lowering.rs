@@ -545,6 +545,7 @@ mod tests {
             handler: Box::new(CompExpr::Handle {
                 clauses: vec![IrHandlerClause {
                     op_name: "yield".to_string(),
+                    op_id: None,
                     params: vec!["value".to_string(), "step".to_string()],
                     body: CompExpr::Seq {
                         stmts: vec![CompExpr::PerformEffect {

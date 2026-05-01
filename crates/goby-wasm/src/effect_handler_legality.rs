@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use goby_core::ast::{AssignTarget, HandlerClause, InterpolatedPart};
-use goby_core::ir::{CompExpr, IrDecl, IrHandlerClause, IrInterpPart, ValueExpr};
+use goby_core::ir::{CompExpr, EffectOpId, IrDecl, IrHandlerClause, IrInterpPart, ValueExpr};
 use goby_core::tail_analysis::{TailWalkConfig, walk_comp};
 use goby_core::{Expr, Module, Stmt};
 
@@ -328,8 +328,12 @@ fn classify_with_handler(
         .iter()
         .map(|clause| clause.op_name.clone())
         .collect::<Vec<_>>();
+    let handled_ops = clauses
+        .iter()
+        .map(HandlerOpTarget::from_clause)
+        .collect::<Vec<_>>();
     let captured_mutable_locals =
-        captured_mutable_locals_for_ir_body(body, mutable_scope, &clause_ops);
+        captured_mutable_locals_for_ir_body(body, mutable_scope, &handled_ops);
     let (kind, legality) = classify_ir_clauses(&clauses, captured_mutable_locals.clone());
 
     WithHandlerLegalityRecord {
@@ -477,10 +481,39 @@ fn analyze_ir_clause_body(comp: &CompExpr) -> ClauseResumeStats {
     stats
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HandlerOpTarget {
+    op_name: String,
+    op_id: Option<EffectOpId>,
+}
+
+impl HandlerOpTarget {
+    fn from_clause(clause: &IrHandlerClause) -> Self {
+        Self {
+            op_name: clause.op_name.clone(),
+            op_id: clause.op_id.clone(),
+        }
+    }
+
+    fn matches_perform_effect(&self, effect: &str, op: &str) -> bool {
+        match &self.op_id {
+            Some(op_id) => op_id.effect == effect && op_id.op == op,
+            None => {
+                self.op_name == op
+                    || self
+                        .op_name
+                        .rsplit('.')
+                        .next()
+                        .is_some_and(|short_name| short_name == op)
+            }
+        }
+    }
+}
+
 fn captured_mutable_locals_for_ir_body(
     body: &CompExpr,
     mutable_scope: &BTreeSet<String>,
-    handled_ops: &[String],
+    handled_ops: &[HandlerOpTarget],
 ) -> Vec<String> {
     let mut captured = BTreeSet::new();
     collect_ir_effect_mutable_captures(body, mutable_scope, handled_ops, &mut captured);
@@ -490,7 +523,7 @@ fn captured_mutable_locals_for_ir_body(
 fn collect_ir_effect_mutable_captures(
     comp: &CompExpr,
     mutable_scope: &BTreeSet<String>,
-    handled_ops: &[String],
+    handled_ops: &[HandlerOpTarget],
     captured: &mut BTreeSet<String>,
 ) {
     match comp {
@@ -546,8 +579,13 @@ fn collect_ir_effect_mutable_captures(
                 collect_ir_effect_mutable_captures(&arm.body, mutable_scope, handled_ops, captured);
             }
         }
-        CompExpr::PerformEffect { op, args, .. } => {
-            if handled_ops.iter().any(|candidate| candidate == op) {
+        CompExpr::PerformEffect {
+            effect, op, args, ..
+        } => {
+            if handled_ops
+                .iter()
+                .any(|target| target.matches_perform_effect(effect, op))
+            {
                 captured.extend(mutable_scope.iter().cloned());
             }
             for arg in args {
@@ -572,7 +610,7 @@ fn collect_ir_effect_mutable_captures(
 fn collect_ir_value_effect_mutable_captures(
     value: &ValueExpr,
     mutable_scope: &BTreeSet<String>,
-    handled_ops: &[String],
+    handled_ops: &[HandlerOpTarget],
     captured: &mut BTreeSet<String>,
 ) {
     match value {
@@ -1458,6 +1496,7 @@ mod tests {
             handler: Box::new(CompExpr::Handle {
                 clauses: vec![IrHandlerClause {
                     op_name: "tick".to_string(),
+                    op_id: None,
                     params: vec!["value".to_string()],
                     body: safe_handler_body(),
                 }],
@@ -1479,6 +1518,7 @@ mod tests {
             handler: Box::new(CompExpr::Handle {
                 clauses: vec![IrHandlerClause {
                     op_name: "tick".to_string(),
+                    op_id: None,
                     params: vec!["value".to_string()],
                     body: CompExpr::Seq {
                         stmts: vec![CompExpr::Resume {
@@ -1505,6 +1545,7 @@ mod tests {
             handler: Box::new(CompExpr::Handle {
                 clauses: vec![IrHandlerClause {
                     op_name: "tick".to_string(),
+                    op_id: None,
                     params: vec!["value".to_string()],
                     body: CompExpr::Value(ValueExpr::Unit),
                 }],
@@ -1524,6 +1565,7 @@ mod tests {
             value: Box::new(CompExpr::Handle {
                 clauses: vec![IrHandlerClause {
                     op_name: "tick".to_string(),
+                    op_id: None,
                     params: vec!["value".to_string()],
                     body: safe_handler_body(),
                 }],
@@ -1544,6 +1586,7 @@ mod tests {
             handler: Box::new(CompExpr::Handle {
                 clauses: vec![IrHandlerClause {
                     op_name: "tick".to_string(),
+                    op_id: None,
                     params: vec!["value".to_string()],
                     body: CompExpr::Value(ValueExpr::Lambda {
                         param: "x".to_string(),
@@ -1679,5 +1722,48 @@ main =
         );
         assert_eq!(record.kind, HandlerUseKind::UnsupportedMutableCapture);
         assert_eq!(record.captured_mutable_locals, vec!["local"]);
+    }
+
+    #[test]
+    fn ir_identity_prevents_cross_effect_mutable_capture_by_shared_op_name() {
+        let body = CompExpr::LetMut {
+            name: "counter".to_string(),
+            ty: IrType::Int,
+            value: Box::new(CompExpr::Value(ValueExpr::IntLit(0))),
+            body: Box::new(CompExpr::WithHandler {
+                handler: Box::new(CompExpr::Handle {
+                    clauses: vec![IrHandlerClause {
+                        op_name: "tick".to_string(),
+                        op_id: Some(EffectOpId::new("A", "tick")),
+                        params: vec![],
+                        body: CompExpr::Seq {
+                            stmts: vec![CompExpr::Resume {
+                                value: Box::new(ValueExpr::Unit),
+                            }],
+                            tail: Box::new(CompExpr::Resume {
+                                value: Box::new(ValueExpr::Unit),
+                            }),
+                        },
+                    }],
+                }),
+                body: Box::new(CompExpr::PerformEffect {
+                    effect: "B".to_string(),
+                    op: "tick".to_string(),
+                    args: vec![],
+                }),
+            }),
+        };
+        let summary = collect_test_comp(&body);
+        assert_eq!(
+            summary.records[0].captured_mutable_locals,
+            Vec::<String>::new()
+        );
+        assert_eq!(summary.records[0].kind, HandlerUseKind::SequentialMultiShot);
+        assert_eq!(
+            summary.records[0].legality,
+            WithHandlerLegality::Other {
+                issue: HandlerLegalityIssue::MultipleResume
+            }
+        );
     }
 }
