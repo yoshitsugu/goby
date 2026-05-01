@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-01 (effect runtime redesign documented)
+Last updated: 2026-05-01 (effect handler-use classifier started)
 
 ## Current Focus
 
@@ -13,6 +13,12 @@ The effect-runtime roadmap has been revised in docs:
 - Ordinary `mut` semantics are preserved; multi-shot continuations that capture
   ordinary mutable locals should be rejected until an explicit branch-local
   state surface exists.
+- The first implementation-prep slice has landed in
+  `crates/goby-wasm/src/effect_handler_legality.rs`: handler-use records now
+  distinguish abortive, direct one-shot, delayed one-shot, sequential
+  multi-shot, reentrant-looking, and multi-shot-with-mutable-capture shapes.
+  The existing one-shot optimized-path gate remains compatible with the old
+  `has_unsupported` / `all_one_shot_tail_resumptive` queries.
 
 Perceus M10's reopened IR boundary and the M11 138x138 memory
 exhaustion are fixed. The temporary Perceus execution plan is closed
@@ -333,11 +339,10 @@ Green after this session:
 
 ## Next Step
 
-Effect runtime planning is now updated around lexical capabilities, stable
-prompts, continuation objects, and explicit rejection of multi-shot handlers
-that capture ordinary mutable locals. Implementation should not start with
-Wasm emission; the first useful slice is handler classification and
-unsupported mutable-capture diagnostics.
+Continue effect runtime preparation from the classifier into lexical target
+metadata. The next useful slice is to attach stable handler-operation identity
+to handler installation / effect operation use sites, so later lowering
+consumes capability metadata instead of raw operation-name matching.
 
 Other active tracks remain available (`doc/PLAN.md` §4):
 

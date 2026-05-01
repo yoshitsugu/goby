@@ -228,7 +228,7 @@ fn unresolved_runtime_output_error(
                     "backend limitation [E-BACKEND-LIMITATION]: effect handler in '{}' is outside the one-shot tail-resumptive subset (ops={:?}, issue={})",
                     record.decl_name,
                     record.clause_ops,
-                    issue.as_str(),
+                    issue.message(),
                 ),
             };
         }

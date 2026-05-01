@@ -594,6 +594,10 @@ Suggested phases:
   Replace the current one-shot-vs-other split with a richer internal
   classifier: pure/direct, abortive, tail-resumptive one-shot, delayed
   one-shot, multi-shot, reentrant-looking, and unsupported mutable capture.
+  Initial slice landed 2026-05-01: `effect_handler_legality` now records
+  abortive, direct one-shot, delayed one-shot, sequential multi-shot,
+  reentrant-looking, and multi-shot-with-ordinary-mutable-capture shapes while
+  preserving the existing optimized-path eligibility queries.
 - **WB-4C: Lexical target metadata.**
   Resolve effect operations to lexical handler targets after type/effect
   checking, so lowering consumes capability metadata rather than raw handler
