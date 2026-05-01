@@ -25,11 +25,58 @@ pub(crate) fn first_malformed_resume_expr_line_offset(body: &str) -> Option<usiz
     body.lines().position(is_malformed_resume_expr_line)
 }
 
+pub(crate) fn first_invalid_list_spread_ellipsis(body: &str) -> Option<(usize, usize)> {
+    body.lines().enumerate().find_map(|(line_idx, line)| {
+        invalid_list_spread_ellipsis_col(line).map(|col| (line_idx, col))
+    })
+}
+
 pub(crate) fn first_legacy_using_line_offset(body: &str) -> Option<usize> {
     body.lines().position(|line| {
         let trimmed = strip_line_comment(line).trim();
         !trimmed.is_empty() && starts_with_keyword_token(trimmed, "using")
     })
+}
+
+fn invalid_list_spread_ellipsis_col(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut bracket_depth = 0usize;
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        match byte {
+            b'#' => break,
+            b'"' => in_string = true,
+            b'[' => bracket_depth += 1,
+            b']' => bracket_depth = bracket_depth.saturating_sub(1),
+            b'.' if bracket_depth > 0
+                && i + 2 < bytes.len()
+                && bytes[i + 1] == b'.'
+                && bytes[i + 2] == b'.' =>
+            {
+                return Some(i + 1);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    None
 }
 
 fn parse_stmts_from_lines<F>(

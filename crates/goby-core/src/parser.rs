@@ -1,7 +1,8 @@
 use crate::ast::{Declaration, Expr, Module, Stmt};
 use crate::parser_expr::parse_expr as parse_expr_impl;
 use crate::parser_stmt::{
-    first_legacy_using_line_offset, first_malformed_resume_expr_line_offset, parse_body_stmts_with,
+    first_invalid_list_spread_ellipsis, first_legacy_using_line_offset,
+    first_malformed_resume_expr_line_offset, parse_body_stmts_with,
 };
 use crate::parser_top::TopLevelItem;
 use crate::parser_util::{is_indented, strip_line_comment};
@@ -69,6 +70,13 @@ pub fn parse_module(source: &str) -> Result<Module, ParseError> {
                         col: 1,
                         message: "malformed `resume` expression: expected `resume <expr>`"
                             .to_string(),
+                    });
+                }
+                if let Some((offset, col)) = first_invalid_list_spread_ellipsis(&parts.body) {
+                    return Err(ParseError {
+                        line: parts.definition_line + offset,
+                        col,
+                        message: "invalid list spread `...`; use `..`".to_string(),
                     });
                 }
                 if let Some(offset) = first_legacy_using_line_offset(&parts.body) {
@@ -354,6 +362,32 @@ main =
 "#;
         let err = parse_module(source).expect_err("malformed handler resume should be rejected");
         assert!(err.message.contains("malformed `resume` expression"));
+    }
+
+    #[test]
+    fn parse_error_for_triple_dot_list_spread_in_declaration_body() {
+        let source = r#"
+main =
+  xs = [1, ...rest]
+  xs
+"#;
+        let err = parse_module(source).expect_err("triple-dot list spread should be rejected");
+        assert_eq!(err.line, 3);
+        assert!(
+            err.message.contains("invalid list spread `...`; use `..`"),
+            "unexpected message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn list_string_literal_with_ellipsis_is_not_a_spread_error() {
+        let source = r#"
+main =
+  xs = ["..."]
+  xs
+"#;
+        parse_module(source).expect("ellipsis inside string literal should parse");
     }
 
     #[test]

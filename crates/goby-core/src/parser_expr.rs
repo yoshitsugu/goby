@@ -898,6 +898,9 @@ fn parse_list_expr(src: &str) -> Option<Expr> {
     }
 
     let last = parts.last().unwrap().trim();
+    if last.starts_with("...") {
+        return None;
+    }
     if let Some(tail_src) = last.strip_prefix("..") {
         let tail_src = tail_src.trim();
         if parts.len() == 1 || tail_src.is_empty() {
@@ -1666,6 +1669,11 @@ mod tests {
     #[test]
     fn rejects_list_spread_missing_expr() {
         assert_eq!(parse_expr("[a, ..]"), None);
+    }
+
+    #[test]
+    fn rejects_triple_dot_list_spread() {
+        assert_eq!(parse_expr("[a, ...rest]"), None);
     }
 
     #[test]

@@ -28,6 +28,7 @@ pub(crate) struct DeclarationParts {
     pub(crate) params: Vec<String>,
     pub(crate) body: String,
     pub(crate) line: usize,
+    pub(crate) definition_line: usize,
     /// 1-indexed byte offset of the declaration name on the definition line.
     pub(crate) col: usize,
 }
@@ -279,6 +280,7 @@ fn parse_declaration_header(
             params,
             body,
             line: decl_line,
+            definition_line: index + 1,
             col: def_col,
         },
         next_index,
@@ -313,6 +315,7 @@ mod tests {
             params: decl.params.clone(),
             body: decl.body.clone(),
             line: decl.line,
+            definition_line: decl.line,
             col: decl.col,
         }
     }
