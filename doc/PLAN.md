@@ -525,6 +525,12 @@ Mutation policy:
 - branch-local mutable state should be introduced later as an explicit
   construct or API, separate from ordinary `mut` and any future explicit
   shared `Cell` / `Ref` surface.
+- **Priority note (2026-05-01).** Multi-shot continuations and a branch-local
+  state surface are direct prerequisites for Track PC (§4.7 Parser Combinator)
+  alternatives/backtracking. Their priority is raised accordingly: WB-4
+  classification work continues to land first, but the design lock for the
+  branch-local state surface should advance ahead of other §3 deferred items
+  once classification is stable.
 
 Implementation should start with classification and rejection behavior before
 any Wasm emission work. The first useful slice is a richer handler-use
@@ -933,6 +939,11 @@ Acceptance criteria:
 
 ### 4.6 Track EP: Effect Row Polymorphism
 
+Priority: **raised (2026-05-01)**. Track EP and the multi-shot / branch-local
+state portion of §3.3 are now prerequisites for Track PC (§4.7 Parser
+Combinator). EP-0 → EP-2 should advance ahead of other deferred tracks until
+PC's blockers are cleared.
+
 Goal: add effect-variable quantification so higher-order functions propagate
 callee effects through the type system, closing the largest gap between Goby's
 effect system and the algebraic-effect theory (Plotkin & Pretnar 2009).
@@ -1003,7 +1014,183 @@ References:
 - Hillerström & Lindley, "Shallow Effect Handlers" (APLAS 2018)
 - Bauer & Pretnar, "Programming with Algebraic Effects and Handlers" (JLAMP 2015)
 
-### 4.7 Parking Lot (Needs Revalidation Before Implementation)
+### 4.7 Track PC: Parser Combinator on Algebraic Effects
+
+Goal: deliver a small, idiomatic parser-combinator surface that **uses Goby's
+effect system as the composition mechanism**, not as decoration. The track
+exists as a concrete forcing function for §3.3 (multi-shot / branch-local
+state) and §4.6 (effect row polymorphism), so progress on PC milestones is
+allowed to drive priority on those tracks.
+
+Why this matters:
+
+- a parser-combinator library is the smallest realistic program that
+  simultaneously stresses (1) HOF effect propagation, (2) sequential
+  multi-shot continuations for alternative/backtracking, and (3) explicit
+  branch-local state for input-cursor rollback.
+- if Goby cannot host a clean parser combinator, the effect system is not
+  yet earning its complexity. Conversely, getting PC right validates the
+  language direction laid out in §3.3 and §4.6.
+- it produces a self-contained example/stdlib surface that doubles as an
+  acceptance fixture for EP and the future branch-local state work.
+
+Scope to lock before coding:
+
+1. Surface shape
+   - decide whether `Parser a` is an ordinary function value
+     (`fn input -> (a, input)`) lifted by combinators, or a thin wrapper
+     around an effect-handler protocol.
+   - decide which combinators are first-class (`pure`, `map`, `bind`/`>>=`,
+     `alt`, `many`, `optional`, `seq`, `between`, `eof`).
+   - decide token granularity (graphemes via `string.graphemes` or byte-ish
+     `String` slices); current spec only exposes grapheme-list traversal.
+2. Effect protocol
+   - decide the operations carried by the parser effect(s). Working draft:
+     - `Token` effect with `peek : Unit -> Maybe String` and
+       `advance : Unit -> Unit` (cursor as handler-side state),
+     - `Fail` effect with `fail : String -> a` (no `resume` → exits the
+       enclosing `with`),
+     - `Choice` effect with `choose : Unit -> Bool` for alternatives
+       (multi-shot resume: `True` for left branch, `False` for right).
+   - decide whether `Choice` is a separate effect or fused with `Fail` as
+     `try : Parser a -> Parser a -> Parser a`.
+3. Backtracking semantics
+   - `alt p q` is the canonical multi-shot site. The handler must restore
+     the input cursor on the right-branch resume.
+   - until §3.3 branch-local state lands, the cursor must be threaded as an
+     explicit operation argument (iterator-style), **not** as captured `mut`.
+   - document committed-vs-uncommitted alternatives (Parsec-style `try`)
+     once the state surface is decided.
+4. Error reporting
+   - decide the failure value shape (single message, or list of expected
+     tokens with position).
+   - reuse `goby/iterator` GraphemeState patterns for position tracking.
+
+Blocking dependencies (must land before PC-2 implementation):
+
+- **§4.6 EP-2 (HOF effect propagation).** Without effect row polymorphism,
+  `map`, `bind`, and any user-defined combinator cannot type-propagate the
+  parser's effects through callback parameters; PC would otherwise require
+  every combinator to monomorphize its `can` clause by hand, which is the
+  exact gap EP exists to close.
+- **§3.3 multi-shot classification + branch-local state surface.** `alt`
+  and `many` need either a sanctioned multi-shot path or an explicit
+  branch-local state construct to roll the cursor back without violating
+  ordinary-`mut` semantics.
+
+Both dependencies have their priority raised by this track.
+
+Execution phases:
+
+1. **PC-0: Surface and protocol lock**
+   - record the chosen `Parser` shape, effect protocol, and backtracking
+     story in `doc/LANGUAGE_SPEC.md` (or a dedicated stdlib design note if
+     the surface stays in stdlib).
+   - add motivating examples (number parser, JSON-like literal, simple
+     arithmetic-expression parser) as failing/aspirational fixtures.
+
+2. **PC-1: Cursor-threaded MVP (no multi-shot)**
+   - implement the iterator-style variant: cursor is an operation argument,
+     `alt` is restricted to non-backtracking / longest-prefix forms, or
+     simulated by passing the remaining token list explicitly.
+   - lands as `stdlib/goby/parser.gb` plus `examples/parser_*.gb`.
+   - acceptance: parses a small grammar end-to-end on `goby run` without
+     relying on multi-shot resume or captured `mut`.
+
+3. **PC-2: True backtracking on multi-shot effects**
+   - depends on §3.3 branch-local state surface.
+   - replace the cursor-threading variant with multi-shot `Choice` /
+     `try` combinators that restore branch-local state on right-branch
+     resume.
+   - acceptance: a left-recursion-free grammar with real backtracking
+     (`alt`, `many`, `optional`) parses correctly, and the
+     handler-legality classifier accepts the resulting IR shapes.
+
+4. **PC-3: Error messages and diagnostics polish**
+   - position-aware failure values, `expected ... got ...` rendering.
+   - integrate with `goby/string` grapheme position tracking.
+
+Acceptance criteria for the track:
+
+- `examples/parser_arith.gb` (or equivalent) parses a representative
+  expression grammar end-to-end on `goby run`.
+- combinators are written as ordinary Goby functions whose effect rows
+  propagate via EP, not via per-combinator hand-written `can` clauses.
+- multi-shot `alt` does not require capturing ordinary `mut` (uses the
+  branch-local state surface or explicit cursor threading).
+- the resulting `goby/parser` stdlib (or `examples/parser*.gb`) is small
+  enough to read in one sitting and serves as the canonical
+  algebraic-effects showcase for the language.
+
+Sketch (PC-1 cursor-threaded variant, illustrative — surface not yet locked):
+
+```goby
+import goby/string ( graphemes )
+
+effect Parse
+  peek   : List String -> (Maybe String, List String)
+  expect : String -> List String -> (Unit, List String)
+
+effect Fail
+  fail : String -> a
+
+# Combinator shapes are written as ordinary Goby functions.
+# Effect rows would propagate via Track EP once EP-2 lands; until then,
+# `can Parse, Fail` is written explicitly at every combinator boundary.
+
+digit : Unit -> String can Parse, Fail
+digit () =
+  case peek
+    Some c ->
+      # ... grapheme-class check elided ...
+      expect c
+      c
+    None -> fail "expected digit"
+
+many_digits : List String -> List String can Parse, Fail
+many_digits acc =
+  case peek
+    Some _ ->
+      d = digit ()
+      many_digits (push acc d)
+    None -> acc
+
+# Driver: install Parse + Fail handlers around the top-level parser entry.
+parse_int : String -> Maybe Int
+parse_int src =
+  tokens = graphemes src
+  with
+    peek input ->
+      case input
+        []         -> resume (None, input)
+        [x, ..xs]  -> resume (Some x, input)
+    expect _ input ->
+      case input
+        [_, ..xs] -> resume ((), xs)
+        []        -> fail "unexpected end of input"
+  in
+    with
+      fail _ -> None
+    in
+      digits = many_digits []
+      Some (int.parse (list.join digits ""))
+```
+
+Note: the sketch is intentionally pre-EP. Once EP-2 lands, the explicit
+`can Parse, Fail` on every combinator collapses into an effect-variable row,
+and `many_digits` can be expressed via a generic `many : Parser a -> Parser (List a)`
+combinator without per-call `can` rewriting.
+
+References:
+
+- Hutton & Meijer, "Monadic Parser Combinators" (1996).
+- Leijen, "Parsec: Direct Style Monadic Parser Combinators" (2001).
+- Plotkin & Pretnar, "Handlers of Algebraic Effects" (LICS 2009) — base
+  semantics for the multi-shot path used by `alt`.
+- Lindley, McBride & McLaughlin, "Do Be Do Be Do" (POPL 2017) — Frank's
+  parser-style effect examples.
+
+### 4.8 Parking Lot (Needs Revalidation Before Implementation)
 
 - CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
 - CLI binary naming migration (`goby-cli` -> `goby`) final policy.
