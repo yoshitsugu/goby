@@ -4,6 +4,7 @@ Use this directory as follows:
 
 - `LANGUAGE_SPEC.md`: active language specification (latest user-visible syntax/semantics).
 - `PLAN.md`: active top-level planning/roadmap reference.
+- `PLAN_IR.md`: IR/lowering architecture reference, including backend convergence plans.
 - `STATE.md`: restart-safe execution snapshot (latest milestones, open items, next actions).
 - `BUGS.md`: known issues and their status.
 
@@ -11,6 +12,7 @@ Recommended reading order:
 
 1. `LANGUAGE_SPEC.md`
 2. `PLAN.md`
+3. `PLAN_IR.md`
 4. `STATE.md`
 5. `BUGS.md` (when fixing defects)
 
@@ -24,5 +26,6 @@ Maintenance rules:
   - `tooling/emacs/goby-mode.el`
   - `tooling/vim/syntax/goby.vim`
 - Update `PLAN.md` when planning status/migration steps/decisions change.
+- Update `PLAN_IR.md` when IR or backend-lowering architecture changes.
 - At meaningful milestones, update `STATE.md`.
 - Keep `README.md` high-level; keep detailed spec text in this directory.

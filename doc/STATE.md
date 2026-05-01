@@ -1,8 +1,18 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-01 (Perceus plan closed and removed)
+Last updated: 2026-05-01 (effect runtime redesign documented)
 
 ## Current Focus
+
+The effect-runtime roadmap has been revised in docs:
+
+- `doc/PLAN.md` now records the lexical-capability / stable-prompt /
+  continuation-object direction.
+- `doc/PLAN_IR.md` now treats WB-4 as the general effect-runtime track and
+  moves WasmFX to an optional future emitter role.
+- Ordinary `mut` semantics are preserved; multi-shot continuations that capture
+  ordinary mutable locals should be rejected until an explicit branch-local
+  state surface exists.
 
 Perceus M10's reopened IR boundary and the M11 138x138 memory
 exhaustion are fixed. The temporary Perceus execution plan is closed
@@ -323,7 +333,13 @@ Green after this session:
 
 ## Next Step
 
-Return to other active tracks (`doc/PLAN.md` §4):
+Effect runtime planning is now updated around lexical capabilities, stable
+prompts, continuation objects, and explicit rejection of multi-shot handlers
+that capture ordinary mutable locals. Implementation should not start with
+Wasm emission; the first useful slice is handler classification and
+unsupported mutable-capture diagnostics.
+
+Other active tracks remain available (`doc/PLAN.md` §4):
 
 - Track D: `goby lint` (unused binding, shadowed effect op).
 - Track OOB: list index out-of-bounds error messages.

@@ -1,6 +1,6 @@
 # Goby IR Lowering Plan
 
-Last updated: 2026-03-25
+Last updated: 2026-05-01
 
 This document is the active architecture reference for Goby's compilation pipeline
 and the long-term plan for Wasm backend lowering.
@@ -164,7 +164,7 @@ More parameter-plumbing overhead per call than Strategy A for the one-shot case.
 **Ruling:** not chosen for WB-3A. Higher implementation complexity than selective CPS for
 no benefit given Goby's current one-shot usage pattern.
 
-### 4.4 Strategy C — WasmFX / Stack Switching (target for WB-3B)
+### 4.4 Strategy C — WasmFX / Stack Switching (optional future emitter)
 
 **Primary sources:**
 - Luna Phipps-Costin, Andreas Rossberg, Arjun Guha, Daan Leijen, Daniel Hillerström,
@@ -182,7 +182,8 @@ no benefit given Goby's current one-shot usage pattern.
   https://github.com/bytecodealliance/wasmtime/issues/10248
 
 Adds `suspend <tag>` / `resume <ft> (on $tag handler_block)` instructions to Wasm.
-Maps 1:1 to Goby's IR:
+The old WB-3B plan treated this as a near-1:1 future replacement for the WB-3A
+emit layer:
 
 ```
 PerformEffect { effect, op, args }  →  suspend $op_tag
@@ -196,11 +197,42 @@ No source-level transformation required. Supports multi-resume natively.
 ARM64 and other ISAs are deferred. Not available in browsers. The WasmFX fork of Wasmtime
 (`https://github.com/wasmfx/wasmfxtime`) is the current research prototype.
 
-**Key property:** Goby's IR is intentionally kept structurally 1:1 with WasmFX instruction
-semantics. Migrating from WB-3A to WB-3B requires replacing only the emit layer, not IR or
-the lowering pipeline.
+**Revised ruling (2026-05):** WasmFX is no longer the canonical effect-runtime
+architecture. It remains a possible emitter/runtime optimization after Goby has
+locked lexical handler capabilities, stable prompts, continuation objects, and
+mutation rules. Surface semantics and lower control IR must not depend on
+external WasmFX availability.
 
-### 4.5 Strategy D — Asyncify (ruled out)
+### 4.5 Strategy E — Stable prompts + refcounted continuation objects (target)
+
+**Primary sources:**
+- Cong Ma, Zhaoyi Ge, Edward Lee, and Yizhou Zhang, "Lexical Effect Handlers,
+  Directly", OOPSLA 2024.
+- Serkan Muhcu, Philipp Schuster, Michel Steuwer, and Jonathan Immanuel
+  Brachthaeuser, "Multiple Resumptions and Local Mutable State, Directly",
+  ICFP 2025.
+
+Effect operation calls resolve to lexical handler capabilities. Handler
+installation creates a fresh stable prompt and a capability value. Performing an
+operation captures the continuation delimited by that capability's prompt.
+
+The continuation is an explicit runtime object:
+
+- one-shot tail-resumptive cases keep the existing direct-call / `return_call`
+  fast path;
+- ordinary one-shot continuations resume without copying in the common case;
+- sequential multi-shot resume is supported by copy-on-shared-resume;
+- continuation copy/drop uses the same Perceus-style `dup` / `drop` discipline
+  as heap values;
+- reentrant resume remains unsupported and must report a runtime error;
+- multi-shot continuations that capture ordinary mutable locals are rejected
+  until Goby has an explicit branch-local/backtrackable state construct.
+
+Stable Wasm cannot copy the host call stack directly. The portable baseline is
+therefore a Goby-owned meta-stack for the general effect path. WasmFX can later
+replace parts of the mechanism, but it must implement the same semantics.
+
+### 4.6 Strategy F — Asyncify (ruled out)
 
 **Source:** https://kripken.github.io/blog/wasm/2019/07/16/asyncify.html
 
@@ -533,46 +565,59 @@ Captured variables: same convention as handler functions (explicit extra paramet
   - `cargo clippy -- -D warnings` ✓
   - pre-existing CLI test failure (`run_command_executes_transformed_split_callback_with_empty_runtime_stdin`) unrelated to WB-3
 
-### Phase WB-3B (future): WasmFX typed continuations
+### Phase WB-4: General lexical effect runtime
 
-**Status:** on hold pending external prerequisites.
+**Status:** planned; supersedes the old WB-3B/WasmFX-only continuation plan.
 
-**Prerequisite:** WebAssembly stack-switching proposal reaches Phase 4 (standardized);
-Wasmtime supports it on x64 and ARM64.
+WB-3A remains the fast path for the one-shot tail-resumptive subset. WB-4 owns
+the general semantics for non-tail, delayed, and sequential multi-shot
+resumptions.
 
-**External blocker status (2026-03-24):**
-- WebAssembly official proposals tracker does not yet satisfy the Phase 4 restart condition,
-  so the standardization prerequisite is not yet met.
-- Current local `wasm-encoder` source in the Cargo registry exposes no stack-switching /
-  WasmFX instruction support, so the required emit-layer swap cannot be implemented honestly
-  in this repository yet.
+Target architecture:
 
-**Restart conditions:**
-- the WebAssembly stack-switching proposal reaches Phase 4 (or equivalent standardized-ready state);
-- local codegen tooling can encode the required WasmFX instructions;
-- local runtime support can validate and execute the emitted modules on the supported ISA set.
+- effect operations are calls through lexical handler capabilities;
+- handler installation creates stable prompt/capability metadata;
+- captured continuations are explicit runtime objects;
+- continuation copy/drop integrates with Perceus refcounting;
+- ordinary `mut` semantics remain unchanged and are not implicitly rolled back;
+- multi-shot continuations that capture ordinary mutable locals are rejected
+  until an explicit branch-local/backtrackable state construct exists;
+- WasmFX is an optional future emitter for the lower control IR, not the
+  canonical IR shape.
 
-**Scope:** replace WB-3A emit logic for `WithHandler`/`PerformEffect`/`Resume` with
-`suspend`/`resume` Wasm instructions. IR is unchanged. Enables non-tail `Resume` and
-multi-resume progression without source-level CPS transformation.
+Suggested phases:
 
-Note: WasmFX removes the need for IR/emit redesign and allows non-tail/multi-resume to be
-expressed naturally. It does not make a general claim about runtime heap allocation for
-continuations — the runtime cost profile depends on the Wasmtime implementation details
-(see https://github.com/bytecodealliance/wasmtime/issues/10248).
-
-**Milestone:**
-
-- [ ] WB-3B-M1. WasmFX emission implemented behind a feature flag; parity tests pass
-  - prep landed: `crates/goby-wasm/src/gen_lower/emit.rs` now routes effect emission through
-    `EffectEmitStrategy`, with `wasmfx-experimental` selecting the future WB-3B boundary.
-  - current state: the experimental strategy intentionally reuses WB-3A direct-call emission
-    until WasmFX opcodes/tooling are available, and byte-parity is regression-tested for both
-    direct effect-op emission and whole general-lowered modules (safe handlers + aux decl calls).
-  - compile-path prep landed: `gen_lower::try_general_lower_module` now delegates through an
-    option-aware helper so WB-3B feature-path tests exercise the same general-lowering entrypoint
-    that `compile_module` uses, rather than bypassing it with lower-level emit helpers.
-  against WB-3A output
+- **WB-4A: Semantics lock.**
+  Record the ordinary-`mut` rejection rule for multi-shot captures and define
+  the first explicit branch-local state design questions.
+- **WB-4B: Handler use classification.**
+  Replace the current one-shot-vs-other split with a richer internal
+  classifier: pure/direct, abortive, tail-resumptive one-shot, delayed
+  one-shot, multi-shot, reentrant-looking, and unsupported mutable capture.
+- **WB-4C: Lexical target metadata.**
+  Resolve effect operations to lexical handler targets after type/effect
+  checking, so lowering consumes capability metadata rather than raw handler
+  names.
+- **WB-4D: Reference continuation objects.**
+  Implement continuation objects in the reference/interpreter runtime first.
+  Allow sequential multi-shot where no ordinary mutable local is captured.
+  Reject reentrant resume deterministically.
+- **WB-4E: Goby meta-stack backend IR.**
+  Add lower-level control operations such as prompt reset, prompt shift,
+  continuation resume, frame push/return, and capability method calls.
+- **WB-4F: Wasm linear-memory meta-stack runtime.**
+  Implement stack segments, prompts, continuation state, and frame descriptors
+  for a small typed subset first.
+- **WB-4G: Perceus integration.**
+  Add frame sharer/eraser descriptors, continuation `dup` / `drop`, and
+  allocation counters proving that one-shot resume does not copy.
+- **WB-4H: Branch-local state surface.**
+  Design an explicit construct/API for backtrackable mutable state. Do not
+  overload ordinary `mut`.
+- **WB-4I: Optional WasmFX emitter.**
+  If the proposal/toolchain/runtime support is mature, emit WasmFX for the
+  lower control IR while preserving the Goby meta-stack path as the portable
+  stable-Wasm baseline.
 
 ---
 
@@ -582,17 +627,20 @@ All implementation under this plan must preserve:
 
 1. **IR shape is not modified for backend convenience.** Backend requirements are expressed
    as emit-layer transformations.
-2. **`WithHandler`/`PerformEffect`/`Resume` IR shape is kept structurally 1:1 with WasmFX
-   instruction semantics.** Phase WB-3B must be a pure emit-layer substitution.
+2. **`WithHandler`/`PerformEffect`/`Resume` preserve source semantics until
+   elaborated into lexical capability + prompt operations.** WasmFX is one
+   possible emitter for that lower-level control IR, not the canonical IR.
 3. **Tagged i64 ABI is the single runtime value representation.** All new data types
    (tuples, records, function values) use heap-allocated tagged i64 pointers. Multi-value
    or unboxed layout is explicitly deferred as a post-ABI-stability optimisation.
-4. **Tail-resumptive `Resume` → Wasm `return_call`.** Non-tail or multi-resume →
-   explicit `BackendLimitation` error until WB-3B. Silent wrong results are not acceptable.
+4. **Tail-resumptive `Resume` → Wasm `return_call`.** Other handler shapes must
+   either lower through the WB-4 general continuation path or report an explicit
+   `BackendLimitation`. Silent wrong results are not acceptable.
 5. **Captured variables → explicit Wasm function parameters, not Wasm globals.** Required
    for correctness under recursion and nested handlers.
-6. **`EffectId`/`OpId` boundary is locked in WB-2A and not redesigned in WB-3.** Effect
-   dispatch must use a typed identity scheme from WB-2A onward.
+6. **`EffectId`/`OpId` identity is preserved through WB-4.** WB-4 may attach
+   lexical handler-target metadata, but it must not fall back to ad hoc raw
+   string matching.
 7. **Fused patterns are not extended.** Each phase names which fused patterns it makes
    obsolete and deletes them in the same change.
 
@@ -600,12 +648,15 @@ All implementation under this plan must preserve:
 
 ## 7. Non-Goals
 
-- Multi-shot continuations (same continuation called more than once): deferred to WB-3B.
+- Reentrant continuations: deferred; first support should be a deterministic
+  runtime error.
+- Implicit rollback of ordinary `mut`: out of scope. Branch-local/backtrackable
+  state requires an explicit future surface.
 - Record and constructor case patterns: language-expansion item, not backend-convergence.
 - Tuple multi-value unboxing: post-ABI-stability optimisation, not in any current phase.
 - Wasm GC proposal integration: not required for current value representation.
 - Browser Wasm target: current target is Wasmtime (WASI). Browser compatibility is a
   separate track.
 - Interpreter deletion: the interpreter remains as the reference semantics and fallback.
-- Effect polymorphism in Wasm: not in scope until WB-3 is proved correct for
+- Effect polymorphism in Wasm: not in scope until WB-4 is proved correct for
   monomorphic cases.

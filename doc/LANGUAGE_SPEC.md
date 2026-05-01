@@ -175,6 +175,9 @@ syntax/semantics.
       the lambda.
     - Multiple closures capturing the same `mut` binding share the same mutable cell and
       observe each other's writes.
+  - Ordinary `mut` is not branch-local state for effect continuations. It must not be
+    silently copied, rolled back, or given different observable behavior depending on
+    whether an implementation physically copies a continuation.
 
 ## 4. Type/Entry Rules
 
@@ -283,6 +286,12 @@ syntax/semantics.
   - when a handler invocation calls `resume` multiple times, each `resume` restarts the
     continuation from the next resumable point (multi-resume progression contract).
     - once the continuation is fully consumed, further `resume` from the same invocation is a runtime error.
+    - reentrant resume of a continuation that is already running is unsupported and
+      must report a runtime error.
+    - general multi-shot support must not silently clone or roll back ordinary
+      `mut` state. Until Goby has an explicit branch-local/backtrackable state
+      construct, implementations of general multi-shot continuations should
+      reject continuations that capture ordinary mutable locals.
 - Legacy syntax removed:
   - top-level `handler ... for ...`
   - `using`

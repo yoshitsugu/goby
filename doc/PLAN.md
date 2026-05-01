@@ -11,8 +11,8 @@ Notes:
 - `doc/LANGUAGE_SPEC.md` is the source of truth for current language
   syntax and semantics.
 - `PLAN.md` is the top-level roadmap and execution-planning document.
-- `doc/PLAN_IR.md` is the completed detailed roadmap for IR-lowering convergence and
-  remains the reference when new lowering-boundary issues appear.
+- `doc/PLAN_IR.md` is the detailed roadmap for IR-lowering convergence and
+  effect-runtime architecture.
 - When language syntax or semantics change, update
   `doc/LANGUAGE_SPEC.md` in the same change.
 - When language syntax changes, also verify whether syntax
@@ -406,7 +406,8 @@ Based on `examples/*.gb`:
 ## 3. Later-Phase Decisions
 
 - Module/package ecosystem and remote dependency management.
-- Advanced effects (async, state, cancellation, effect-safety diagnostics).
+- Advanced effects (multi-shot continuations, async, state, cancellation,
+  effect-safety diagnostics).
 - Potential explicit `discontinue` syntax as a clarity-focused effect-control extension
   (deferred; not part of current `resume` rollout).
 - Pattern matching exhaustiveness and advanced ADTs.
@@ -492,6 +493,45 @@ are parked for later so the initial CLI surface stays minimal.
   `StoreLimits` plumbing needs an abstraction; not worth designing
   before a concrete second embedder is in scope.
 
+### 3.3 Effect runtime redesign — lexical capabilities and multi-shot effects
+
+Goby's current compiled effect support is the one-shot tail-resumptive subset
+used by the stdlib iterator/string traversal paths. The long-term effect
+runtime should be designed around language semantics first, not around a single
+backend mechanism.
+
+Target direction:
+
+- effect operation calls resolve to lexical handler capabilities, not dynamic
+  handler-name search;
+- handler installation creates a stable prompt/capability boundary;
+- captured continuations are explicit runtime objects;
+- sequential multi-shot resume is a language goal;
+- continuation copy uses copy-on-shared-resume, integrated with Perceus
+  refcount/dup/drop rules;
+- the existing one-shot tail-resumptive path remains a fast path, not the
+  definition of effect semantics;
+- WasmFX/stack-switching remains a possible future emitter/runtime
+  optimization, not the canonical IR model.
+
+Mutation policy:
+
+- ordinary `mut` keeps its current semantics, including shared-cell behavior
+  when captured by closures;
+- multi-shot handlers must not silently copy or roll back ordinary `mut` state;
+- until an explicit branch-local/backtrackable state surface exists, any
+  multi-shot continuation that captures ordinary mutable locals should be
+  rejected by classification/lowering;
+- branch-local mutable state should be introduced later as an explicit
+  construct or API, separate from ordinary `mut` and any future explicit
+  shared `Cell` / `Ref` surface.
+
+Implementation should start with classification and rejection behavior before
+any Wasm emission work. The first useful slice is a richer handler-use
+classifier that distinguishes at least direct one-shot, abortive, delayed
+one-shot, multi-shot, reentrant-looking, and multi-shot-with-mutable-capture
+shapes.
+
 ## 4. Next Phase Plan
 
 Post-MVP work focuses on reducing fallback-runtime special cases and making
@@ -499,14 +539,15 @@ execution paths more predictable.
 
 Priority rule:
 
-- IR-lowering completion and IR-boundary redesign work is tracked as completed in
+- IR-lowering completion and effect-runtime redesign work are tracked in
   `doc/PLAN_IR.md`; use it as the architectural reference for follow-up work.
-- WB-3B is explicitly on hold:
-  - in-repo preparation work is complete enough for now; see `doc/PLAN_IR.md`.
-  - restart only when both of the following are true:
-    - WebAssembly stack switching has reached Phase 4 (or equivalent standardization readiness).
-    - the local toolchain (`wasm-encoder` plus runtime support such as Wasmtime on required ISAs)
-      can emit/validate/run the needed WasmFX instructions honestly.
+- WB-4 effect-runtime work supersedes the old WB-3B/WasmFX-only plan:
+  - start with handler classification, lexical target metadata, and rejection
+    of unsupported multi-shot mutable-capture shapes;
+  - treat WasmFX as an optional future emitter after the semantics and lower
+    control IR are stable;
+  - do not make ordinary `mut` semantics depend on whether a continuation is
+    physically copied.
 - active backend/runtime work should prefer unblocking itself by improving shared IR and
   AST-to-IR lowering rather than by adding more source-shape-specific recognizers.
 - when there is tension between a local unblock and the long-term IR architecture,
@@ -974,8 +1015,9 @@ These items are intentionally kept as short placeholders until they become activ
 ### Still Open (Post-MVP)
 
 - Effects/handlers: lexical nearest-handler runtime semantics are active; post-MVP work is to move from interpreter/runtime lookup to compiled `EffectId`/`OpId` tables.
-- Effects/handlers (`resume` follow-up): tighten multi-shot static analysis beyond
-  the current conservative "multiple syntactic `resume`" rejection.
+- Effects/handlers (`resume` follow-up): add WB-4 classification for
+  reentrant-looking resumes, delayed one-shot resumes, sequential multi-shot
+  resumes, and multi-shot continuations that capture ordinary mutable locals.
 - Effects/handlers (`resume` extension): evaluate explicit `discontinue` syntax
   as a separate language-design proposal.
 - Effect namespace rules: qualified vs unqualified calls, unhandled-effect diagnostics format.
@@ -998,8 +1040,10 @@ These items are intentionally kept as short placeholders until they become activ
   - <https://arxiv.org/abs/2104.00250>
 - Effect Handlers, Evidently (Xie and Leijen): evidence-passing translation strategy for efficient handlers.
   - <https://arxiv.org/abs/2106.00160>
-- WasmFX: Typed Continuations and Stack Switching for WebAssembly (Hillerstrom et al., ICFP 2024): practical path for direct-style effect handlers on Wasm backends.
+- WasmFX: Typed Continuations and Stack Switching for WebAssembly (Hillerstrom et al., ICFP 2024): possible future emitter/runtime path for direct-style effect handlers on Wasm backends.
   - <https://arxiv.org/abs/2403.01036>
+- Lexical Effect Handlers, Directly (Ma, Ge, Lee, Zhang, OOPSLA 2024): prompt/capability direction for lexical handler lookup.
+- Multiple Resumptions and Local Mutable State, Directly (Muhcu, Schuster, Steuwer, Brachthaeuser, ICFP 2025): reference point for multi-shot continuations and mutable-state design tradeoffs.
 
 ## 7. Stdlib Design Policy and Normalization Plan
 
