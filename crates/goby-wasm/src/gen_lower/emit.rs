@@ -3738,6 +3738,7 @@ fn emit_update_heap_floor_from_buffer(
         PtrWidth::W64 => &Instruction::I64And,
     });
     function.instruction(&Instruction::LocalSet(heap_floor_local));
+    emit_clamp_heap_floor_to_host_bump_cursor(function, heap_floor_local, pw);
 }
 
 fn emit_update_heap_floor_from_local_len(
@@ -3758,6 +3759,7 @@ fn emit_update_heap_floor_from_local_len(
         PtrWidth::W64 => &Instruction::I64And,
     });
     function.instruction(&Instruction::LocalSet(heap_floor_local));
+    emit_clamp_heap_floor_to_host_bump_cursor(function, heap_floor_local, pw);
 }
 
 fn emit_clamp_heap_floor_to_host_bump_cursor(

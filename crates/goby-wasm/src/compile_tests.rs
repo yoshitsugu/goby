@@ -3170,6 +3170,167 @@ main =
     assert_valid_wasm_module(&wasm);
 }
 
+fn assert_host_heap_floor_clamped_before_host_intrinsic(source: &str, stdin: &str) {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use wasmtime::{Config, Engine, Extern, Linker, Module as WasmModule, Store};
+    use wasmtime_wasi::WasiCtxBuilder;
+    use wasmtime_wasi::p1::{self, WasiP1Ctx};
+    use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
+
+    let module = parse_module(source).expect("source should parse");
+    let wasm = compile_module(&module).expect("module should compile");
+    assert_valid_wasm_module(&wasm);
+
+    let mut config = Config::new();
+    config.wasm_memory64(true);
+    let engine = Engine::new(&config).expect("engine");
+    let wasm_module = WasmModule::from_binary(&engine, &wasm).expect("parse wasm");
+    let wasi_ctx = WasiCtxBuilder::new()
+        .stdin(MemoryInputPipe::new(stdin.to_owned()))
+        .stdout(MemoryOutputPipe::new(4096))
+        .build_p1();
+    let mut store = Store::new(&engine, wasi_ctx);
+    let mut linker: Linker<WasiP1Ctx> = Linker::new(&engine);
+    p1::add_to_linker_sync(&mut linker, |t| t).expect("wasi linker");
+
+    let module_name = crate::host_runtime::HostIntrinsicImport::MODULE;
+    let saw_host_intrinsic = Arc::new(AtomicBool::new(false));
+    let saw_regressed_floor = Arc::new(AtomicBool::new(false));
+    fn observe_heap_floor(
+        caller: &mut wasmtime::Caller<'_, WasiP1Ctx>,
+        saw_regressed_floor: &AtomicBool,
+    ) {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return;
+        };
+        let mut floor_bytes = [0u8; 4];
+        let mut host_bump_bytes = [0u8; 4];
+        if memory
+            .read(
+                &caller,
+                crate::layout::GLOBAL_HEAP_FLOOR_OFFSET as usize,
+                &mut floor_bytes,
+            )
+            .is_err()
+            || memory
+                .read(
+                    &caller,
+                    crate::layout::GLOBAL_HOST_BUMP_CURSOR_OFFSET as usize,
+                    &mut host_bump_bytes,
+                )
+                .is_err()
+        {
+            return;
+        }
+        let floor = u32::from_le_bytes(floor_bytes);
+        let host_bump = u32::from_le_bytes(host_bump_bytes);
+        if floor < host_bump {
+            saw_regressed_floor.store(true, Ordering::SeqCst);
+        }
+    }
+
+    linker
+        .func_wrap(module_name, "__goby_value_to_string", |_: i64| -> i64 { 0 })
+        .expect("register value_to_string");
+    linker
+        .func_wrap(
+            module_name,
+            "__goby_string_each_grapheme_count",
+            |_: i64| -> i64 { 0 },
+        )
+        .expect("register grapheme_count");
+    linker
+        .func_wrap(
+            module_name,
+            "__goby_string_each_grapheme_state",
+            |_: i64, _: i64| -> i64 { 0 },
+        )
+        .expect("register grapheme_state");
+    linker
+        .func_wrap(module_name, "__goby_string_concat", {
+            let saw_host_intrinsic = Arc::clone(&saw_host_intrinsic);
+            let saw_regressed_floor = Arc::clone(&saw_regressed_floor);
+            move |mut caller: wasmtime::Caller<'_, WasiP1Ctx>, _: i64, _: i64| -> i64 {
+                saw_host_intrinsic.store(true, Ordering::SeqCst);
+                observe_heap_floor(&mut caller, &saw_regressed_floor);
+                0
+            }
+        })
+        .expect("register string_concat");
+    linker
+        .func_wrap(
+            module_name,
+            "__goby_list_join_string",
+            |_: i64, _: i64| -> i64 { 0 },
+        )
+        .expect("register list_join_string");
+    linker
+        .func_wrap(module_name, "__goby_string_split_lines", |_: i64| -> i64 {
+            0
+        })
+        .expect("register split_lines");
+
+    let saw_host_intrinsic_for_graphemes = Arc::clone(&saw_host_intrinsic);
+    let saw_regressed_floor_for_host = Arc::clone(&saw_regressed_floor);
+    linker
+        .func_wrap(
+            module_name,
+            "__goby_string_graphemes_list",
+            move |mut caller: wasmtime::Caller<'_, WasiP1Ctx>, _: i64| -> i64 {
+                saw_host_intrinsic_for_graphemes.store(true, Ordering::SeqCst);
+                observe_heap_floor(&mut caller, &saw_regressed_floor_for_host);
+                0
+            },
+        )
+        .expect("register graphemes_list");
+
+    let instance = linker
+        .instantiate(&mut store, &wasm_module)
+        .expect("instantiate");
+    let memory = instance
+        .get_memory(&mut store, "memory")
+        .expect("memory export");
+    let host_bump = crate::memory_config::RUNTIME_MEMORY_CONFIG.host_bump_start();
+    memory
+        .write(
+            &mut store,
+            crate::layout::GLOBAL_HOST_BUMP_CURSOR_OFFSET as usize,
+            &host_bump.to_le_bytes(),
+        )
+        .expect("init host bump");
+
+    let start = instance
+        .get_typed_func::<(), ()>(&mut store, "_start")
+        .expect("_start export");
+    start.call(&mut store, ()).expect("_start call");
+
+    assert!(
+        saw_host_intrinsic.load(Ordering::SeqCst),
+        "program should call a checked host intrinsic"
+    );
+    assert!(
+        !saw_regressed_floor.load(Ordering::SeqCst),
+        "read-side heap floor update must not let host calls observe floor below host bump cursor"
+    );
+}
+
+#[test]
+fn read_then_empty_split_keeps_heap_floor_at_or_above_host_bump() {
+    let source = r#"
+import goby/string ( split )
+
+main : Unit -> Unit can Read
+main =
+  text = read()
+  _parts = split text ""
+  ()
+"#;
+    assert_host_heap_floor_clamped_before_host_intrinsic(source, "abc");
+}
+
 // ---------------------------------------------------------------------------
 // Plain read+print parity: programs previously handled by handwritten runtime-I/O plans must
 // produce valid Wasm through the general lowering path.
