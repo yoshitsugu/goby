@@ -1366,6 +1366,35 @@ main =
 }
 
 #[test]
+fn list_append_concatenates_lists_and_preserves_inputs() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/int as int
+import goby/list (append, length)
+
+main : Unit -> Unit can Print
+main =
+  xs = [1, 2]
+  ys = [3, 4]
+  zs = append xs ys
+  print (int.to_string (length xs))
+  print (int.to_string (length ys))
+  print (int.to_string (length zs))
+  print (int.to_string zs[0])
+  print (int.to_string zs[3])
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let typed = assert_mode_parity(&module, "list.append");
+    assert_eq!(typed.stdout.as_deref(), Some("22414"));
+    assert_eq!(typed.runtime_error_kind, None);
+
+    let wasm = crate::compile_module(&module).expect("list.append should compile");
+    let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+        .expect("list.append wasm should execute");
+    assert_eq!(output, "22414");
+}
+
+#[test]
 fn list_join_single_element_returns_element_without_sep() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"

@@ -1,0 +1,7 @@
+import goby/int as int
+import goby/list (append, each)
+
+main : Unit -> Unit can Print
+main =
+  xs = append [1, 2] [3, 4]
+  each xs (fn x -> println (int.to_string x))

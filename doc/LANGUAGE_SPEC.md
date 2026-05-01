@@ -356,6 +356,10 @@ syntax/semantics.
       the end.
     - copies the existing list contents into the returned list; the input list is
       unchanged.
+  - `append : List a -> List a -> List a`
+    - immutable list concatenation: returns a new list containing the first list's
+      elements followed by the second list's elements.
+    - the input lists are unchanged.
   - `get : List a -> Int -> a`
     - returns the element at zero-based index i.
     - negative or out-of-bounds index aborts the program.

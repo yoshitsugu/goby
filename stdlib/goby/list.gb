@@ -18,6 +18,10 @@ length xs = __goby_list_length xs
 push : List a -> a -> List a
 push xs v = __goby_list_concat xs [v]
 
+# Concatenates two lists and returns a new list.
+append : List a -> List a -> List a
+append xs ys = __goby_list_concat xs ys
+
 # Left fold. The callback receives the accumulator first: f acc elem.
 fold : List a -> b -> (b -> a -> b) -> b
 fold xs acc f = __goby_list_fold xs acc f
