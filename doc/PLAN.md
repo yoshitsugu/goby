@@ -1344,11 +1344,44 @@ Follow-up closure (M9, 2026-04-14):
 - Status: completed. The explicit-boundary story is now aligned for current
   `List` and `string` traversal surfaces.
 
-#### Step 3 (future): Stdlib as an integration test suite
+#### Step 3 (future): Goby-native stdlib test support
 
-- Add a test runner that compiles and executes every function in stdlib with
-  representative inputs, comparing output against expected values.
-- This makes stdlib regressions immediately visible when the compiler changes.
+Stdlib tests should be written in Goby source wherever possible, not primarily
+as Rust strings embedded in compiler/runtime unit tests. This keeps stdlib
+behavior close to the language surface it exposes and lets the stdlib double as
+a user-facing example of how Goby programs test Goby code.
+
+Reference shape: Gleam's default test flow is source-first. `gleam test` runs a
+test module entrypoint, and the standard generated setup calls `gleeunit.main()`;
+`gleeunit` then discovers public functions in `test/` whose names end in
+`_test` and treats panics/assertion failures as test failures. The runner is a
+tooling convention layered on ordinary Gleam modules rather than a separate
+Rust-side fixture format.
+
+Goby should follow the same product shape, adapted to current language
+capabilities:
+
+- add `goby test`, initially scoped to repository/local package tests.
+- discover `.gb` files under `test/` or `tests/`.
+- run an ordinary Goby entrypoint per test module, with a conventional stdlib
+  runner module such as `goby/test`.
+- support a naming convention such as top-level functions ending in `_test`,
+  but implement discovery through the Goby test runner contract rather than
+  hard-coding stdlib function-specific Rust cases.
+- provide a small assertion surface in Goby, for example `assert.equal`,
+  `assert.true`, and `assert.fail`, with diagnostics that report the test module
+  and test function name.
+- allow stdlib regression tests to live beside the language surface, e.g.
+  `test/goby/list_test.gb`, importing `goby/list` and checking `append`, `push`,
+  `map`, `fold`, `set`, etc. through normal calls.
+- keep Rust integration tests for backend/runtime invariants that cannot yet be
+  expressed in Goby, but prefer Goby-native tests for public stdlib behavior.
+- include stdlib Goby tests in the quality gate once the runner is stable:
+  `cargo fmt`, `cargo check`, `cargo test`, and `goby test`.
+
+This makes stdlib regressions immediately visible when the compiler changes
+while also exercising the same import, typecheck, lowering, and execution paths
+that users rely on.
 
 ### 7.5 Risks
 
