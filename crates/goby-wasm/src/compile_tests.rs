@@ -4037,17 +4037,16 @@ fn cross_call_reuse_hidden_param_increments_reuse_hits() {
     );
 }
 
-/// PLAN_PERCEUS §M5 correctness checklist: a unique allocation followed by
-/// `DropReuse → AllocReuse` of the same size class must hit the reuse fast
-/// path — `reuse_hits` increments and `peak_bytes` integrity holds (the
-/// reuse path must not call `alloc_from_top`, so total_bytes equals
-/// exactly one allocation worth, not two).
+/// A unique allocation followed by `DropReuse → AllocReuse` of the same size
+/// class must hit the reuse fast path — `reuse_hits` increments and
+/// `peak_bytes` integrity holds (the reuse path must not call
+/// `alloc_from_top`, so total_bytes equals exactly one allocation worth, not
+/// two).
 ///
 /// Uses `Tuple(2)` rather than `ListLit` so that the assertion is not
-/// confounded by the per-allocation chunk bump (M5 reuses only the list
-/// header, which §7.0 of PLAN_PERCEUS notes leaves chunk_alloc_size on
-/// every list AllocReuse). Tuple/Record are §3.2's other reuse classes
-/// and exercise the same `emit_alloc_reuse_payload` write-back.
+/// confounded by the per-allocation chunk bump; list `AllocReuse` reuses the
+/// header while still allocating chunks. Tuple/Record exercise the same
+/// `emit_alloc_reuse_payload` write-back without that extra chunk allocation.
 #[test]
 fn reuse_fires_on_unique_list_update() {
     use crate::gen_lower::backend_ir::{BackendAllocInit, WasmBackendInstr as I};
@@ -4176,10 +4175,10 @@ fn reuse_fires_on_unique_list_update() {
     );
 }
 
-/// PLAN_PERCEUS §M5 correctness checklist: when the dropped allocation is
-/// shared (refcount > 1), `drop_reuse` must yield a null token and
-/// `alloc_reuse` must fall through to a fresh allocation. `reuse_hits` stays
-/// at 0 and `peak_bytes` grows by a second allocation worth.
+/// When the dropped allocation is shared (refcount > 1), `drop_reuse` must
+/// yield a null token and `alloc_reuse` must fall through to a fresh
+/// allocation. `reuse_hits` stays at 0 and `peak_bytes` grows by a second
+/// allocation worth.
 #[test]
 fn reuse_falls_through_when_shared() {
     use crate::gen_lower::backend_ir::{BackendAllocInit, WasmBackendInstr as I};
@@ -4337,14 +4336,12 @@ fn reuse_falls_through_when_shared() {
     );
 }
 
-/// PLAN_PERCEUS §M5 correctness checklist: §3.7.1 cross-call reuse — a tail
-/// `Call` whose callee carries a hidden trailing reuse-token parameter must
-/// receive the caller's `DropReuse` token and recycle the callee's first
-/// allocation.
+/// Cross-call reuse: a tail `Call` whose callee carries a hidden trailing
+/// reuse-token parameter must receive the caller's `DropReuse` token and
+/// recycle the callee's first allocation.
 ///
 /// This test mirrors `cross_call_reuse_hidden_param_increments_reuse_hits`
-/// (kept for git history) under the PLAN-normative test name so the §M5
-/// checklist line ("tail_call_reuse_passes_token") has a 1:1 mapping.
+/// under the durable test name `tail_call_reuse_passes_token`.
 #[test]
 fn tail_call_reuse_passes_token() {
     use crate::gen_lower::backend_ir::{BackendAllocInit, WasmBackendInstr as I};

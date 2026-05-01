@@ -22,8 +22,8 @@ Resolved bugs:
 
   Result was `E-MEMORY-EXHAUSTION`. The failure also reproduced with a
   138×138 all-`.` grid and with the default 1 GiB module ceiling, so the
-  current 6×10 baseline fixture and 20×20 focused compile test do not cover
-  the intended acceptance condition from `doc/PLAN_PERCEUS.md`.
+  current 6×10 baseline fixture and 20×20 focused compile test did not cover
+  the intended Perceus acceptance condition.
 
   Initial reduction:
 

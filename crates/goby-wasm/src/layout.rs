@@ -45,7 +45,7 @@ pub(crate) const GLOBAL_REUSE_HITS_OFFSET: u32 = 64;
 // word lives at payload_ptr - 8 (the refcount slot, reused as next-pointer
 // when the object is on the free list).
 //
-// Size-class layout (§3.2 of PLAN_PERCEUS.md):
+// Perceus size-class free-list layout:
 //
 //   Slot  Offset  Class
 //   0     72      chunk            (one fixed size per CHUNK_SIZE)

@@ -1503,9 +1503,9 @@ mod tests {
         );
     }
 
-    /// PLAN_PERCEUS §M5 correctness checklist: reuse must not cross a
-    /// `PerformEffect` block terminator. The dropped `old` lives across an
-    /// effect call; the following allocation must remain a plain alloc.
+    /// Reuse must not cross a `PerformEffect` block terminator. The dropped
+    /// `old` lives across an effect call; the following allocation must remain
+    /// a plain alloc.
     #[test]
     fn reuse_not_across_perform_effect() {
         let decl = IrDecl {
@@ -1561,10 +1561,9 @@ mod tests {
         );
     }
 
-    /// PLAN_PERCEUS §M5 correctness checklist: reuse must not cross a
-    /// `WithHandler` boundary. A `Drop` followed by a `WithHandler`-wrapped
-    /// allocation must remain a plain alloc — the handler installation is a
-    /// block terminator under §3.7.
+    /// Reuse must not cross a `WithHandler` boundary. A `Drop` followed by a
+    /// `WithHandler`-wrapped allocation must remain a plain alloc because the
+    /// handler installation is a block terminator for reuse pairing.
     #[test]
     fn reuse_not_across_with_handler() {
         let decl = IrDecl {

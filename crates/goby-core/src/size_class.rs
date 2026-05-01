@@ -1,9 +1,9 @@
 //! Perceus size-class enumeration (shared IR-level).
 //!
-//! Mirrors the normative §3.2 table in `doc/PLAN_PERCEUS.md`. Lives in
-//! `goby-core` so that the shared IR (in particular `CompExpr::AllocReuse`)
-//! and both backends can agree on a single classification. Backends are free
-//! to layer their own per-class slot/bucket arithmetic on top — see
+//! Lives in `goby-core` so that the shared IR (in particular
+//! `CompExpr::AllocReuse`) and both backends can agree on a single
+//! classification. Backends are free to layer their own per-class
+//! slot/bucket arithmetic on top — see
 //! `goby-wasm/src/size_class.rs` for the Wasm free-list slot mapping.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -26,7 +26,7 @@ pub enum SizeClass {
     Large,
 }
 
-/// Legal bucket values for `SizeClass::String`, mirroring §3.2's 8..=512 byte
+/// Legal bucket values for `SizeClass::String`, covering the 8..=512 byte
 /// buckets. Kept in sync with the backend's string bucketing (see
 /// `goby-wasm/src/size_class.rs`).
 pub const STRING_BUCKETS: [u32; 7] = [8, 16, 32, 64, 128, 256, 512];
@@ -69,10 +69,10 @@ impl SizeClass {
         }
     }
 
-    /// Returns true when this value is one of the §3.2 legal classes. Used as
-    /// a validator when a `SizeClass` is constructed directly (for instance
-    /// inside `CompExpr::AllocReuse` emitted by later passes) rather than via
-    /// `for_*` helpers.
+    /// Returns true when this value is one of the legal reusable classes.
+    /// Used as a validator when a `SizeClass` is constructed directly (for
+    /// instance inside `CompExpr::AllocReuse` emitted by later passes) rather
+    /// than via `for_*` helpers.
     pub fn is_valid(self) -> bool {
         match self {
             SizeClass::Chunk | SizeClass::Cell | SizeClass::Large => true,

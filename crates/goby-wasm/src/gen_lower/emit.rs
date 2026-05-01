@@ -5316,7 +5316,7 @@ fn emit_alloc_reuse(
     Ok(())
 }
 
-// Every heap object is preceded by an 8-byte refcount word (§3.1 of PLAN_PERCEUS.md).
+// Every heap object is preceded by an 8-byte refcount word.
 // Goby is memory64-only, so the header is always 8 bytes regardless of PtrWidth.
 const REFCOUNT_WORD_BYTES: u64 = 8;
 
@@ -5897,7 +5897,7 @@ fn emit_goby_dup_function(code: &mut CodeSection, pw: PtrWidth) {
 ///  - others: no child-drop, no free-list.
 ///
 /// W32-only fallback: refcount decrement + Cell free-list push only; no recursive child-drop.
-/// Child-drop for List/Tuple is not extended for W32 (PLAN_PERCEUS §3.11).
+/// Child-drop for List/Tuple is not extended for W32.
 fn emit_goby_drop_function_w32(code: &mut CodeSection) {
     let pw = PtrWidth::W32;
     let tagged_ptr: u32 = 0;
@@ -6058,7 +6058,7 @@ fn emit_goby_drop_function(
     self_func_idx: u32,
 ) {
     // W32 uses the legacy implementation (refcount decrement only; child-drop not extended for W32
-    // per PLAN_PERCEUS §3.11: "W32 remains only where prior code still produces it").
+    // W32 remains only where prior code still produces it.
     if pw == PtrWidth::W32 {
         emit_goby_drop_function_w32(code);
         return;

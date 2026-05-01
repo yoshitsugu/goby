@@ -1,12 +1,13 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-04-30 (Perceus M10 IR boundary fixed; M11 138x138
-driver resolved)
+Last updated: 2026-05-01 (Perceus plan closed and removed)
 
 ## Current Focus
 
 Perceus M10's reopened IR boundary and the M11 138x138 memory
-exhaustion are now fixed:
+exhaustion are fixed. The temporary Perceus execution plan is closed
+and removed; durable state now lives in `doc/PLAN.md` §4.2,
+`doc/BUGS.md`, and the regression tests.
 
 - `return_ownership_value` now distinguishes immutable `Let` parents
   from `LetMut` parents for local-shadowed `GlobalRef` field
@@ -260,8 +261,8 @@ fix. Two independent fixes were identified:
    `recursive_multi_part_interpolated_print_after_graphemes_executes`.
    This was unblocked from (1) and is the originally-scoped M10 work.
 
-PLAN_PERCEUS §4.100 now closes on (2) plus the regression net; (1)
-belongs in **M11 — host-intrinsic allocator unification**.
+The former Perceus M10 scope closes on (2) plus the regression net; (1)
+landed as M11 host-intrinsic allocator unification.
 
 ## Verification status
 
@@ -322,12 +323,7 @@ Green after this session:
 
 ## Next Step
 
-Next verification target: rerun the repository quality gate after any
-additional cleanup, then return to the remaining tracks in
-`doc/PLAN.md`.
-
-After M11 fully closes, return to other active tracks (`doc/PLAN.md`
-§4):
+Return to other active tracks (`doc/PLAN.md` §4):
 
 - Track D: `goby lint` (unused binding, shadowed effect op).
 - Track OOB: list index out-of-bounds error messages.

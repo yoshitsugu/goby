@@ -12,7 +12,7 @@ use crate::layout::{
     FREE_LIST_SLOT_TUPLE_BASE,
 };
 
-/// Normative size classes from §3.2 of PLAN_PERCEUS.md.
+/// Stable Perceus size classes shared with the core IR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SizeClass {
     /// List chunks — one fixed size: `CHUNK_SIZE * 8 + meta`.

@@ -2188,8 +2188,8 @@ fn insert_drop_at_tail(
             let name_in_args = args.iter().any(|a| value_mentions_name(a, name));
             if name_in_callee {
                 // C3 is not preserved because indirect tail calls are not
-                // implemented; this is intentional per PLAN_PERCEUS §4.100
-                // Step 2.
+                // implemented; only direct Var callee tail calls are kept in
+                // tail position.
                 wrap_after_expr(body, &mut next_tmp)
             } else if name_in_args && callee_can_lower_to_tail_decl_call(callee) {
                 let name_in_owned_arg = args.iter().enumerate().any(|(idx, arg)| {
@@ -4521,11 +4521,10 @@ mod tests {
     }
 
     // -------------------------------------------------------------------
-    // M10 §4.100 Step 1 — `classify_decl_return_ownership` soundness gate
+    // M10 `classify_decl_return_ownership` soundness gate
     //
-    // The shapes mirror the spec block in PLAN_PERCEUS §4.100 Step 1
-    // "Soundness gate". Each test names *why* the expected class is what
-    // it is, so future readers can see the rule under examination.
+    // Each test names why the expected class is what it is, so future
+    // readers can see the rule under examination.
     // -------------------------------------------------------------------
 
     fn list_int_ty() -> IrType {

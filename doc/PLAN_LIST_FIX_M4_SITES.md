@@ -135,4 +135,4 @@ preserved as-is after M4.
 
 Archive note (2026-04-18):
 - This inventory is complete and now serves as the historical checklist for the
-  memory64 migration that unblocks `doc/PLAN_PERCEUS.md` M0.
+  memory64 migration that later unblocked Perceus refcount/reuse work.

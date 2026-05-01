@@ -541,158 +541,53 @@ Output format: human-readable (default) and JSON lines (`--json`).
   and Neovim/Vim syntax files.
 - **D6b-ts: Tree-sitter grammar** — defer until after D6c.
 
-### 4.2 Active Track E: Perceus memory management
+### 4.2 Completed Track E: Perceus memory management
 
-- `doc/PLAN_PERCEUS.md` is the execution plan that replaced the bump-only
-  allocator with refcount + reuse. M0–M7 are complete.
-- M0 is complete as of 2026-04-18:
-  - memory64 migration is complete,
-  - `doc/BUGS.md` has no open allocator/tag-layout blockers,
-  - `doc/STATE.md` records the plan as unblocked.
-- M1 groundwork landed in `bdf7d327` (closed-literal detection in shared IR,
-  static literal hoisting in the Wasm emitter, normative example and parse
-  test). The `^` operator prerequisite (§4.2.1) is **complete**.
-- M1 acceptance harness is now **complete**: `refcount_reuse_loop_example_compiles`
-  is un-ignored and passes. Root cause of the previous stack-overflow/hang was
-  a missing gate condition in `gen_lower/mod.rs` — modules with non-main
-  user-defined declarations were incorrectly routed to the interpreter fallback
-  instead of the general-lower path.
-- M2–M4.5 complete (2026-04-22): refcount emission, free-list, ownership
-  classification (`Owned` / `Borrowed`), drop insertion, conservative borrow
-  inference with branch balancing, and `alloc_baseline.txt` regression gate.
-- M5 Steps 1–9 complete (2026-04-25): `SizeClass` IR, `DropReuse` /
-  `AllocReuse` / `AllocInit` nodes, intra-block `Drop → alloc` pairing,
-  tail-call cross-call reuse IR pass (`Call.reuse_token` /
-  `IrDecl.reuse_param`), `reuse_hits` counter, and the wasm ABI wiring
-  (hidden trailing `i64` param + `emit_alloc_reuse` payload-only reuse).
-  The runtime test `cross_call_reuse_hidden_param_increments_reuse_hits`
-  proves cross-call reuse fires at the wasm layer.
-- M5 Step 10 complete (2026-04-25): the §3.3 `alloc_reuse` / `drop_reuse`
-  semantics ship inline (helper-function extraction is deferred to M7
-  since it does not move the budget). Five correctness tests landed —
-  `reuse_not_across_perform_effect` and `reuse_not_across_with_handler`
-  in `goby-core/perceus_reuse.rs`, plus
-  `reuse_fires_on_unique_list_update`, `reuse_falls_through_when_shared`,
-  and `tail_call_reuse_passes_token` in `goby-wasm/compile_tests.rs`.
-  The two wasm reuse-path tests use `Tuple(2)` rather than list lits so
-  the assertion is not confounded by the per-allocation chunk bump that
-  M5 list `AllocReuse` still performs (§7.0).
-- M6 complete (2026-04-26): `mut ys = xs; ys[i] := v` AssignIndex reuse
-  lands end-to-end. `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb` now reports
-  `total_bytes=108704 reuse_hits=5000`, below the `< 200 KiB` budget.
-  Steps 7-a / 7-a.5 (Owned-param seed + borrowed intrinsic model),
-  7-b (re-measure), 7-c (build/fold specialized lowering), and 7-d
-  (assertion un-ignore) all landed. `doc/PLAN_PERCEUS.md` §M6 is closed.
-- M7 complete (2026-04-26): documentation and code comments updated to
-  reflect the refcount + free-list model as the steady state. "bump-only
-  allocator" wording removed from active descriptions. `doc/PLAN_PERCEUS.md`
-  §M7 closed.
-- **M8 complete (2026-04-27).** Real-world driver shape (read-only
-  borrow of the same list before the mutating helper call) now fires
-  Perceus reuse. The BUGS.md repro is covered by
-  `compile_tests::perceus_real_world_driver_borrow_then_update_reuses_and_frees`
-  and reports `reuse_hits=200`, `total_bytes=37016` at the focused
-  scale. The fix keeps the `LetMut`-no-`bind_alias` invariant, resolves
-  known `Var` callees for borrowed-call classification, carries reuse
-  metadata into lambda callback bodies, and wraps cell-promoted `each`
-  roots with `drop_reuse` / `alloc_reuse(Retain)`.
-- **M9 partially complete (2026-04-28).** Opened when the full
-  real-world driver (many helpers, tail-recursive `check`, multiple
-  intermediate lists per round) still exhausted memory on a 138×138
-  grid. Stopgaps 3a (`type_is_known_heap` DI-1 stopgap) and 3c
-  (cell-promoted `each` reuse) landed in `d7c4092`, but the root
-  causes (DI-1 return ownership not reaching IR, DI-2 tail drops
-  demoting tail calls) remained open. M9 acceptance tests partially
-  red; rolled into M10.
-- **M10 reopened (2026-04-30 recheck).** The focused M10 fixes landed, but the
-  original 138×138 real-world driver acceptance shape is still red. The
-  committed 6×10 `alloc-baseline/real_world_driver.gb` fixture and 20×20
-  focused compile test are too small to prove closure. Recheck found
-  `E-MEMORY-EXHAUSTION` for the stdin-based 138×138 driver under
-  `--max-memory-mb 256` and at the default 1 GiB ceiling; a reduced
-  `list.map lines graphemes` shape over 138 input lines also fails.
-  Next work: automate the 138×138 repro, reduce/fix read-lines/graphemes/list-map
-  allocation behavior, then re-close M10 only after the full driver is green.
-- **M10 focused fixes (2026-04-30).** Attempted to close M9 by fixing both design
-  issues:
-  - **DI-1:** `classify_decl_return_ownership` infers `Owned` vs
-    `Borrowed` from a declaration's body IR and seeds call-site
-    ownership before `drop_insert`. Replaces the M9 3a
-    `type_is_known_heap` stopgap.
-  - **DI-2:** `insert_drop_at_tail` preserves tail-call shape for
-    direct `Var` callee calls (C2) via pre-call `Dup/Drop`, keeps
-    conservative temp-wrap for `GlobalRef`/intrinsics/indirect (C3).
-  - **Conditional `list.map` ownership:** `__goby_list_map` results
-    are `Owned` only when the callback is proven owned-returning.
-  - **`ListGet` projection-borrow liveness:** parent list stays live
-    while a projected child reference is live.
-  Focused acceptance:
-  `perceus_real_world_driver_drops_intermediates_and_reuses_per_round`
-  passes; `alloc-baseline/real_world_driver.gb` ceiling `150049`.
-  This is not sufficient for Track E closure.
+Track E is complete. The temporary Perceus execution plan has been removed;
+this section keeps the durable state and reopen conditions.
 
-- **M6 Step 5 (`stdlib/goby/list.gb` `set` reuse rewrite) — won't-fix.**
-  Not on the acceptance path (the 200 KiB budget was met without it via
-  Step 7-a/7-c). Re-open only if `list.set` becomes a measured hotspot,
-  or if `WasmBackendInstr` gains an if/else control-flow primitive for an
-  unrelated reason. Re-opening requires:
-  (1) `lower_assign_index_reuse` to branch at runtime on the
-  `RefCountDropReuse` token (token != 0 → current `ListSetInPlace` +
-  `AllocReuse(Retain)`; token == 0 → `ListSet` path-copy);
-  (2) redefining `BackendAllocInit::Retain` so the token == 0 fallback
-  path either copies the payload or is statically excluded;
-  (3) keeping the `LetMut`-no-`bind_alias` invariant (`perceus.rs:306`)
-  intact — adding `bind_alias` to `LetMut` lights up reuse on shared
-  `xs`, which the current static rc==1 proof cannot guarantee for
-  `set xs i v` callers.
+What shipped:
 
-#### 4.2.1 Perceus M1 prerequisite: bitwise XOR (`^`) operator — complete
+- Goby's Wasm runtime now uses Perceus-style refcounting plus reuse analysis
+  instead of the previous bump-only heap discipline.
+- Static drop insertion, borrow inference, free-list recycling, intra-block
+  reuse, cross-call tail reuse, and `mut ys = xs; ys[i] := v` AssignIndex
+  reuse are implemented.
+- The acceptance fixture
+  `crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb`
+  stays below the 200 KiB allocation budget.
+- The full 138x138 real-world-driver shape and the reduced
+  `read_lines () -> list.map graphemes` shape run under the 256 MiB test
+  ceiling.
+- Host imports that return escaping Goby strings/lists allocate through the
+  refcounted heap and update allocation stats, so generated Wasm can drop
+  host-created values through the same ownership model.
 
-TODO (tooling follow-up): extend the syntax-highlight definitions under
-`tooling/` (`vim/syntax/goby.vim`, `nvim/syntax/goby.vim`,
-`emacs/goby-mode.el`, `vscode-goby/syntaxes/goby.tmLanguage.json`,
-`syntax/textmate/goby.tmLanguage.json`, and
-`syntax/testdata/highlight_sample.gb`) to recognize `^` as an operator.
-Deferred from this slice, which landed only the compiler pipeline; handle
-either alongside Perceus M1 proper or as a standalone tooling slice.
+Durable design points:
 
-The M1 goal program (`crates/goby-wasm/tests/fixtures/alloc-baseline/refcount_reuse_loop.gb`, normative per
-`doc/PLAN_PERCEUS.md` §1.1) uses `acc ^ x` inside `xor_fold`. `^` is
-currently unimplemented end-to-end (no token in the parser, no variant in
-`BinOpKind` / `IrBinOp`, no Wasm emission path). Because the normative
-source must not be rewritten, this slice must land before the M1 checksum
-harness can be enabled.
+- Heap objects carry an 8-byte refcount word immediately before the payload.
+- Static heap values use the all-ones refcount sentinel.
+- Size classes are defined in `crates/goby-core/src/size_class.rs` and mapped
+  to Wasm free-list slots in `crates/goby-wasm/src/size_class.rs` and
+  `crates/goby-wasm/src/layout.rs`.
+- `Large` allocations are not currently recycled; this is acceptable for the
+  completed acceptance path and should be reopened only for a measured
+  workload.
 
-Scope (Int-only; Bool XOR, AND/OR/shift, and constant folding in
-`closed_literals.rs` are deliberately deferred):
+Won't-fix under Track E:
 
-1. **AST + IR variants.** Add `BinOpKind::BitXor` (`crates/goby-core/src/ast.rs`)
-   and `IrBinOp::BitXor` (`crates/goby-core/src/ir.rs`); extend Debug /
-   formatter renderers to emit `"^"`.
-2. **Parser.** Insert a `split_top_level_binop(_, '^')` arm in
-   `parser_expr.rs::parse_expr` between the `&&` and `==` branches
-   (so `a ^ b == c` parses as `(a ^ b) == c`). Mirror the change in the
-   span-aware parser.
-3. **Typecheck.** Treat `BitXor` exactly like `Mod`: both operands `Int`,
-   result `Int`, no effects, no evidence changes.
-4. **IR lowering + dependent exhaustive matches.** Map
-   `BinOpKind::BitXor → IrBinOp::BitXor` in `ir_lower.rs`; update every
-   exhaustive match on `BinOpKind` / `IrBinOp` (e.g. `closure_capture.rs`)
-   — surface via `cargo check -p goby-core` and add arms as reported.
-5. **Wasm backend.** Emit `i64.xor` for `IrBinOp::BitXor` in
-   `crates/goby-wasm/src/gen_lower/lower.rs` (and `emit.rs` if it carries
-   the binop opcode table).
-6. **Smoke test.** Add a compile + run smoke test in
-   `crates/goby-wasm/tests/wasm_exports_and_smoke.rs` that exercises `^`
-   on a small module.
-7. **Docs.** Document `^` in `doc/LANGUAGE_SPEC.md` under operators with
-   its precedence. `doc/PLAN_PERCEUS.md` needs no change (already uses
-   the operator).
+- M4 residency test `perceus_loop_residency`: superseded by the M3 proxy plus
+  the M6 acceptance test.
+- `stdlib/goby/list.gb` `set` reuse rewrite: not on the acceptance path.
+  Re-open only if `list.set` becomes a measured hotspot, or if
+  `WasmBackendInstr` gains an if/else control-flow primitive for unrelated
+  work. Re-opening must preserve the `LetMut`-no-`bind_alias` invariant.
 
-Out of scope: Bool XOR, bitwise AND/OR/shift operators, constant folding
-of `^` in `closed_literals.rs`, and the Perceus M1 acceptance harness
-itself (checksum capture, un-ignoring the compile test). Resume M1 proper
-after this slice lands.
+Follow-up candidates now live outside Track E:
+
+- syntax-highlighting support for `^` in the editor/tooling grammars,
+- exact-size recycling for `Large` allocations if a real workload needs it,
+- broader runtime resource diagnostics and resilience under Track RR.
 
 ### 4.3 Review Follow-ups (Backlog)
 
