@@ -240,6 +240,50 @@ syntax/semantics.
 ## 5. Effects and Handlers
 
 - Function effect annotation: `can EffectA, EffectB`.
+  - This form denotes a **closed effect row**: the listed effects are exactly
+    the effects that may remain unhandled at this function boundary.
+  - Order is irrelevant; duplicates are idempotent (`can Print, Print` is
+    equivalent to `can Print`).
+  - Omitting `can` denotes the closed-empty row (no unhandled effects).
+- Function effect annotation with row variable: `can EffectA, {e}`.
+  - This form denotes an **open effect row**: the listed effects are required,
+    and `{e}` stands for an arbitrary additional set of effects.
+  - `{e}` is a lowercase identifier in braces. Row variables live in a separate
+    namespace from ordinary type variables (`a`, `b`, ...). Implicit universal
+    quantification at the declaration applies to both.
+  - At most one row variable may appear in a single `can` clause through EP-0
+    and EP-1; this limit may be revisited in a later phase if a concrete use
+    case appears.
+  - `{}` is the explicit closed-empty row and is equivalent to omitting `can`.
+- Row variables may appear inside callback parameter types, propagating
+  callback effects through higher-order functions:
+  - `map : List a -> (a -> b can {e}) -> List b can {e}`
+  - `each : List a -> (a -> Unit can {e}) -> Unit can {e}`
+  - `fold : List a -> b -> (b -> a -> b can {e}) -> b can {e}`
+  The same row variable in a single declaration must unify to the same row at
+  use sites; this is how callback effects propagate to the caller's `can`.
+- Callback parameter types omitting `can` denote the closed-empty row, matching
+  the historical "callback has no effects" interpretation. To propagate
+  callback effects, write `can {e}` (or another explicit row) on the callback.
+- Closed `can` clauses remain exact: `f : ... can Print` cannot accept being
+  used at a context that produces `Print, Log`. Widening occurs only when a
+  row variable is present and is unified against the wider row.
+- Unification rules (for type-checker implementations):
+  - `closed{S1} ~ closed{S2}`: ok iff `S1 == S2` as sets.
+  - `closed{S1} ~ open{S2; e}`: ok iff `S2 ⊆ S1`; binds `e := S1 \ S2` (closed).
+  - `open{S1; e1} ~ open{S2; e2}` (distinct vars): bind both vars to a fresh
+    open row whose fixed part absorbs the symmetric residual; standard
+    Rémy/Leijen row unification with occurs check.
+  - Function-type unification adds row unification on top of argument and
+    result unification.
+- Unknown effect names are rejected at every position, including inside open
+  rows. Only declared / built-in effect names are accepted.
+- Diagnostics distinguish "missing effect in closed row" from "row variable
+  cannot be unified".
+- Implementation phases for the row machinery are tracked under Track EP in
+  `doc/PLAN.md` §4.6. EP-0 locks the surface and semantics; EP-1 implements
+  the internal row representation and unification; EP-2 introduces row
+  variables on stdlib HOFs.
 - `can` describes the unhandled effects of the annotated function body, not the effects used internally while evaluating it.
 - Effect declarations define operations only.
   - current spec does not assign `can` semantics to effect member signatures.

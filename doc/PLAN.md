@@ -326,8 +326,13 @@ Based on `examples/*.gb`:
   - calls to `can`-annotated functions require an appropriate enclosing handler scope.
 - Current runtime behavior:
   - effect operations dispatch through installed handlers.
-- How to represent multiple effects (`can Print + Read` or other syntax) — deferred.
-- Effect propagation rules for higher-order functions — deferred; see §4.6 Track EP for the planned effect row polymorphism work.
+- How to represent multiple effects (`can Print + Read` or other syntax) — locked
+  (2026-05-07): the `can EffectA, EffectB` form is the closed-row spelling, and
+  open rows use `can EffectA, {e}` with a single row variable in braces. See
+  `doc/LANGUAGE_SPEC.md` §5 for the full surface lock.
+- Effect propagation rules for higher-order functions — surface and semantics
+  locked under Track EP Phase 0 (2026-05-07); internal representation and
+  unification are deferred to EP-1, stdlib HOF propagation to EP-2. See §4.6.
 - Effect diagnostics UX polish (wording/format consistency) — deferred.
 - Warning mechanism for lexical shadowing of visible effect operation names
   (for example local `a` shadows operation `a`) — deferred.
@@ -979,10 +984,31 @@ Scope to lock before coding:
 
 Execution phases:
 
-1. **EP-0: Semantics lock and spec update**
-   - write the effect-variable syntax and inference rules in `doc/LANGUAGE_SPEC.md`.
-   - add motivating examples showing current gap and intended behavior.
-   - update `doc/PLAN.md` §2.3 deferred items.
+1. **EP-0: Semantics lock and spec update** (complete, 2026-05-07)
+   - effect-variable surface and unification rules are recorded in
+     `doc/LANGUAGE_SPEC.md` §5.
+   - `doc/PLAN.md` §2.3 deferred items updated to reflect the lock.
+   - Locked surface: `can EffectA, EffectB` is the closed row; `can EffectA,
+     {e}` is the open row with a single row variable; `{}` is the explicit
+     closed-empty row equivalent to omitting `can`. Row variables share the
+     identifier shape of type variables but live in a separate namespace.
+   - Locked semantics: closed rows are exact (no silent widening); openness is
+     introduced only by an explicit row variable; rows are sets (idempotent,
+     order-irrelevant); standard Rémy/Leijen row unification with occurs check.
+   - Backward compat: existing `can E1, E2` declarations are reinterpreted as
+     closed rows with no behavioral change. Callback parameters omitting `can`
+     remain the closed-empty row.
+   - Motivating example (uses EP-2-final stdlib signatures; will type-check
+     once EP-2 lands):
+     ```goby
+     # `Print` propagates from the callback through `each` to the caller.
+     log_each : List String -> Unit can Print
+     log_each xs = list.each xs (fn s -> print s)
+     ```
+     Today, the user must write `can Print` on `log_each` even though `each`'s
+     type does not mention `Print`. After EP-2, `each : List a -> (a -> Unit
+     can {e}) -> Unit can {e}` makes the same example type-check with `{e}`
+     instantiated to `Print` at the call site.
 
 2. **EP-1: Internal effect-row representation**
    - extend `Ty` / effect representation with effect variables.
