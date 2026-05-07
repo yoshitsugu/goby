@@ -1,8 +1,8 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-08 (Track Float E1–E3 landed; E4 — Wasm value
-representation lock — is the next active line. Track PC remains queued
-behind user design review.)
+Last updated: 2026-05-08 (Track Float E1–E4 landed; E5 — real Wasm
+lowering + interpreter fallback + parity — is the next active line.
+Track PC remains queued behind user design review.)
 
 ## Current Focus
 
@@ -33,11 +33,17 @@ Phase progress:
   runnable on the wasm path (Track Float Phase E5)" `CodegenError` so a
   var-rooted Float operand cannot silently flow through integer wasm
   ops.
-- **E4** active: Wasm runtime value representation lock — heap-boxed
-  `f64` plus a new `TAG_FLOAT`. The current 4-bit tag + 60-bit payload
-  cannot carry arbitrary IEEE 754 bit patterns, so `Float` values must
-  live behind a heap pointer alongside `List` / `Tuple` payloads.
-- **E5** queued: real Wasm lowering (`f64.const`, `f64.add`, ...) +
+- **E4** complete: Wasm runtime value representation lock — heap-boxed
+  `f64` plus a new `TAG_FLOAT` (`0xB`). The current 4-bit tag + 60-bit
+  payload cannot carry arbitrary IEEE 754 bit patterns, so `Float`
+  values must live behind a heap pointer alongside `List` / `Tuple` /
+  `Cell` payloads. `gen_lower/value.rs` now exposes `encode_float_ptr` /
+  `decode_float_ptr` (Cell-shaped tagged pointer) and the pure bit
+  helpers `float_bits_to_i64` / `i64_to_float_bits`. Heap allocation
+  itself, `f64.const` / `f64.add` / ... emission, and the interpreter
+  fallback are deferred to E5; the E3 wasm safety net (rejection of
+  modules containing Float literals) is intentionally still in place.
+- **E5** active: real Wasm lowering (`f64.const`, `f64.add`, ...) +
   fallback `RuntimeValue::Float` + `format_float` helper + parity
   testing. The wasm safety net introduced in E3 is removed once this
   lands.
@@ -68,18 +74,26 @@ Red / ignored:
 
 ## Next Step
 
-**Primary (Track Float E4):**
+**Primary (Track Float E5):**
 
-Lock the heap-boxed `f64` representation:
+Wire real `f64` lowering plus an interpreter fallback so `Float`
+literals and the typed IR variants from E3 actually run end-to-end:
 
-1. Add `TAG_FLOAT` to `crates/goby-wasm/src/gen_lower/value.rs`.
-2. Implement `make_float_value(f64) -> i64` /
-   `extract_float(i64) -> f64` helpers using the existing 8-byte heap
-   allocator (same model as `List` / `Tuple` payloads).
-3. Verify the existing tagged-`i64` paths (`List`, `Tuple`, primitives)
-   are unaffected by the new tag value.
-4. No surface or typecheck changes — this is preparatory plumbing for
-   E5's `f64.const` / `f64.add` / ... emission.
+1. Allocate the 8-byte `(bits: i64)` Float box from the existing bump
+   allocator (same shape as `Cell`) and emit a TAG_FLOAT-tagged pointer
+   for `IrExpr::FloatLit` via `encode_float_ptr` /
+   `float_bits_to_i64` from `gen_lower/value.rs`.
+2. Lower `IrBinOp::Float{Add,Sub,Mul,Div,Eq,Lt,Gt,Le,Ge}` to
+   `f64.add` / `f64.sub` / ... by unboxing both operands, performing the
+   `f64` op, and re-boxing the result (or producing a Bool tag for the
+   comparison ops).
+3. Extend the interpreter fallback (`RuntimeValue::Float`,
+   `runtime_value_eq`, `to_output_text`, `runtime_expr` literal/binop
+   paths, `lower.rs::eval_value`, fallback capability allowlist).
+4. Share a `format_float(f: f64) -> String` helper for Haskell-`show`
+   rendering (`1.0`, `Infinity`, `-Infinity`, `NaN`, `-0.0`, `0.0`).
+5. Remove the E3 "Float values are not yet runnable" wasm safety net
+   only once parity between fallback and Wasm execution is confirmed.
 
 **Parallel (queued, parallelizable):**
 

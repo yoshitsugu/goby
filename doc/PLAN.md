@@ -734,9 +734,14 @@ Execution phases (revised after Codex Pass1 review):
    - decide `Float` representation in the Wasm runtime. Default is
      **heap-boxed `f64`** with a new `TAG_FLOAT`, since the existing 4-bit
      tag + 60-bit payload cannot carry arbitrary IEEE 754 bit patterns.
-   - add `make_float_value(f64) -> i64` / `extract_float(i64) -> f64`
-     helpers in `gen_lower/value.rs` and verify existing `List` / `Tuple`
-     paths are unaffected.
+   - add the tagged-i64 plumbing in `gen_lower/value.rs`: `TAG_FLOAT` (`0xB`),
+     `encode_float_ptr(u32) -> i64`, `decode_float_ptr(i64) -> u32`, plus the
+     pure bit-pattern helpers `float_bits_to_i64(f64) -> i64` and
+     `i64_to_float_bits(i64) -> f64`. The actual heap allocation of the
+     `(bits: i64)` box, the `f64.const` / `f64.add` / ... emission, and the
+     interpreter fallback all land in Phase E5; Phase E4 only locks the
+     representation and verifies tag orthogonality so the existing
+     `List` / `Tuple` / `Cell` paths are unaffected.
 5. **Phase E5: Wasm lowering + interpreter fallback + parity**.
    - lower the typed IR variants to `f64.add`, `f64.div`, `f64.eq`, ...,
    - extend `RuntimeValue` / `runtime_value_eq` / `to_output_text` /

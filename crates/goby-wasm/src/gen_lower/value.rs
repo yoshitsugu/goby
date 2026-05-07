@@ -15,6 +15,9 @@
 //! - `List`   tag=0x4, payload=u32 pointer to `(len: i32, items: [i64]...)` in linear memory
 //! - `Tuple`  tag=0x6, payload=u32 pointer to `(len: i32, items: [i64]...)` in linear memory
 //! - `Record` tag=0x7, payload=u32 pointer to `(ctor_tag: i64, fields: [i64]...)` in linear memory
+//! - `Float`  tag=0xB, payload=u32 pointer to `(bits: i64)` in linear memory (8 bytes;
+//!   stores the IEEE 754 bit pattern of an f64; required because the 60-bit payload
+//!   region cannot carry arbitrary f64 bit patterns).
 
 /// Type tag for `Unit` values.
 pub(crate) const TAG_UNIT: u8 = 0x0;
@@ -52,6 +55,15 @@ pub(crate) const TAG_CELL: u8 = 0x9;
 /// needs to recursively drop a chunk, it synthesises a TAG_CHUNK-tagged pointer on the fly.
 /// This tag never appears in user-visible tagged values.
 pub(crate) const TAG_CHUNK: u8 = 0xA;
+/// Type tag for `Float` values (pointer-bearing).
+///
+/// A `Float` value is an 8-byte heap allocation: `(bits: i64)` at offset 0, holding the
+/// IEEE 754 bit pattern of the f64. The payload is a u32 pointer to that allocation.
+/// Boxing is required because the 60-bit payload region cannot carry arbitrary f64
+/// bit patterns. The actual heap allocation and the `f64.const` / `f64.add` / ... emission
+/// are performed by Phase E5; this module only provides the tagged-i64 plumbing and the
+/// pure bit-pattern conversion helpers used by the emitter and host runtime.
+pub(crate) const TAG_FLOAT: u8 = 0xB;
 
 /// Bit mask for the lower 60 bits (payload region).
 const PAYLOAD_MASK: i64 = (1i64 << 60) - 1;
@@ -172,6 +184,15 @@ pub(crate) fn encode_cell_ptr(ptr: u32) -> i64 {
     (TAG_CELL as i64) << 60 | (ptr as i64)
 }
 
+/// Encode a `Float` pointer value.
+///
+/// `ptr` is a u32 address into Wasm linear memory pointing to a `(bits: i64)`
+/// layout (8 bytes) holding the IEEE 754 bits of the f64.
+#[inline]
+pub(crate) fn encode_float_ptr(ptr: u32) -> i64 {
+    (TAG_FLOAT as i64) << 60 | (ptr as i64)
+}
+
 /// Extract the funcref table slot index from an encoded `Func` value.
 ///
 /// Only valid when `decode_tag(v) == TAG_FUNC`.
@@ -196,6 +217,32 @@ pub(crate) fn decode_cell_ptr(v: i64) -> u32 {
     decode_payload_ptr(v)
 }
 
+/// Extract the u32 pointer from an encoded `Float` value.
+///
+/// Only valid when `decode_tag(v) == TAG_FLOAT`.
+#[inline]
+pub(crate) fn decode_float_ptr(v: i64) -> u32 {
+    decode_payload_ptr(v)
+}
+
+/// Reinterpret an `f64` as the IEEE 754 bit pattern stored in `i64` form.
+///
+/// Used by the Wasm emitter when writing the boxed Float payload into linear memory:
+/// the Wasm side stores the result as an i64 (`i64.store` / `I64Const`), so the bit
+/// pattern is funneled through `i64`, not `u64`.
+#[inline]
+pub(crate) fn float_bits_to_i64(f: f64) -> i64 {
+    f.to_bits() as i64
+}
+
+/// Reinterpret an `i64` IEEE 754 bit pattern as `f64`.
+///
+/// Used by the host runtime when decoding a TAG_FLOAT box loaded from linear memory.
+#[inline]
+pub(crate) fn i64_to_float_bits(bits: i64) -> f64 {
+    f64::from_bits(bits as u64)
+}
+
 // ---------------------------------------------------------------------------
 // Decoding
 // ---------------------------------------------------------------------------
@@ -217,7 +264,10 @@ pub(crate) fn decode_payload_int(v: i64) -> i64 {
 
 /// Extract the u32 pointer payload (lower 32 bits).
 ///
-/// Only valid when `decode_tag(v)` is `TAG_STRING`, `TAG_LIST`, `TAG_TUPLE`, or `TAG_RECORD`.
+/// Only valid when `decode_tag(v)` is one of the pointer-bearing tags:
+/// `TAG_STRING`, `TAG_LIST`, `TAG_TUPLE`, `TAG_RECORD`, `TAG_CLOSURE`, `TAG_CELL`,
+/// `TAG_FLOAT`, or the internal-only `TAG_CHUNK` synthesised by `__goby_drop`
+/// for chunk-pointer dispatch.
 #[inline]
 pub(crate) fn decode_payload_ptr(v: i64) -> u32 {
     (v & 0xFFFF_FFFF) as u32
@@ -393,7 +443,9 @@ mod tests {
         let record_tag = decode_tag(encode_record_ptr(0));
         let closure_tag = decode_tag(encode_closure_ptr(0));
         let cell_tag = decode_tag(encode_cell_ptr(0));
-        // All runtime tags must be distinct.
+        let float_tag = decode_tag(encode_float_ptr(0));
+        // All tags must be distinct, including the internal-only TAG_CHUNK that
+        // `__goby_drop` synthesises on the fly for chunk pointers.
         let tags = [
             unit_tag,
             int_tag,
@@ -405,6 +457,8 @@ mod tests {
             record_tag,
             closure_tag,
             cell_tag,
+            float_tag,
+            TAG_CHUNK,
         ];
         for i in 0..tags.len() {
             for j in (i + 1)..tags.len() {
@@ -439,5 +493,109 @@ mod tests {
         let v = encode_cell_ptr(u32::MAX);
         assert_eq!(decode_tag(v), TAG_CELL);
         assert_eq!(decode_cell_ptr(v), u32::MAX);
+    }
+
+    #[test]
+    fn float_ptr_zero_round_trip() {
+        let v = encode_float_ptr(0);
+        assert_eq!(decode_tag(v), TAG_FLOAT);
+        assert_eq!(decode_float_ptr(v), 0);
+    }
+
+    #[test]
+    fn float_ptr_heap_base_round_trip() {
+        let v = encode_float_ptr(24);
+        assert_eq!(decode_tag(v), TAG_FLOAT);
+        assert_eq!(decode_float_ptr(v), 24);
+    }
+
+    #[test]
+    fn float_ptr_max_round_trip() {
+        let v = encode_float_ptr(u32::MAX);
+        assert_eq!(decode_tag(v), TAG_FLOAT);
+        assert_eq!(decode_float_ptr(v), u32::MAX);
+    }
+
+    /// Compare two f64 values by IEEE 754 bit pattern. Required because `NaN != NaN`
+    /// under value equality, and `+0.0 == -0.0` collapses the sign of zero.
+    fn assert_bits_eq(actual: f64, expected: f64) {
+        assert_eq!(
+            actual.to_bits(),
+            expected.to_bits(),
+            "bit pattern mismatch: actual={actual:?} expected={expected:?}"
+        );
+    }
+
+    #[test]
+    fn float_bits_round_trip_zero() {
+        let bits = float_bits_to_i64(0.0);
+        assert_bits_eq(i64_to_float_bits(bits), 0.0);
+    }
+
+    #[test]
+    fn float_bits_round_trip_negative_zero() {
+        let bits = float_bits_to_i64(-0.0);
+        assert_bits_eq(i64_to_float_bits(bits), -0.0);
+        // Sign bit must survive the round-trip even though -0.0 == 0.0 by value.
+        assert_ne!(bits, float_bits_to_i64(0.0));
+    }
+
+    #[test]
+    fn float_bits_round_trip_one() {
+        let bits = float_bits_to_i64(1.0);
+        assert_bits_eq(i64_to_float_bits(bits), 1.0);
+    }
+
+    #[test]
+    fn float_bits_round_trip_negative_one() {
+        let bits = float_bits_to_i64(-1.0);
+        assert_bits_eq(i64_to_float_bits(bits), -1.0);
+    }
+
+    #[test]
+    fn float_bits_round_trip_infinity() {
+        let bits = float_bits_to_i64(f64::INFINITY);
+        assert_bits_eq(i64_to_float_bits(bits), f64::INFINITY);
+    }
+
+    #[test]
+    fn float_bits_round_trip_negative_infinity() {
+        let bits = float_bits_to_i64(f64::NEG_INFINITY);
+        assert_bits_eq(i64_to_float_bits(bits), f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn float_bits_round_trip_nan() {
+        let bits = float_bits_to_i64(f64::NAN);
+        let decoded = i64_to_float_bits(bits);
+        assert!(decoded.is_nan(), "decoded value must still be NaN");
+        // The exact NaN bit pattern must survive (NaN payload preservation).
+        assert_eq!(decoded.to_bits(), f64::NAN.to_bits());
+    }
+
+    #[test]
+    fn float_bits_round_trip_min() {
+        let bits = float_bits_to_i64(f64::MIN);
+        assert_bits_eq(i64_to_float_bits(bits), f64::MIN);
+    }
+
+    #[test]
+    fn float_bits_round_trip_max() {
+        let bits = float_bits_to_i64(f64::MAX);
+        assert_bits_eq(i64_to_float_bits(bits), f64::MAX);
+    }
+
+    #[test]
+    fn float_bits_round_trip_min_positive() {
+        let bits = float_bits_to_i64(f64::MIN_POSITIVE);
+        assert_bits_eq(i64_to_float_bits(bits), f64::MIN_POSITIVE);
+    }
+
+    #[test]
+    fn float_bits_round_trip_smallest_subnormal() {
+        // Smallest positive subnormal: 1 in the trailing significand, exponent 0.
+        let subnormal = f64::from_bits(1);
+        let bits = float_bits_to_i64(subnormal);
+        assert_bits_eq(i64_to_float_bits(bits), subnormal);
     }
 }
