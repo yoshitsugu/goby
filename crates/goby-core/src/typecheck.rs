@@ -2540,9 +2540,17 @@ run = take_cb (fn n -> emit(n) + println2(n))
         let err = typecheck_module(&module).expect_err(
             "closed callback row must reject a lambda with extra effects",
         );
+        // EP-3 diagnostic refinement: closed-row missing-effect case must be
+        // distinguishable from a row variable failure (LANGUAGE_SPEC §5
+        // line 283-284). The diagnostic carries the offending effect name
+        // and the "not allowed by required closed row" hint.
         assert!(
-            err.message.contains("Print2") || err.message.contains("row mismatch"),
-            "diagnostic should mention the offending effect or row mismatch, got: {err}"
+            err.message.contains("Print2"),
+            "diagnostic should name the extra effect, got: {err}"
+        );
+        assert!(
+            err.message.contains("not allowed by required closed row"),
+            "closed-row missing-effect diagnostic must distinguish itself from a row-var failure, got: {err}"
         );
     }
 
@@ -2574,6 +2582,99 @@ run =
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect(
             "outer `with Log handler` should discharge the lambda's `Log` effect when binding the closed callback row",
+        );
+    }
+
+    #[test]
+    fn ep3_diag_closed_callback_rejects_pure_lambda_when_effects_required() {
+        // Codex Pass1 follow-up on the wording polish: the `(None, None)`
+        // classifier branch must also handle "required closed row demands
+        // effects that the lambda does not produce" — otherwise a pure
+        // lambda passed to a callback typed `can Log` would render the
+        // bare base diagnostic without the closed-row distinction.
+        let source = "\
+effect Log
+  emit : Int -> Int
+
+take_cb : (Int -> Int can Log) -> Int can Log
+take_cb cb = cb 1
+
+run : Int can Log
+run = take_cb (fn n -> n + 1)
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err(
+            "closed callback row demanding `Log` must reject a pure lambda",
+        );
+        assert!(
+            err.message.contains("Log"),
+            "diagnostic should mention the missing required effect, got: {err}"
+        );
+        assert!(
+            err.message.contains("required closed row demands"),
+            "closed-row missing-required diagnostic must distinguish itself, got: {err}"
+        );
+    }
+
+    #[test]
+    fn ep3_diag_closed_callback_rejects_disjoint_effect_lambda() {
+        // Codex Pass2 follow-up on the wording polish: when expected and
+        // actual closed rows are disjoint (`expected={Log}`, `actual={Print2}`),
+        // the classifier emits the combined "lambda lacks ..., has extra ..."
+        // hint. Pin both halves so the wording stays distinguishable from
+        // the extras-only / missing-only branches.
+        let source = "\
+effect Log
+  emit : Int -> Int
+effect Print2
+  println2 : Int -> Int
+
+take_cb : (Int -> Int can Log) -> Int can Log
+take_cb cb = cb 1
+
+run : Int can Log, Print2
+run = take_cb (fn n -> println2(n))
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err(
+            "closed Log callback row must reject a lambda that produces Print2 instead",
+        );
+        assert!(
+            err.message.contains("closed row mismatch"),
+            "disjoint closed-row mismatch must use the combined wording, got: {err}"
+        );
+        assert!(
+            err.message.contains("Log") && err.message.contains("Print2"),
+            "diagnostic should mention both the missing required and extra produced effects, got: {err}"
+        );
+    }
+
+    #[test]
+    fn ep3_diag_row_variable_conflict_is_distinct_from_closed_missing() {
+        // EP-3 diagnostic refinement (LANGUAGE_SPEC §5 line 283-284):
+        // when the callback row carries a row variable but the lambda's
+        // closed row cannot satisfy the required fixed effects, the
+        // diagnostic must use the row-variable wording rather than the
+        // closed-row "not allowed" hint.
+        let source = "\
+effect Log
+  emit : Int -> Int
+effect Print2
+  println2 : Int -> Int
+
+take_cb_open : (Int -> Int can Log, {e}) -> Int can Log, {e}
+take_cb_open cb = cb 1
+
+run : Int can Log, Print2
+run = take_cb_open (fn n -> println2(n))
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err(
+            "open callback row missing a required fixed effect must be rejected",
+        );
+        assert!(
+            err.message.contains("row variable cannot be unified"),
+            "row-variable mismatch diagnostic must say so explicitly, got: {err}"
         );
     }
 

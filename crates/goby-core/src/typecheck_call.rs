@@ -356,11 +356,27 @@ fn validate_call_chain(
                     // the surrounding declaration happens to list `can E`.
                     let target_name = resolved_callable_name(target);
                     let call_target = target_name.as_deref().unwrap_or("function");
+                    let resolved_expected =
+                        crate::typecheck_unify::apply_row_substitution(
+                            &expected_outer_effects,
+                            &row_subst,
+                        )
+                        .unwrap_or_else(|| expected_outer_effects.clone());
+                    let resolved_actual =
+                        crate::typecheck_unify::apply_row_substitution(
+                            &actual_outer_effects,
+                            &row_subst,
+                        )
+                        .unwrap_or_else(|| actual_outer_effects.clone());
+                    let detail = classify_effect_row_mismatch(
+                        &resolved_expected,
+                        &resolved_actual,
+                    );
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
                         span: best_available_expr_span(arg),
                         message: format!(
-                            "`{}` callback effect row mismatch: required `{}` but lambda has `{}`",
+                            "`{}` callback effect row mismatch: required `{}` but lambda has `{}`{}",
                             call_target,
                             ty_name(&Ty::Fun {
                                 params: vec![Ty::Unknown],
@@ -372,6 +388,7 @@ fn validate_call_chain(
                                 result: Box::new(Ty::Unknown),
                                 effects: actual_outer_effects.clone(),
                             }),
+                            detail,
                         ),
                     });
                 }
@@ -728,6 +745,68 @@ fn expected_arity_flat(ty: &Ty, env: &TypeEnv) -> usize {
     match env.resolve_alias(ty, 0) {
         Ty::Fun { params, .. } => params.len(),
         _ => 0,
+    }
+}
+
+/// EP-3 diagnostic refinement (LANGUAGE_SPEC §5 line 283-284): produce a
+/// trailing hint that distinguishes "missing effect in closed row" from
+/// "row variable cannot be unified" once the base "callback effect row
+/// mismatch" message has rendered the offending rows.
+///
+/// Returns an empty string when no specific classification applies; callers
+/// always append the result, so the unmodified diagnostic remains a valid
+/// fallback for cases the helper does not (yet) distinguish.
+fn classify_effect_row_mismatch(expected: &EffectRow, actual: &EffectRow) -> String {
+    match (&expected.tail, &actual.tail) {
+        (None, None) => {
+            // closed/closed: report effects present in `actual` but missing
+            // from `expected`, and effects required by `expected` but absent
+            // from `actual`. Both fall under LANGUAGE_SPEC §5's
+            // "missing effect in closed row" classification — closed rows
+            // are exact-match.
+            let format_set = |names: &[String]| -> String {
+                names
+                    .iter()
+                    .map(|name| format!("`{}`", name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let extras: Vec<String> = actual
+                .fixed
+                .difference(&expected.fixed)
+                .cloned()
+                .collect();
+            let missing: Vec<String> = expected
+                .fixed
+                .difference(&actual.fixed)
+                .cloned()
+                .collect();
+            match (extras.is_empty(), missing.is_empty()) {
+                (true, true) => String::new(),
+                (false, true) => format!(
+                    " (effect{} {} not allowed by required closed row)",
+                    if extras.len() == 1 { "" } else { "s" },
+                    format_set(&extras),
+                ),
+                (true, false) => format!(
+                    " (required closed row demands effect{} {} that the lambda does not produce)",
+                    if missing.len() == 1 { "" } else { "s" },
+                    format_set(&missing),
+                ),
+                (false, false) => format!(
+                    " (closed row mismatch: lambda lacks {}, has extra {})",
+                    format_set(&missing),
+                    format_set(&extras),
+                ),
+            }
+        }
+        (Some(_), Some(_)) | (Some(_), None) | (None, Some(_)) => {
+            // After row substitution, a tail that survived means the row
+            // variable could not bind (open/open with mismatched fixed sets,
+            // or closed/open subset failure). LANGUAGE_SPEC §5 calls this
+            // class "row variable cannot be unified".
+            " (callback row variable cannot be unified)".to_string()
+        }
     }
 }
 
