@@ -1,6 +1,6 @@
 use crate::parser_util::is_identifier;
 use crate::str_util::split_top_level_commas;
-use crate::typecheck_annotation::find_can_keyword_index;
+use crate::typecheck_annotation::find_top_level_can_keyword_index;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionType {
@@ -103,7 +103,7 @@ fn split_top_level_function_arrows(annotation: &str) -> Option<Vec<String>> {
 }
 
 pub fn strip_effect(annotation: &str) -> &str {
-    match find_can_keyword_index(annotation) {
+    match find_top_level_can_keyword_index(annotation) {
         Some(idx) => annotation[..idx].trim_end(),
         None => annotation.trim(),
     }

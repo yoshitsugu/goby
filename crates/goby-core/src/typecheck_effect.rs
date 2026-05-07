@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     Module,
     typecheck::TypecheckError,
-    typecheck_annotation::find_can_keyword_index,
+    typecheck_annotation::{find_can_keyword_index, parse_can_clause},
     typecheck_env::{EffectMap, ImportedEffectDecl},
     typecheck_types::is_type_variable_name,
     types::{TypeExpr, parse_type_expr},
@@ -19,18 +19,20 @@ pub(crate) fn build_required_effects_map(module: &Module) -> HashMap<String, Vec
         let Some(ann) = decl.type_annotation.as_deref() else {
             continue;
         };
-        let Some(idx) = find_can_keyword_index(ann) else {
-            continue;
+        let clause = match parse_can_clause(ann) {
+            Ok(Some(clause)) => clause,
+            Ok(None) => continue,
+            Err(err) => {
+                debug_assert!(
+                    false,
+                    "build_required_effects_map: malformed `can` clause survived validate phase: {:?} (decl: {}, annotation: {:?})",
+                    err, decl.name, ann
+                );
+                continue;
+            }
         };
-        let effects_raw = ann[idx + 3..].trim();
-        let effects: Vec<String> = effects_raw
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .collect();
-        if !effects.is_empty() {
-            map.insert(decl.name.clone(), effects);
+        if !clause.fixed.is_empty() {
+            map.insert(decl.name.clone(), clause.fixed);
         }
     }
     map
@@ -66,18 +68,25 @@ pub(crate) fn ops_from_can_clause(
     let Some(ann) = annotation else {
         return HashSet::new();
     };
-    let Some(idx) = find_can_keyword_index(ann) else {
-        return HashSet::new();
+    let clause = match parse_can_clause(ann) {
+        Ok(Some(clause)) => clause,
+        Ok(None) => return HashSet::new(),
+        Err(err) => {
+            debug_assert!(
+                false,
+                "ops_from_can_clause: malformed `can` clause survived validate phase: {:?} (annotation: {:?})",
+                err, ann
+            );
+            return HashSet::new();
+        }
     };
-    let effects_raw = ann[idx + 3..].trim();
-    effects_raw
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
+    clause
+        .fixed
+        .iter()
         .flat_map(|effect_name| {
             effect_map
                 .effect_to_ops
-                .get(effect_name)
+                .get(effect_name.as_str())
                 .into_iter()
                 .flat_map(|ops| ops.iter().cloned())
         })

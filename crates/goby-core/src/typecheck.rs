@@ -3143,6 +3143,58 @@ render =
         assert!(err.message.contains("Ghost"));
     }
 
+    // --- EP-1b: row-polymorphism surface acceptance ---
+
+    #[test]
+    fn ep1b_accepts_can_clause_with_row_variable() {
+        // `can Log, {e}` is the open-row surface form locked in EP-0.
+        // EP-1b only requires it to validate; row-variable propagation into
+        // Ty::Fun is EP-1c's responsibility.
+        let source = "effect Log\n  log: String -> Unit\n\nf : String -> Unit can Log, {e}\nf s = Log.log s\n";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("can Log, {e} must validate");
+    }
+
+    #[test]
+    fn ep1b_accepts_can_clause_with_row_variable_only() {
+        let source = "f : Int -> Int can {e}\nf x = x\n";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("can {e} must validate");
+    }
+
+    #[test]
+    fn ep1b_accepts_explicit_empty_row() {
+        // `can {}` is the explicit closed-empty row, equivalent to omitting
+        // `can`. It must validate cleanly.
+        let source = "f : Int -> Int can {}\nf x = x\n";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("can {} must validate");
+    }
+
+    #[test]
+    fn ep1b_rejects_multiple_row_variables() {
+        let source = "f : Int -> Int can {e}, {f}\nf x = x\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("can {e}, {f} must fail");
+        assert!(
+            err.message.contains("at most one row variable"),
+            "error must mention the multi-row-var rule, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn ep1b_rejects_uppercase_row_variable() {
+        let source = "f : Int -> Int can {Foo}\nf x = x\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("can {Foo} must fail");
+        assert!(
+            err.message.contains("lowercase identifier"),
+            "error must mention lowercase identifier rule, got: {}",
+            err.message
+        );
+    }
+
     #[test]
     fn duplicate_effect_declaration_span_points_to_effect_line() {
         // `validate_effect_declarations` — duplicate effect name.

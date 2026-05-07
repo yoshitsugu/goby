@@ -6,6 +6,7 @@ use crate::{
     ast::InterpolatedPart,
     stdlib::{StdlibResolveError, StdlibResolver},
     typecheck::{PRELUDE_MODULE_PATH, TypecheckError},
+    typecheck_annotation::find_top_level_can_keyword_index,
     typecheck_build::insert_global_symbol,
     typecheck_diag::{
         err_failed_stdlib_module_resolve, err_unknown_import_symbol, err_unknown_module,
@@ -773,7 +774,7 @@ fn ty_from_import_annotation(annotation: &str) -> Ty {
 }
 
 fn strip_effect_clause(annotation: &str) -> &str {
-    if let Some(idx) = annotation.find(" can ") {
+    if let Some(idx) = find_top_level_can_keyword_index(annotation) {
         annotation[..idx].trim_end()
     } else {
         annotation

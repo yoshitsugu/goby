@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use goby_core::ir::{CompExpr, ValueExpr};
 use goby_core::{
-    Expr, Module, Stmt, ast::InterpolatedPart, find_can_keyword_index, types::strip_effect,
+    Expr, Module, Stmt, ast::InterpolatedPart, fixed_effects_from_can_clause, types::strip_effect,
 };
 
 use crate::call::flatten_named_call;
@@ -933,20 +933,7 @@ fn expr_contains_handler_resume(expr: &Expr) -> bool {
 }
 
 fn parse_effect_clause_effects(annotation: &str) -> Vec<String> {
-    let trimmed = annotation.trim();
-    let Some(idx) = find_can_keyword_index(trimmed) else {
-        return Vec::new();
-    };
-    let effect_part = trimmed[idx + 3..].trim();
-    if effect_part.is_empty() {
-        return Vec::new();
-    }
-    effect_part
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(ToString::to_string)
-        .collect()
+    fixed_effects_from_can_clause(annotation.trim())
 }
 
 fn build_effect_dependency_graph(module: &Module) -> HashMap<String, Vec<String>> {
@@ -1166,6 +1153,20 @@ main =
         assert_eq!(op.effect_id, EffectId(0));
         assert_eq!(op.op_id, OpId(0));
         assert!(shape.fingerprint_hint() > 0);
+    }
+
+    #[test]
+    fn parse_effect_clause_effects_drops_row_variable_and_explicit_empty() {
+        // EP-1b: row variables and `{}` are surface-level row markers, not
+        // fixed effect names. The wasm planner only consumes the closed
+        // (fixed) portion of the row, so `{e}` and `{}` must be filtered out
+        // before reaching evidence-requirement plumbing.
+        assert_eq!(
+            parse_effect_clause_effects("Int -> Int can Print, {e}"),
+            vec!["Print".to_string()]
+        );
+        assert!(parse_effect_clause_effects("Int -> Int can {e}").is_empty());
+        assert!(parse_effect_clause_effects("Int -> Int can {}").is_empty());
     }
 
     #[test]

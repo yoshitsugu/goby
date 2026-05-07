@@ -54,7 +54,6 @@ pub(crate) type RowSubst = HashMap<RowVarId, EffectRow>;
 /// optional row variable. `explicit_empty` distinguishes `can {}` from omission
 /// at the source level (both denote the closed-empty row, but the former is
 /// written explicitly).
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CanClause {
     pub(crate) fixed: Vec<String>,
@@ -62,8 +61,8 @@ pub(crate) struct CanClause {
     pub(crate) explicit_empty: bool,
 }
 
-#[allow(dead_code)]
 impl CanClause {
+    #[allow(dead_code)]
     pub(crate) fn empty_closed() -> Self {
         CanClause {
             fixed: Vec::new(),
@@ -310,11 +309,8 @@ mod effect_row_tests {
 
     #[test]
     fn closed_rows_normalize_duplicates_idempotently() {
-        let row = EffectRow::closed_from([
-            "Print".to_string(),
-            "Print".to_string(),
-            "Read".to_string(),
-        ]);
+        let row =
+            EffectRow::closed_from(["Print".to_string(), "Print".to_string(), "Read".to_string()]);
         assert_eq!(row.fixed.len(), 2);
     }
 

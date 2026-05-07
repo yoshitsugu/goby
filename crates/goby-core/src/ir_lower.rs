@@ -93,19 +93,12 @@ pub fn lower_resolved_declaration(decl: &ResolvedDeclaration) -> Result<IrDecl, 
 }
 
 /// Extract effect names from a `can EffectA, EffectB` clause in a type annotation.
-/// Returns an empty Vec if no `can` clause is present.
+/// Returns an empty Vec if no `can` clause is present. Row variables and the
+/// explicit-empty `{}` form are dropped: IR-level residual-effect tracking only
+/// cares about the closed (fixed) portion of the row.
 fn extract_residual_effects(annotation: Option<&str>) -> Vec<String> {
     let Some(ann) = annotation else { return vec![] };
-    let Some(idx) = crate::find_can_keyword_index(ann) else {
-        return vec![];
-    };
-    let effects_raw = ann[idx + 3..].trim();
-    effects_raw
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .collect()
+    crate::fixed_effects_from_can_clause(ann)
 }
 
 fn lower_stmts(ctx: &mut LowerCtx, stmts: &[ResolvedStmt]) -> Result<CompExpr, LowerError> {

@@ -75,4 +75,6 @@ pub use typecheck::{
     TypecheckError, typecheck_module, typecheck_module_collect,
     typecheck_module_collect_with_context, typecheck_module_with_context,
 };
-pub use typecheck_annotation::find_can_keyword_index;
+pub use typecheck_annotation::{
+    find_can_keyword_index, find_top_level_can_keyword_index, fixed_effects_from_can_clause,
+};
