@@ -1413,4 +1413,12 @@ mod tests {
     fn idempotent_mut() {
         assert_idempotent("mut", include_str!("../../../examples/mut.gb"));
     }
+
+    #[test]
+    fn idempotent_hof_effect() {
+        assert_idempotent(
+            "hof_effect",
+            include_str!("../../../examples/hof_effect.gb"),
+        );
+    }
 }

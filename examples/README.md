@@ -43,6 +43,8 @@ Small Goby programs intended for users to read and run.
 - `iterator.gb`: minimal iterator effect handler.
 - `iterator_unified.gb`: iterator state threading and early stop.
 - `effect_generic.gb`: generic effect declaration.
+- `hof_effect.gb`: row-polymorphic effect propagation through `each` /
+  `map` / `fold` (typecheck only).
 
 ## Print Variants
 

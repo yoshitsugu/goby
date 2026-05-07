@@ -1,0 +1,77 @@
+# Example: row-polymorphic effect propagation through `each` / `map` / `fold`
+#
+# `goby check` passes for this file. `goby run` is not yet supported for the
+# combination of an inline `with` handler and lambdas-in-effect-scope used
+# below; the wasm backend reports
+# "handler lowering does not yet support lambdas inside handler-lowered code".
+# The point of this example is to read the `can Log` rows on each wrapper.
+#
+# Stdlib signatures (see `stdlib/goby/list.gb`):
+#   each : List a -> (a -> Unit can {e}) -> Unit can {e}
+#   map  : List a -> (a -> b can {e}) -> List b can {e}
+#   fold : List a -> b -> (b -> a -> b can {e}) -> b can {e}
+# Whatever effects the callback performs flow up to the caller's `can` row.
+import goby/list as list
+
+effect Log
+  log : String -> Unit
+
+# Inline lambda + `each`: the callback performs `Log.log`, so the wrapper
+# inherits `can Log`.
+log_each : List String -> Unit can Log
+log_each xs = list.each xs (fn s -> log s)
+
+# Named multi-statement callback + `map`: the row flows from `shout`
+# through `map` to the `shouted_lines` signature.
+shout : String -> String can Log
+shout s =
+  log "shouted:${s}"
+  s
+
+shouted_lines : List String -> List String can Log
+shouted_lines xs = list.map xs shout
+
+# Named callback + `fold`: identical row propagation in the multi-arity
+# (`b -> a -> b`) shape.
+log_step : Int -> Int -> Int can Log
+log_step acc x =
+  log "+${x}"
+  acc + x
+
+sum_with_log : List Int -> Int can Log
+sum_with_log xs = list.fold xs 0 log_step
+
+# Curried-lambda callback + `fold`: the body of a `fn acc -> fn x -> ...`
+# lambda still surfaces its effects through the surrounding wrapper. The
+# lambda body is a single expression, and the inner row still reaches
+# `double_sum`'s `can` clause.
+double_sum : List Int -> Int can Log
+double_sum xs = list.fold xs 0 (fn acc -> fn x -> acc + tag_int x)
+
+# Helper that keeps the curried-lambda body a single expression while still
+# triggering the `Log` effect.
+tag_int : Int -> Int can Log
+tag_int x =
+  log "seen:${x}"
+  x + x
+
+# Discharging side: the caller installs a handler for `Log` and the
+# remaining declaration only carries `Print`. (See header comment about
+# `goby run` support — this currently typechecks but does not yet run.)
+main : Unit -> Unit can Print
+main =
+  with
+    log msg ->
+      print msg
+      resume ()
+  in
+    log_each ["alpha", "beta"]
+
+    shouted = shouted_lines ["x", "y"]
+    list.each shouted (fn s -> print s)
+
+    total = sum_with_log [1, 2, 3]
+    print "${total}"
+
+    doubled = double_sum [1, 2]
+    print "${doubled}"

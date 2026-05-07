@@ -1,7 +1,8 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-07 (Track EP — EP-2 Step 3b landed: curried-lambda
-body aggregation, fully-applied row leak diagnostic, and 7 acceptance tests)
+Last updated: 2026-05-07 (Track EP — EP-2 Step 4 landed: user-facing
+`examples/hof_effect.gb` exercising row-polymorphic effect propagation
+through `each` / `map` / `fold`, with formatter-idempotence coverage)
 
 ## Current Focus
 
@@ -78,13 +79,25 @@ EP-2 ("HOF effect propagation") is the in-flight milestone.
     6. `fold xs 0` partial application typechecks without any `can`.
     7. A handler inside the lambda discharges its own effect; the
        surrounding declaration needs no `can`.
+- **EP-2 Step 4** (2026-05-07): user-facing example added.
+  - `examples/hof_effect.gb`: walks through `each` / `map` / `fold`
+    with `Log` callbacks, showing inline-lambda, named-callback, and
+    curried-lambda (`fn acc -> fn x -> ...`) shapes; the wrappers
+    surface `can Log` and `main` discharges it through a `with` handler.
+  - `goby check` passes; `goby run` is gated by the existing
+    "handler lowering does not yet support lambdas inside
+    handler-lowered code" backend limitation, recorded in the file's
+    header comment (same pattern as `read.gb`).
+  - `crates/goby-core/src/formatter.rs` adds `idempotent_hof_effect`
+    so the file is covered by the formatter idempotence battery.
+  - `examples/README.md` "Stdlib And Effects" lists the new entry.
 
 ## Known Red / Green State
 
 Green:
 
-- `cargo test -p goby-core --lib`: 889 tests (EP-2 Step 1 added 10, Step 3b
-  added 7 over the EP-1d baseline).
+- `cargo test -p goby-core --lib`: 890 passed / 2 ignored (EP-2 Step 1
+  added 10, Step 3b added 7, Step 4 added 1 formatter idempotence test).
 - `cargo nextest run -p goby-wasm`: 787 passed / 11 skipped, ~15s wall
   (`fold_m5_string_accumulator` now passes after the
   `build_stdlib_export_map` fix; see `doc/BUGS.md`).
@@ -99,11 +112,15 @@ Red / ignored:
 
 ## Next Step
 
-1. EP-2 Step 4: add user-facing examples under `examples/` that exercise
-   the EP-2 contract (effectful `each` / `map` / `fold` callbacks) and
-   make sure existing examples still typecheck.
-2. EP-2 Step 5 / wrap-up: mark EP-2 complete in `doc/PLAN.md` §4.6, then
+1. EP-2 Step 5 / wrap-up: mark EP-2 complete in `doc/PLAN.md` §4.6, then
    move on to EP-3 (diagnostics polish, partial discharge interaction).
+2. Pre-existing typecheck regressions in 8 example files
+   (`case_arm_block.gb`, `function_reference.gb`, `list_set.gb`,
+   `list_spread.gb`, `mut.gb`, `string_graphemes.gb`, `tco.gb`,
+   `to_integer.gb`) surface during a `goby check` loop on `examples/*.gb`.
+   These predate EP-2 Step 4 (reproduce on the `975863e` baseline) and
+   should be triaged separately; formatter idempotence does not catch
+   them.
 
 Other active tracks remain queued in `doc/PLAN.md` §4 (Track D `goby
 lint` D5/D6 follow-ups, Track Float, Track OOB, Track RR-6 limit
