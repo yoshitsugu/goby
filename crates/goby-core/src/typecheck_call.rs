@@ -4,7 +4,7 @@ use crate::ast::{Expr, InterpolatedPart, Stmt};
 use crate::typecheck::TypecheckError;
 use crate::typecheck_check::check_expr;
 use crate::typecheck_diag::err_unknown_callable;
-use crate::typecheck_effect::infer_expr_effects;
+use crate::typecheck_effect::{infer_curried_lambda_body_effects, infer_expr_effects};
 use crate::typecheck_env::{EffectMap, EffectRow, RowSubst, Ty, TypeEnv, TypeSubst};
 use crate::typecheck_render::ty_name;
 use crate::typecheck_span::{best_available_expr_span, best_available_name_use_span};
@@ -295,12 +295,34 @@ fn validate_call_chain(
                     Ty::Fun { effects, .. } => effects,
                     _ => EffectRow::closed_empty(),
                 };
-                let actual_outer_effects = match env.resolve_alias(
-                    &apply_type_substitution(&actual_ty, &subst, &row_subst, env),
-                    0,
-                ) {
-                    Ty::Fun { effects, .. } => effects,
-                    _ => EffectRow::closed_empty(),
+                // EP-2 Step 3b: when the expected callback type is flat
+                // (`(b, a) -> b can {e}`) but the lambda is written curried
+                // (`fn acc -> fn x -> ...`), `actual_ty.effects` only carries
+                // the outermost layer's effects (closed-empty: returning a
+                // nested lambda value is itself effect-free). Aggregate the
+                // *terminal* body's effects by walking through nested
+                // `Expr::Lambda` AST nodes so the row variable absorbs what
+                // the callback emits when fully applied.
+                let actual_outer_effects = if expected_arity_flat(
+                    &expected_after_subst,
+                    env,
+                ) > 1
+                {
+                    infer_curried_lambda_body_effects(
+                        arg,
+                        env,
+                        ctx.effect_map,
+                        ctx.required_effects_map,
+                        ctx.covered_ops,
+                    )
+                } else {
+                    match env.resolve_alias(
+                        &apply_type_substitution(&actual_ty, &subst, &row_subst, env),
+                        0,
+                    ) {
+                        Ty::Fun { effects, .. } => effects,
+                        _ => EffectRow::closed_empty(),
+                    }
                 };
                 if !unify_effect_rows(
                     &expected_outer_effects,
@@ -540,6 +562,154 @@ fn infer_lambda_ty_against_expected(
     Ok(apply_type_substitution(
         &provided, subst, row_subst, &child_env,
     ))
+}
+
+/// EP-2 Step 3b: at a call site, determine which fixed effect names the
+/// callee's outermost row resolves to once the lambda arguments contribute
+/// their inferred rows. Returns `Some(set)` only when the call is *fully
+/// applied* (so that a row variable in the callee's signature has actually
+/// been bound through unification); partial applications return `None`
+/// because the residual `Ty::Fun.effects` describes the future call, not
+/// the current one.
+pub(crate) fn infer_call_effects_at_site(
+    expr: &Expr,
+    env: &TypeEnv,
+    ctx: CallContext<'_>,
+) -> Option<HashSet<String>> {
+    let (target, args) = ordinary_call_target_and_args(expr)?;
+    if args.is_empty() {
+        return None;
+    }
+    if resolved_callable_name(target)
+        .as_deref()
+        .is_some_and(|name| env.is_effect_op(name))
+    {
+        return None;
+    }
+    let mut next_id = 0usize;
+    let target_ty = check_expr(target, env);
+    let Ty::Fun { params, effects, .. } =
+        instantiate_ty_with_fresh_type_vars_for_call_site(&target_ty, &mut next_id)
+    else {
+        return None;
+    };
+    if args.len() < params.len() {
+        // Partial application: skip — the residual function's row stays on
+        // the resulting `Ty::Fun` value and will be re-checked at the call
+        // that finally supplies the missing argument(s).
+        return None;
+    }
+
+    let mut subst = TypeSubst::new();
+    let mut row_subst = RowSubst::new();
+    for (idx, arg) in args.iter().enumerate() {
+        let Some(expected) = params.get(idx) else {
+            break;
+        };
+        let expected_after_subst = apply_type_substitution(expected, &subst, &row_subst, env);
+        if matches!(env.resolve_alias(&expected_after_subst, 0), Ty::Fun { .. }) {
+            // Lambda argument: bind the callee's row variable to the lambda's
+            // inferred row. Same outermost-effects approach as Step 3a, plus
+            // the curried-aggregation fallback when the expected callback is
+            // multi-arity.
+            if matches!(arg, Expr::Lambda { .. }) {
+                let actual_outer_effects = if expected_arity_flat(&expected_after_subst, env) > 1 {
+                    crate::typecheck_effect::infer_curried_lambda_body_effects(
+                        arg,
+                        env,
+                        ctx.effect_map,
+                        ctx.required_effects_map,
+                        ctx.covered_ops,
+                    )
+                } else {
+                    let mut local_env = env.clone();
+                    let mut current = *arg;
+                    while let Expr::Spanned { expr, .. } = current {
+                        current = expr.as_ref();
+                    }
+                    if let Expr::Lambda { param, body } = current {
+                        local_env = local_env.with_local(param, Ty::Unknown);
+                        crate::typecheck_effect::infer_expr_effects(
+                            body.as_ref(),
+                            &local_env,
+                            ctx.effect_map,
+                            ctx.required_effects_map,
+                            ctx.covered_ops,
+                        )
+                    } else {
+                        EffectRow::closed_empty()
+                    }
+                };
+                let expected_outer_effects = match env.resolve_alias(&expected_after_subst, 0) {
+                    Ty::Fun { effects, .. } => effects,
+                    _ => EffectRow::closed_empty(),
+                };
+                // Failures here are non-fatal for *this* helper: the Step 3a
+                // validator (`check_ordinary_call_arg_types_in_expr`) runs
+                // before `check_unhandled_effects_in_expr` and reports row
+                // mismatches with the user-facing `callback effect row
+                // mismatch` diagnostic. If we reach this point, Step 3a
+                // already accepted the call, so unification will normally
+                // succeed; on the off-chance it does not, leaving
+                // `row_subst` partially updated only widens the leak set we
+                // compute, which is a safe over-approximation for diag.
+                let _ = unify_effect_rows(
+                    &expected_outer_effects,
+                    &actual_outer_effects,
+                    &mut row_subst,
+                    &mut next_id,
+                );
+            } else {
+                // Named function or other expression: unify against its own
+                // type (carrying any declared effects) like the validator.
+                // Same safety argument as above — Step 3a is the source of
+                // truth for argument-type compatibility.
+                let actual_ty = resolve_function_value_ty(arg, env, &mut next_id);
+                if actual_ty != Ty::Unknown {
+                    let _ = match_function_argument_type(
+                        &expected_after_subst,
+                        &actual_ty,
+                        &mut subst,
+                        &mut row_subst,
+                        env,
+                        &mut next_id,
+                    );
+                }
+            }
+        } else {
+            // Non-function argument: same Step 3a-first safety story.
+            let actual_ty = resolve_function_value_ty(arg, env, &mut next_id);
+            if actual_ty != Ty::Unknown {
+                let _ = unify_types_with_subst(
+                    &expected_after_subst,
+                    &actual_ty,
+                    &mut subst,
+                    &mut row_subst,
+                    env,
+                    &mut next_id,
+                );
+            }
+        }
+    }
+
+    // After unification, walk the callee's outermost row through `row_subst`
+    // and collect fixed effect names. `apply_row_substitution` only returns
+    // None on a cycle in the substitution (see `typecheck_unify`); an
+    // unbound tail simply stays as `Some(var)` and we drop it, since the
+    // tail represents future flexibility, not a *currently required* effect.
+    let resolved = crate::typecheck_unify::apply_row_substitution(&effects, &row_subst)?;
+    Some(resolved.fixed.into_iter().collect())
+}
+
+/// Number of parameters in the *flat* callback type (`(a, b) -> r` returns 2).
+/// Curried encodings like `(a -> b -> r)` parse as flat `Fun { params: [a, b], result: r }`
+/// in this codebase (see `parse_function_type`), so a single `Ty::Fun` node
+/// suffices.
+fn expected_arity_flat(ty: &Ty, env: &TypeEnv) -> usize {
+    match env.resolve_alias(ty, 0) {
+        Ty::Fun { params, .. } => params.len(),
+        _ => 0,
+    }
 }
 
 fn lambda_param_count(expr: &Expr) -> usize {

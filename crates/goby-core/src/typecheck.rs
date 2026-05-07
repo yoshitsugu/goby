@@ -2184,6 +2184,154 @@ main =
         typecheck_module(&module).expect("list.each should typecheck via selective import");
     }
 
+    // ── EP-2 Step 3b acceptance: HOF effect propagation ─────────────────
+    //
+    // These tests use a non-`main` declaration for the negative cases because
+    // `main` carries auto-discharge for the prelude's embedded effects (Print,
+    // Read), which would mask a row-variable leak.
+
+    #[test]
+    fn ep2_each_effectful_lambda_without_can_clause_is_rejected() {
+        // `each xs (fn n -> emit(n))` in a function declared without
+        // `can Log` must be rejected by the row-based check.
+        let source = "\
+import goby/list ( each )
+effect Log
+  emit : Int -> Unit
+
+run : List Int -> Unit
+run xs =
+  each xs (fn n -> emit(n))
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("effectful lambda without `can Log` should be rejected");
+        assert!(
+            err.message.contains("Log") || err.message.contains("emit"),
+            "error should mention the missing effect, got: {err}"
+        );
+    }
+
+    #[test]
+    fn ep2_each_effectful_lambda_with_can_clause_typechecks() {
+        let source = "\
+import goby/list ( each )
+effect Log
+  emit : Int -> Unit
+
+run : List Int -> Unit can Log
+run xs =
+  each xs (fn n -> emit(n))
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("each with effectful lambda + can Log should pass");
+    }
+
+    #[test]
+    fn ep2_map_effectful_lambda_propagates_through_can_clause() {
+        let with_can = "\
+import goby/list ( map )
+effect Log
+  emit : Int -> Int
+
+run : List Int -> List Int can Log
+run xs =
+  map xs (fn n -> emit(n))
+";
+        let module = parse_module(with_can).expect("with_can should parse");
+        typecheck_module(&module).expect("map with effectful body + can Log should pass");
+
+        let without_can = "\
+import goby/list ( map )
+effect Log
+  emit : Int -> Int
+
+run : List Int -> List Int
+run xs =
+  map xs (fn n -> emit(n))
+";
+        let module = parse_module(without_can).expect("without_can should parse");
+        typecheck_module(&module)
+            .expect_err("map with effectful body and no can clause should fail");
+    }
+
+    #[test]
+    fn ep2_fold_curried_lambda_effect_propagates_to_caller_can() {
+        // Multi-arity callback (`fold`) with curried `fn acc -> fn x -> ...`:
+        // exercises Step 3b's curried-aggregation path. The lambda body is a
+        // single expression that triggers the `Log` effect on every step.
+        let source = "\
+import goby/list ( fold )
+effect Log
+  emit : Int -> Int
+
+run : List Int -> Int can Log
+run xs =
+  fold xs 0 (fn acc -> fn x -> acc + emit(x))
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("fold with curried effectful callback + can Log should pass");
+    }
+
+    #[test]
+    fn ep2_fold_curried_lambda_without_can_is_rejected() {
+        let source = "\
+import goby/list ( fold )
+effect Log
+  emit : Int -> Int
+
+run : List Int -> Int
+run xs =
+  fold xs 0 (fn acc -> fn x -> acc + emit(x))
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect_err("fold with effectful body and no can clause should fail");
+    }
+
+    #[test]
+    fn ep2_fold_partial_application_does_not_require_can_clause() {
+        // `fold xs 0` returns a function value; supplying the effectful
+        // callback later is the call where the row binds. Building the
+        // partial value without `can` should still typecheck.
+        let source = "\
+import goby/list ( fold )
+
+# Returns the partial application of fold over a fixed list and seed,
+# leaving the caller to supply the callback (and thereby its effects).
+build : List Int -> ((Int -> Int -> Int can {e}) -> Int can {e})
+build xs = fold xs 0
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect(
+            "partial application of fold (without callback) should not require any effect",
+        );
+    }
+
+    #[test]
+    fn ep2_handler_inside_lambda_discharges_callback_effect() {
+        // The lambda body discharges its own effect via a handler, so the
+        // surrounding declaration does not need `can`.
+        let source = "\
+import goby/list ( each )
+effect Log
+  emit : Int -> Unit
+
+run : List Int -> Unit
+run xs =
+  each xs (fn n ->
+    with
+      emit _ -> resume ()
+    in
+      emit(n))
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect(
+            "handler inside lambda should discharge its effect; run needs no can",
+        );
+    }
+
     #[test]
     fn typechecks_with_operation_from_imported_effect_without_redeclaration() {
         let source = "\

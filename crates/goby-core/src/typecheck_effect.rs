@@ -187,7 +187,6 @@ fn build_op_to_effects(
 /// - row tail propagation from called functions' `Ty::Fun.effects.tail`
 ///   is intentionally deferred to Step 3 (`infer_call_effects` at the call
 ///   site). The lambda-side helper only synthesizes the closed-row component.
-#[allow(dead_code)] // wired into infer_lambda_ty_against_expected in EP-2 Step 2
 pub(crate) fn infer_expr_effects(
     expr: &Expr,
     env: &TypeEnv,
@@ -199,6 +198,50 @@ pub(crate) fn infer_expr_effects(
     walk_expr_for_effects(
         expr,
         env,
+        effect_map,
+        required_effects_map,
+        covered_ops,
+        &mut fixed,
+    );
+    EffectRow { fixed, tail: None }
+}
+
+/// EP-2 Step 3b: aggregate the effect row produced by the *innermost* body of
+/// a possibly-curried lambda. Walks through nested `Expr::Lambda` layers (and
+/// `Expr::Spanned` wrappers) without crossing into other lambdas' inner
+/// expressions, then runs the standard `walk_expr_for_effects` on the actual
+/// terminal body.
+///
+/// Use this from call-site validation when the callee declares a multi-arity
+/// callback (`(b -> a -> b can {e})`); the caller passes the *outer* curried
+/// lambda whose Goby semantics is "apply both args, then the body runs and
+/// emits these effects". The single-lambda invariant in `infer_expr_effects`
+/// (nested lambdas are values, not bodies) is intentional and unchanged; this
+/// helper is the call-site complement that knows the curried lambda is
+/// destined to be fully applied.
+pub(crate) fn infer_curried_lambda_body_effects(
+    expr: &Expr,
+    env: &TypeEnv,
+    effect_map: &EffectMap,
+    required_effects_map: &HashMap<String, Vec<String>>,
+    covered_ops: &HashSet<String>,
+) -> EffectRow {
+    let mut current = expr;
+    let mut local_env = env.clone();
+    loop {
+        match current {
+            Expr::Spanned { expr, .. } => current = expr,
+            Expr::Lambda { param, body } => {
+                local_env = local_env.with_local(param, Ty::Unknown);
+                current = body;
+            }
+            _ => break,
+        }
+    }
+    let mut fixed: BTreeSet<String> = BTreeSet::new();
+    walk_expr_for_effects(
+        current,
+        &local_env,
         effect_map,
         required_effects_map,
         covered_ops,

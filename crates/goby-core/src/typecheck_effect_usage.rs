@@ -8,6 +8,7 @@ use crate::typecheck_env::{EffectMap, RowSubst, Ty, TypeEnv, TypeSubst};
 use crate::typecheck_render::ty_name;
 use crate::typecheck_span::{best_available_expr_span, best_available_name_use_span};
 use crate::typecheck_stmt::check_body_stmts;
+use crate::typecheck_call::{CallContext, infer_call_effects_at_site};
 use crate::typecheck_unify::{
     apply_type_substitution, instantiate_handler_clause_signature, ty_contains_type_var,
     type_hole_conflict_note, unify_types_with_subst,
@@ -126,6 +127,22 @@ fn infer_handler_covered_ops_strict(
             message: "`with` expects a handler value".to_string(),
         }),
     }
+}
+
+/// Mirrors `typecheck_effect::effect_fully_covered`: an effect leaks out
+/// unless every one of its operations is in `covered_ops`.
+fn effect_fully_covered_for_diag(
+    effect_name: &str,
+    effect_map: &EffectMap,
+    covered_ops: &HashSet<String>,
+) -> bool {
+    let Some(ops) = effect_map.effect_to_ops.get(effect_name) else {
+        return false;
+    };
+    if ops.is_empty() {
+        return false;
+    }
+    ops.iter().all(|op| covered_ops.contains(op))
 }
 
 fn check_callee_required_effects(
@@ -375,6 +392,30 @@ pub(crate) fn check_unhandled_effects_in_expr(
                     covered_ops,
                     decl_name,
                 )?;
+            }
+            // EP-2 Step 3b: row-based effect check at fully-applied call sites.
+            // Lambda callbacks may have bound the callee's row variable to
+            // their inferred effects, so the resolved row's `fixed` set
+            // names the effects this call requires beyond the callee's
+            // declared `required_effects_map` entry.
+            let ctx = CallContext {
+                effect_map,
+                required_effects_map,
+                covered_ops,
+            };
+            if let Some(call_effects) = infer_call_effects_at_site(expr, env, ctx) {
+                for effect_name in &call_effects {
+                    if !effect_fully_covered_for_diag(effect_name, effect_map, covered_ops) {
+                        return Err(TypecheckError {
+                            declaration: Some(decl_name.to_string()),
+                            span: best_available_expr_span(expr),
+                            message: format!(
+                                "callback effect `{}` is not handled by any enclosing `with` scope",
+                                effect_name
+                            ),
+                        });
+                    }
+                }
             }
             recurse!(callee)?;
             recurse!(arg)
