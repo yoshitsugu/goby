@@ -34,7 +34,7 @@ Phase progress:
   runnable on the wasm path (Track Float Phase E5)" `CodegenError` so a
   var-rooted Float operand cannot silently flow through integer wasm
   ops.
-- **E4** complete: Wasm runtime value representation lock — heap-boxed
+- **E4** complete (`caecbc6`): Wasm runtime value representation lock — heap-boxed
   `f64` plus a new `TAG_FLOAT` (`0xB`). The current 4-bit tag + 60-bit
   payload cannot carry arbitrary IEEE 754 bit patterns, so `Float`
   values must live behind a heap pointer alongside `List` / `Tuple` /
@@ -45,7 +45,7 @@ Phase progress:
   fallback are deferred to E5; the E3 wasm safety net (rejection of
   modules containing Float literals) is intentionally still in place.
 - **E5** in progress (split into E5-A → E5-D in `doc/PLAN.md` §4.4):
-  - **E5-A** complete: Float literal end-to-end on the Wasm path.
+  - **E5-A** complete (`37d8da6`): Float literal end-to-end on the Wasm path.
     `WasmBackendInstr::AllocFloatBox { bits_instrs }` allocates the
     8-byte `(bits: i64)` box and emits a TAG_FLOAT-tagged pointer.
     `__goby_dup` / `__goby_drop` learn TAG_FLOAT (drop is an
