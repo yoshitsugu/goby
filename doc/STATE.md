@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-07 (EP-1d unify_effect_rows landed)
+Last updated: 2026-05-07 (Track EP Phase 1 closed; CodeRabbit follow-ups landed)
 
 ## Current Focus
 
@@ -31,11 +31,9 @@ Track EP (effect row polymorphism, `doc/PLAN.md` §4.6) is the active line.
     (row var must be lowercase ASCII identifier), and `can {}, X`
     / `can {}, {}` (`{}` cannot be combined or repeated).
   - Row variables are recorded in `CanClause`; propagation into
-    `Ty::Fun` lands in EP-1c (below).
-  - The callback nested-`can` validation gap (e.g.
-    `(Int -> Int can Ghost) -> Int` previously slipping past validate)
-    is closed in EP-1c via recursive segment validation.
-- **EP-1c** (Ty::Fun extension + nested validate): complete (2026-05-07).
+    `Ty::Fun` lands in EP-1c.
+- **EP-1c** (Ty::Fun extension + nested validate): complete (commit
+  `c70dcd8`, 2026-05-07).
   - `Ty::Fun` carries an `effects: EffectRow` field, propagated through
     every construction / destructuring site in `typecheck_*` (resolve_alias,
     apply_type_substitution, instantiate_ty_with_fresh_type_vars, partial
@@ -55,10 +53,10 @@ Track EP (effect row polymorphism, `doc/PLAN.md` §4.6) is the active line.
     `typecheck_validate::ty_from_import_annotation` route through
     `ty_from_annotation` so global / imported function types preserve
     their `can` clauses.
-  - `TypeEnv::are_compatible` and `unify_types_with_subst` ignore the
-    `effects` field as a temporary contract; row unification arrives in
-    EP-1d (below).
-- **EP-1d** (unification + freshening): complete (2026-05-07).
+  - `TypeEnv::are_compatible` and `unify_types_with_subst` initially
+    ignored the `effects` field; that placeholder is removed in EP-1d.
+- **EP-1d** (unification + freshening): complete (commit `0da40c7`,
+  2026-05-07; CodeRabbit follow-ups in `48c030a`).
   - `unify_effect_rows` implements the LANGUAGE_SPEC §5 rules (closed-closed,
     closed-open, open-open same-var, open-open distinct vars with occurs
     check). `apply_row_substitution` walks tails through `RowSubst` with a
@@ -84,6 +82,13 @@ Track EP (effect row polymorphism, `doc/PLAN.md` §4.6) is the active line.
   - LANGUAGE_SPEC §5 is updated with the open-open *same row variable*
     rule that the implementation already follows (`S1 == S2`, no fresh
     binding).
+  - CodeRabbit follow-ups (`48c030a`):
+    `typecheck_effect_usage` now renders diagnostics from the
+    pre-unification snapshot so a partially-mutated `subst` cannot
+    leak into the message; `ty_from_import_annotation` documents its
+    "non-function imports cannot carry `can`" invariant via
+    `debug_assert`; renderer test comment for the ambiguous nested-can
+    shape rewritten to match what the renderer actually emits.
 - **EP-1e**: folded into EP-1d (callback freshening, partial application,
   collision avoidance covered by tests).
 - **EP-2**: retrofit stdlib HOFs (`each` / `map` / `fold`) with
