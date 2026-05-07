@@ -281,11 +281,20 @@ syntax/semantics.
 - Unknown effect names are rejected at every position, including inside open
   rows. Only declared / built-in effect names are accepted.
 - Diagnostics distinguish "missing effect in closed row" from "row variable
-  cannot be unified".
+  cannot be unified". The implementation appends a classification hint to
+  the base "callback effect row mismatch" line:
+  - **closed/closed**: extras-only, missing-required-only, and disjoint
+    cases each get a distinct hint mentioning the offending effect names
+    and "closed row".
+  - **any surviving row tail**: a single "callback row variable cannot be
+    unified" hint covers closed/open subset failures and open/open
+    fixed-set conflicts.
 - Implementation phases for the row machinery are tracked under Track EP in
-  `doc/PLAN.md` §4.6. EP-0 locks the surface and semantics; EP-1 implements
-  the internal row representation and unification; EP-2 introduces row
-  variables on stdlib HOFs.
+  `doc/PLAN.md` §4.6 and are all complete (2026-05-07). EP-0 locks the
+  surface and semantics; EP-1 implements the internal row representation
+  and unification; EP-2 introduces row variables on stdlib HOFs; EP-3 covers
+  diagnostics polish, partial-discharge interaction, and the interaction
+  with generic type parameters.
 - `can` describes the unhandled effects of the annotated function body, not the effects used internally while evaluating it.
 - Effect declarations define operations only.
   - current spec does not assign `can` semantics to effect member signatures.

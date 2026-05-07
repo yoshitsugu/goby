@@ -1,17 +1,36 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-07 (Track EP — EP-2 wrap-up: `doc/PLAN.md` §4.6 EP-1
-and EP-2 marked complete; EP-3 (diagnostics polish, partial-discharge
-interaction, generic-type interaction) is now the active line.)
+Last updated: 2026-05-07 (Track EP — EP-3 closes Track EP. `doc/PLAN.md`
+§4.6 EP-0 → EP-3 all marked complete; the next active line is selected
+from the queued tracks in §4 — see "Next Step".)
 
 ## Current Focus
 
-Track EP (effect row polymorphism, `doc/PLAN.md` §4.6): EP-0 surface
-lock, EP-1 internal row representation, and EP-2 HOF effect propagation
-are all complete (2026-05-07). The active milestone is **EP-3**:
-diagnostics polish for effect-row mismatch, interaction with `with`
-discharge when an effect row is only partially handled, and interaction
-between effect rows and generic type parameters.
+Track EP (effect row polymorphism, `doc/PLAN.md` §4.6) is **complete
+(2026-05-07)**. EP-3 landed in two commits:
+
+- **EP-3 Step 2** (`9e8a336`): root-cause fix that splits decl-level
+  `decl_can_ops` (permitted by surrounding `can`) from
+  with-handler-derived `covered_ops` (lexically discharged). Lambda body
+  effect inference reachable via `CallContext.covered_ops` now sees only
+  the with-derived set, so callback effects bind the row variable as
+  LANGUAGE_SPEC §5 requires; `check_unhandled_effects_in_expr` unions the
+  two internally so existing decl-level "can permits this op" behaviour
+  is unchanged. `validate_call_chain`'s `Expr::With` branch propagates
+  handler-derived covered ops into `CallContext` so a closed callback row
+  inside `with H in take_cb (fn ...)` is matched against the residual
+  effects rather than the raw lambda body.
+- **EP-3 Step 4** (`a083528`): diagnostic refinement — the existing
+  "callback effect row mismatch" line now appends a classification hint
+  produced by `classify_effect_row_mismatch`. The three mismatching
+  closed/closed shapes (extras-only, missing-required-only, disjoint) and
+  the row-variable shape each emit distinct wording so LANGUAGE_SPEC §5
+  line 283-284's "missing effect in closed row" vs "row variable cannot
+  be unified" distinction is observable. The equal closed/closed case is
+  unreachable here because the unifier accepts it.
+
+13 EP-3 acceptance tests in `crates/goby-core/src/typecheck.rs` pin the
+contract (5 partial-discharge, 3 generic+row, 5 diagnostics).
 
 ### EP history (closed phases)
 
@@ -82,12 +101,44 @@ between effect rows and generic type parameters.
   - `crates/goby-core/src/formatter.rs` adds `idempotent_hof_effect`
     so the file is covered by the formatter idempotence battery.
   - `examples/README.md` "Stdlib And Effects" lists the new entry.
-- **EP-2 Step 5** (2026-05-07, this update): `doc/PLAN.md` §2.3 / §4.6 /
-  §4.7 synced with the EP-1/EP-2 completion (motivating example moved to
-  the present tense, EP-1 / EP-2 phase entries marked
-  `(complete, 2026-05-07)`, Track PC blocking-dependency note records
-  EP-2 as satisfied so the only remaining PC-2 prerequisite is the §3.3
-  multi-shot / branch-local state work). No source changes.
+- **EP-2 Step 5** (2026-05-07): `doc/PLAN.md` §2.3 / §4.6 / §4.7 synced
+  with the EP-1/EP-2 completion (motivating example moved to the present
+  tense, EP-1 / EP-2 phase entries marked `(complete, 2026-05-07)`,
+  Track PC blocking-dependency note records EP-2 as satisfied so the only
+  remaining PC-2 prerequisite is the §3.3 multi-shot / branch-local state
+  work). No source changes.
+- **EP-3 Step 2** (`9e8a336`, 2026-05-07): root-cause fix that splits the
+  decl-level `decl_can_ops` (permitted by surrounding `can`) from
+  with-handler-derived `covered_ops` (lexically discharged). Lambda body
+  effect inference reachable via `CallContext.covered_ops` now sees only
+  the with-derived set; `check_unhandled_effects_in_expr` unions the two
+  internally so existing decl-level "can permits this op" behaviour is
+  unchanged. `validate_call_chain`'s `Expr::With` branch propagates
+  handler-derived covered ops into `CallContext`, lifting the spurious
+  closed-callback-row mismatch when an outer `with H in take_cb (fn ...)`
+  already discharges some of the lambda's effects. 10 acceptance tests:
+  - `ep3_partial_discharge_log_handler_handles_log_propagates_print` (P-1+)
+  - `ep3_partial_discharge_log_handler_without_outer_print_can_is_rejected` (P-1−)
+  - `ep3_partial_discharge_callback_log_handled_print_propagates` (P-2+)
+  - `ep3_partial_discharge_callback_print_not_handled_is_rejected` (P-2−)
+  - `ep3_partial_discharge_with_handler_in_call_chain_lifts_callback_effects`
+    (Codex Pass1 regression — `with` on the call site path)
+  - `ep3_generic_pure_callback_with_no_can_passes` (G-1)
+  - `ep3_generic_effectful_callback_requires_matching_can` (G-2 +/−)
+  - `ep3_generic_two_independent_map_calls_dont_interfere` (G-3 fresh-row)
+  - `ep3_diag_closed_callback_rejects_extra_effect_lambda` (D-1)
+  - `ep3_diag_two_callback_hof_with_conflicting_effects_is_rejected`
+    (D-2 — named functions; inline 2-lambda hits a parser limitation)
+- **EP-3 Step 4** (`a083528`, 2026-05-07): diagnostic refinement —
+  `classify_effect_row_mismatch` produces a trailing hint that
+  distinguishes LANGUAGE_SPEC §5 line 283-284's "missing effect in closed
+  row" from "row variable cannot be unified". The base
+  "callback effect row mismatch" line is unchanged so external assertions
+  matching only the prefix still hold. The existing D-1 (extras-only)
+  acceptance test is tightened to require the new substring, and 3
+  additional tests pin missing-required, disjoint, and row-variable
+  wording independently. The equal closed/closed case never reaches the
+  classifier (the unifier accepts it).
 
 ### Related same-day cleanup (non-EP work)
 
@@ -106,8 +157,8 @@ between effect rows and generic type parameters.
 
 Green:
 
-- `cargo test -p goby-core --lib`: 890 passed / 2 ignored (EP-2 Step 1
-  added 10, Step 3b added 7, Step 4 added 1 formatter idempotence test).
+- `cargo test -p goby-core --lib`: 903 passed / 2 ignored (EP-3 Step 2
+  added 10 acceptance tests, Step 4 added 3 wording tests).
 - `cargo nextest run -p goby-wasm`: 787 passed / 11 skipped, ~15s wall
   (`fold_m5_string_accumulator` now passes after the
   `build_stdlib_export_map` fix; see `doc/BUGS.md`).
@@ -122,27 +173,32 @@ Red / ignored:
 
 ## Next Step
 
-**Primary:**
+Track EP closed. Remaining queued tracks (`doc/PLAN.md` §4) — choose by
+priority and any external pull:
 
-1. EP-3 (Track EP §4.6): diagnostics polish for effect-row mismatch,
-   interaction with `with`-based partial discharge of an effect row, and
-   interaction between effect rows and generic type parameters. Scope
-   the work in PLAN §4.6 EP-3 before coding (no Step plan locked yet).
+1. **§3.3 multi-shot classification + branch-local state surface.** Now
+   the only hard prerequisite for §4.7 PC-2 (parser combinator on
+   algebraic effects).
+2. **Track Float** (`doc/PLAN.md`): floating-point support. Self-contained.
+3. **Track OOB** (`doc/PLAN.md`): out-of-bounds handling polish.
+4. **Track D D5/D6 follow-ups** (`goby lint`).
+5. **Track RR-6 limit tuning**.
 
-**Parallel known-red cleanup (lower priority than EP-3):**
+**Parallel known-red cleanup (lower priority than the next track):**
 
-2. Pre-existing typecheck regressions in 8 example files
-   (`case_arm_block.gb`, `function_reference.gb`, `list_set.gb`,
-   `list_spread.gb`, `mut.gb`, `string_graphemes.gb`, `tco.gb`,
-   `to_integer.gb`) surface during a `goby check` loop on `examples/*.gb`.
-   These predate EP-2 Step 4 (reproduce on the `975863e` baseline) and
-   should be triaged separately, ideally with a `doc/BUGS.md` entry per
-   case; formatter idempotence does not catch them.
+- Pre-existing typecheck regressions in 8 example files
+  (`case_arm_block.gb`, `function_reference.gb`, `list_set.gb`,
+  `list_spread.gb`, `mut.gb`, `string_graphemes.gb`, `tco.gb`,
+  `to_integer.gb`) surface during a `goby check` loop on `examples/*.gb`.
+  These predate EP-2 Step 4 (reproduce on the `975863e` baseline) and
+  should be triaged separately, ideally with a `doc/BUGS.md` entry per
+  case; formatter idempotence does not catch them.
 
-Other active tracks remain queued in `doc/PLAN.md` §4 (Track D `goby
-lint` D5/D6 follow-ups, Track Float, Track OOB, Track RR-6 limit
-tuning, Track PC parser combinator — PC-2 is now gated only by §3.3,
-since EP-2 has landed).
+Track-EP follow-ups not blocking closure (recorded under §4.6 EP-3 in
+PLAN): method-call / pipeline callback paths bypass `validate_call_chain`
+and `Expr::Block` does not thread per-statement `local_env` updates the
+way `check_unhandled_effects_in_expr` does. The block case is currently
+unreachable from Goby surface syntax (no `{ ... }` block expression).
 
 ## Recently Closed (Reference Only)
 

@@ -330,13 +330,14 @@ Based on `examples/*.gb`:
   (2026-05-07): the `can EffectA, EffectB` form is the closed-row spelling, and
   open rows use `can EffectA, {e}` with a single row variable in braces. See
   `doc/LANGUAGE_SPEC.md` §5 for the full surface lock.
-- Effect propagation rules for higher-order functions — Track EP §4.6 has
-  shipped through EP-2 (EP-0 surface lock 2026-05-07; EP-1 internal row
+- Effect propagation rules for higher-order functions — Track EP §4.6 is
+  **complete** (EP-0 surface lock 2026-05-07; EP-1 internal row
   representation 2026-05-07 `0da40c7`; EP-2 stdlib HOF propagation
-  2026-05-07, wrapped up by Step 4 example `1f34991`). EP-3 remains the
-  active line. See §4.6.
-- Effect diagnostics UX polish (wording/format consistency) — tracked
-  under §4.6 EP-3 (diagnostics polish).
+  2026-05-07, wrapped up by Step 4 example `1f34991`; EP-3 diagnostics +
+  partial discharge + generic interaction 2026-05-07 `9e8a336` / `a083528`).
+  See §4.6.
+- Effect diagnostics UX polish (wording/format consistency) — landed under
+  §4.6 EP-3 Step 4 (`a083528`).
 - Warning mechanism for lexical shadowing of visible effect operation names
   (for example local `a` shadows operation `a`) — deferred.
   - resolution rule remains: lexical value namespace wins.
@@ -950,11 +951,9 @@ Acceptance criteria:
 
 Priority: **raised (2026-05-01)**. Effect-row polymorphism through EP-2
 and the multi-shot / branch-local state portion of §3.3 are
-prerequisites for Track PC (§4.7 Parser Combinator). EP-0 → EP-2 are
-complete (2026-05-07); EP-3 (diagnostics polish, partial-discharge
-interaction, generic interaction) is the active line within Track EP,
-but is not a strict PC-2 blocker. The remaining hard PC-2 prerequisite
-is the §3.3 multi-shot / branch-local state work.
+prerequisites for Track PC (§4.7 Parser Combinator). Track EP is
+**complete (2026-05-07)**: EP-0 → EP-3 all landed. The remaining hard
+PC-2 prerequisite is the §3.3 multi-shot / branch-local state work.
 
 Goal: add effect-variable quantification so higher-order functions propagate
 callee effects through the type system, closing the largest gap between Goby's
@@ -1047,17 +1046,54 @@ Execution phases:
      the row-propagation contract through inline-lambda, named-callback,
      and curried-lambda shapes; covered by formatter idempotence.
 
-4. **EP-3: Diagnostics and edge cases** (active line)
-   - error messages for effect-variable mismatch.
-   - interaction with `with` discharge (effect variable partially discharged).
-   - interaction with generic type parameters (effect + type polymorphism).
+4. **EP-3: Diagnostics and edge cases** (complete, 2026-05-07)
+   - **Step 2** (`9e8a336`): root cause — `can`-clause-derived ops were
+     threaded into lambda body effect inference together with
+     `with`-discharged ops, so a callback's effects were silently treated as
+     already discharged when the surrounding decl listed them in `can`. Fix
+     splits the two roles:
+     - `covered_ops`: ops actually discharged by an enclosing `with`.
+     - `decl_can_ops`: ops permitted by the surrounding `can` clause.
+     `CallContext.covered_ops` (lambda inference) sees only the with-derived
+     set, so callback effects bind the row variable as LANGUAGE_SPEC §5
+     requires; `check_unhandled_effects_in_expr` unions both sets internally
+     so existing decl-level "can permits this op" behaviour is preserved.
+     `validate_call_chain`'s `Expr::With` branch propagates handler-derived
+     covered ops into `CallContext` so a closed callback row in
+     `with H in take_cb (fn ... -> H_op(); other_op())` matches the residual
+     effects, not the raw lambda body.
+     10 acceptance tests in `crates/goby-core/src/typecheck.rs` (P × 5,
+     G × 3, D × 2) pin the contract.
+   - **Step 4** (`a083528`): diagnostic refinement — the existing
+     "callback effect row mismatch" line now appends a classification hint
+     produced by `classify_effect_row_mismatch`. The three mismatching
+     closed/closed branches (extras-only, missing-required-only, disjoint)
+     and the row-variable branch each produce distinct wording so
+     LANGUAGE_SPEC §5's "missing effect in closed row" vs "row variable
+     cannot be unified" distinction is observable. The equal closed/closed
+     case is unreachable from this code path (the unifier accepts it).
+     The existing extras-only acceptance test is tightened, and 3 more
+     are added to pin missing-required, disjoint, and row-variable
+     wording independently.
 
-Acceptance criteria:
+Acceptance criteria (all met):
 
 - `map xs (fn x -> Log.log x; x)` in a function without `can Log` is a type error.
 - `map xs (fn x -> Log.log x; x)` in a function with `can Log` typechecks.
 - the above holds without any special-casing of `map`; the mechanism is general.
 - existing programs with monomorphic `can` annotations are unaffected.
+
+Known follow-ups (not blocking EP closure):
+
+- method-call (`.foo`) and pipeline (`|>`) callback paths bypass
+  `validate_call_chain` and therefore the row-mismatch / row-leak diagnostics.
+  This pre-existed EP-3; reproducers using ordinary `Expr::Call` are covered.
+- `Expr::Block`'s ordinary-call validation does not thread per-statement
+  `local_env` updates the way `check_unhandled_effects_in_expr` does, so a
+  block that locally binds a `Ty::Handler` value and then uses it in
+  `with h in ...` may not surface the handler's covered ops on
+  `CallContext.covered_ops`. Goby's surface lacks `{ ... }` block syntax, so
+  this is not currently reachable from user source.
 
 References:
 
@@ -1120,11 +1156,10 @@ Scope to lock before coding:
 
 Blocking dependencies (must land before PC-2 implementation):
 
-- **§4.6 EP-2 (HOF effect propagation).** Satisfied (complete,
-  2026-05-07): row polymorphism for HOF callbacks is in place. The
-  remaining EP-side work is EP-3 (diagnostics polish for partially
-  discharged effect rows), which is the active line but not strictly
-  blocking PC-2 implementation.
+- **§4.6 Track EP (effect row polymorphism).** Satisfied (complete,
+  2026-05-07): EP-0 → EP-3 all landed, including row polymorphism for HOF
+  callbacks (EP-2) and the EP-3 diagnostics / partial-discharge / generic
+  interaction work.
 - **§3.3 multi-shot classification + branch-local state surface.** `alt`
   and `many` need either a sanctioned multi-shot path or an explicit
   branch-local state construct to roll the cursor back without violating
