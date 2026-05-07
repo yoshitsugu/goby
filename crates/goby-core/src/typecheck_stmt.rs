@@ -4,7 +4,9 @@ use crate::ast::{Expr, Stmt};
 use crate::typecheck::TypecheckError;
 use crate::typecheck_ambiguity::ensure_no_ambiguous_refs_in_expr;
 use crate::typecheck_branch::check_branch_type_consistency_in_expr;
-use crate::typecheck_call::{check_ordinary_call_arg_types_in_expr, infer_expr_binding_ty};
+use crate::typecheck_call::{
+    CallContext, check_ordinary_call_arg_types_in_expr, infer_expr_binding_ty,
+};
 use crate::typecheck_check::check_expr;
 use crate::typecheck_diag::err_unknown_callable;
 use crate::typecheck_effect_usage::check_unhandled_effects_in_expr;
@@ -338,7 +340,12 @@ fn validate_stmt_value(
 ) -> Result<(), TypecheckError> {
     ensure_known_call_targets_in_expr(expr, local_env, decl_name)?;
     ensure_no_ambiguous_refs_in_expr(expr, local_env, decl_name)?;
-    check_ordinary_call_arg_types_in_expr(expr, local_env, decl_name)?;
+    let ctx = CallContext {
+        effect_map,
+        required_effects_map,
+        covered_ops,
+    };
+    check_ordinary_call_arg_types_in_expr(expr, local_env, decl_name, ctx)?;
     check_unhandled_effects_in_expr(
         expr,
         local_env,

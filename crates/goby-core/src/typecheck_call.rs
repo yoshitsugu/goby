@@ -1,14 +1,29 @@
+use std::collections::{HashMap, HashSet};
+
 use crate::ast::{Expr, InterpolatedPart, Stmt};
 use crate::typecheck::TypecheckError;
 use crate::typecheck_check::check_expr;
 use crate::typecheck_diag::err_unknown_callable;
-use crate::typecheck_env::{EffectRow, RowSubst, Ty, TypeEnv, TypeSubst};
+use crate::typecheck_effect::infer_expr_effects;
+use crate::typecheck_env::{EffectMap, EffectRow, RowSubst, Ty, TypeEnv, TypeSubst};
 use crate::typecheck_render::ty_name;
 use crate::typecheck_span::{best_available_expr_span, best_available_name_use_span};
 use crate::typecheck_unify::{
     apply_type_substitution, instantiate_ty_with_fresh_type_vars_for_call_site,
-    match_function_argument_type, unify_types_with_subst,
+    match_function_argument_type, unify_effect_rows, unify_types_with_subst,
 };
+
+/// EP-2 Step 3a: per-call-validation context bundling the maps needed for
+/// lambda effect inference. Threaded through `check_ordinary_call_arg_types_in_expr`
+/// so callbacks land at `infer_lambda_ty_against_expected` with the same
+/// `effect_map` / `required_effects_map` / `covered_ops` view that
+/// `check_unhandled_effects_in_expr` uses.
+#[derive(Clone, Copy)]
+pub(crate) struct CallContext<'a> {
+    pub(crate) effect_map: &'a EffectMap,
+    pub(crate) required_effects_map: &'a HashMap<String, Vec<String>>,
+    pub(crate) covered_ops: &'a HashSet<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CallbackLambdaMismatch {
@@ -26,86 +41,95 @@ pub(crate) fn check_ordinary_call_arg_types_in_expr(
     expr: &Expr,
     env: &TypeEnv,
     decl_name: &str,
+    ctx: CallContext<'_>,
 ) -> Result<(), TypecheckError> {
     match expr {
-        Expr::Spanned { expr, .. } => check_ordinary_call_arg_types_in_expr(expr, env, decl_name),
+        Expr::Spanned { expr, .. } => {
+            check_ordinary_call_arg_types_in_expr(expr, env, decl_name, ctx)
+        }
         Expr::Call { callee, arg, .. } => {
-            check_ordinary_call_arg_types_in_expr(callee, env, decl_name)?;
-            check_ordinary_call_arg_types_in_expr(arg, env, decl_name)?;
-            validate_call_chain(expr, env, decl_name)
+            check_ordinary_call_arg_types_in_expr(callee, env, decl_name, ctx)?;
+            check_ordinary_call_arg_types_in_expr(arg, env, decl_name, ctx)?;
+            validate_call_chain(expr, env, decl_name, ctx)
         }
         Expr::MethodCall { args, .. } => {
             for arg in args {
-                check_ordinary_call_arg_types_in_expr(arg, env, decl_name)?;
+                check_ordinary_call_arg_types_in_expr(arg, env, decl_name, ctx)?;
             }
             Ok(())
         }
         Expr::Pipeline { value, .. } => {
-            check_ordinary_call_arg_types_in_expr(value, env, decl_name)
+            check_ordinary_call_arg_types_in_expr(value, env, decl_name, ctx)
         }
         Expr::InterpolatedString(parts) => {
             for part in parts {
                 if let InterpolatedPart::Expr(expr) = part {
-                    check_ordinary_call_arg_types_in_expr(expr, env, decl_name)?;
+                    check_ordinary_call_arg_types_in_expr(expr, env, decl_name, ctx)?;
                 }
             }
             Ok(())
         }
         Expr::ListLit { elements, spread } => {
             for element in elements {
-                check_ordinary_call_arg_types_in_expr(element, env, decl_name)?;
+                check_ordinary_call_arg_types_in_expr(element, env, decl_name, ctx)?;
             }
             if let Some(spread) = spread {
-                check_ordinary_call_arg_types_in_expr(spread, env, decl_name)?;
+                check_ordinary_call_arg_types_in_expr(spread, env, decl_name, ctx)?;
             }
             Ok(())
         }
         Expr::TupleLit(items) => {
             for item in items {
-                check_ordinary_call_arg_types_in_expr(item, env, decl_name)?;
+                check_ordinary_call_arg_types_in_expr(item, env, decl_name, ctx)?;
             }
             Ok(())
         }
         Expr::RecordConstruct { fields, .. } => {
             for (_, value) in fields {
-                check_ordinary_call_arg_types_in_expr(value, env, decl_name)?;
+                check_ordinary_call_arg_types_in_expr(value, env, decl_name, ctx)?;
             }
             Ok(())
         }
-        Expr::UnaryOp { expr, .. } => check_ordinary_call_arg_types_in_expr(expr, env, decl_name),
-        Expr::BinOp { left, right, .. } => {
-            check_ordinary_call_arg_types_in_expr(left, env, decl_name)?;
-            check_ordinary_call_arg_types_in_expr(right, env, decl_name)
+        Expr::UnaryOp { expr, .. } => {
+            check_ordinary_call_arg_types_in_expr(expr, env, decl_name, ctx)
         }
-        Expr::Lambda { body, .. } => check_ordinary_call_arg_types_in_expr(body, env, decl_name),
+        Expr::BinOp { left, right, .. } => {
+            check_ordinary_call_arg_types_in_expr(left, env, decl_name, ctx)?;
+            check_ordinary_call_arg_types_in_expr(right, env, decl_name, ctx)
+        }
+        Expr::Lambda { body, .. } => {
+            check_ordinary_call_arg_types_in_expr(body, env, decl_name, ctx)
+        }
         Expr::Handler { clauses } => {
             for clause in clauses {
                 if let Some(stmts) = &clause.parsed_body {
                     for stmt in stmts {
-                        check_ordinary_call_arg_types_in_stmt(stmt, env, decl_name)?;
+                        check_ordinary_call_arg_types_in_stmt(stmt, env, decl_name, ctx)?;
                     }
                 }
             }
             Ok(())
         }
         Expr::With { handler, body } => {
-            check_ordinary_call_arg_types_in_expr(handler, env, decl_name)?;
+            check_ordinary_call_arg_types_in_expr(handler, env, decl_name, ctx)?;
             for stmt in body {
-                check_ordinary_call_arg_types_in_stmt(stmt, env, decl_name)?;
+                check_ordinary_call_arg_types_in_stmt(stmt, env, decl_name, ctx)?;
             }
             Ok(())
         }
-        Expr::Resume { value } => check_ordinary_call_arg_types_in_expr(value, env, decl_name),
+        Expr::Resume { value } => {
+            check_ordinary_call_arg_types_in_expr(value, env, decl_name, ctx)
+        }
         Expr::Block(stmts) => {
             for stmt in stmts {
-                check_ordinary_call_arg_types_in_stmt(stmt, env, decl_name)?;
+                check_ordinary_call_arg_types_in_stmt(stmt, env, decl_name, ctx)?;
             }
             Ok(())
         }
         Expr::Case { scrutinee, arms } => {
-            check_ordinary_call_arg_types_in_expr(scrutinee, env, decl_name)?;
+            check_ordinary_call_arg_types_in_expr(scrutinee, env, decl_name, ctx)?;
             for arm in arms {
-                check_ordinary_call_arg_types_in_expr(&arm.body, env, decl_name)?;
+                check_ordinary_call_arg_types_in_expr(&arm.body, env, decl_name, ctx)?;
             }
             Ok(())
         }
@@ -114,13 +138,13 @@ pub(crate) fn check_ordinary_call_arg_types_in_expr(
             then_expr,
             else_expr,
         } => {
-            check_ordinary_call_arg_types_in_expr(condition, env, decl_name)?;
-            check_ordinary_call_arg_types_in_expr(then_expr, env, decl_name)?;
-            check_ordinary_call_arg_types_in_expr(else_expr, env, decl_name)
+            check_ordinary_call_arg_types_in_expr(condition, env, decl_name, ctx)?;
+            check_ordinary_call_arg_types_in_expr(then_expr, env, decl_name, ctx)?;
+            check_ordinary_call_arg_types_in_expr(else_expr, env, decl_name, ctx)
         }
         Expr::ListIndex { list, index } => {
-            check_ordinary_call_arg_types_in_expr(list, env, decl_name)?;
-            check_ordinary_call_arg_types_in_expr(index, env, decl_name)
+            check_ordinary_call_arg_types_in_expr(list, env, decl_name, ctx)?;
+            check_ordinary_call_arg_types_in_expr(index, env, decl_name, ctx)
         }
         Expr::IntLit(_)
         | Expr::BoolLit(_)
@@ -142,16 +166,24 @@ fn check_ordinary_call_arg_types_in_stmt(
     stmt: &Stmt,
     env: &TypeEnv,
     decl_name: &str,
+    ctx: CallContext<'_>,
 ) -> Result<(), TypecheckError> {
     match stmt {
         Stmt::Binding { value, .. }
         | Stmt::MutBinding { value, .. }
         | Stmt::Assign { value, .. }
-        | Stmt::Expr(value, _) => check_ordinary_call_arg_types_in_expr(value, env, decl_name),
+        | Stmt::Expr(value, _) => {
+            check_ordinary_call_arg_types_in_expr(value, env, decl_name, ctx)
+        }
     }
 }
 
-fn validate_call_chain(expr: &Expr, env: &TypeEnv, decl_name: &str) -> Result<(), TypecheckError> {
+fn validate_call_chain(
+    expr: &Expr,
+    env: &TypeEnv,
+    decl_name: &str,
+    ctx: CallContext<'_>,
+) -> Result<(), TypecheckError> {
     let Some((target, args)) = ordinary_call_target_and_args(expr) else {
         return Ok(());
     };
@@ -184,6 +216,7 @@ fn validate_call_chain(expr: &Expr, env: &TypeEnv, decl_name: &str) -> Result<()
                 &mut subst,
                 &mut row_subst,
                 &mut next_id,
+                ctx,
             ) {
                 Ok(actual_ty) => actual_ty,
                 Err(CallbackLambdaMismatch::Arity {
@@ -225,6 +258,82 @@ fn validate_call_chain(expr: &Expr, env: &TypeEnv, decl_name: &str) -> Result<()
                 return Ok(());
             }
             if matches!(arg, Expr::Lambda { .. }) {
+                // EP-1d / EP-2 Step 3a: structural unification of the
+                // lambda body's params/result already happened inside
+                // `infer_lambda_ty_against_expected`. We deliberately do not
+                // re-run a full `match_function_argument_type` here because
+                // historically that has been skipped to tolerate curried vs
+                // flat callback shapes (`(b -> a -> b)` vs `(b, a) -> b`).
+                //
+                // What Step 3a still needs is the *effect row* binding: the
+                // callee's row variable on the outermost callback `Ty::Fun`
+                // must absorb the lambda's inferred effects. We extract both
+                // outermost rows after subst and run `unify_effect_rows`
+                // directly, leaving param/result mismatches to the existing
+                // structural skip.
+                //
+                // KNOWN LIMITATION (Step 3b): for a curried lambda passed to
+                // a multi-arity callback (e.g. `fold xs init (fn acc -> fn x ->
+                // print x; acc)`), the *outermost* lambda's effects are
+                // closed-empty because `infer_expr_effects` does not descend
+                // into nested `Expr::Lambda` bodies (Step 1's
+                // `nested_lambda_body_does_not_leak_into_outer_row`
+                // invariant). The expected callback type is flat
+                // (`(b, a) -> b can {e}`), so the row variable still binds,
+                // but to closed-empty rather than the body's `{Print}`. Step 3b
+                // closes this by either flattening curried lambda inferred
+                // types or carrying the body's row through nested `Ty::Fun`
+                // segments before this point.
+                let expected_outer_effects = match env
+                    .resolve_alias(&apply_type_substitution(
+                        &expected_after_subst,
+                        &subst,
+                        &row_subst,
+                        env,
+                    ), 0)
+                {
+                    Ty::Fun { effects, .. } => effects,
+                    _ => EffectRow::closed_empty(),
+                };
+                let actual_outer_effects = match env.resolve_alias(
+                    &apply_type_substitution(&actual_ty, &subst, &row_subst, env),
+                    0,
+                ) {
+                    Ty::Fun { effects, .. } => effects,
+                    _ => EffectRow::closed_empty(),
+                };
+                if !unify_effect_rows(
+                    &expected_outer_effects,
+                    &actual_outer_effects,
+                    &mut row_subst,
+                    &mut next_id,
+                ) {
+                    // LANGUAGE_SPEC §5: closed effect rows are exact, so a
+                    // callback typed `(a -> b)` (closed-empty) cannot accept
+                    // a lambda whose body produces effects. Reject here so
+                    // an effectful body is not silently accepted just because
+                    // the surrounding declaration happens to list `can E`.
+                    let target_name = resolved_callable_name(target);
+                    let call_target = target_name.as_deref().unwrap_or("function");
+                    return Err(TypecheckError {
+                        declaration: Some(decl_name.to_string()),
+                        span: best_available_expr_span(arg),
+                        message: format!(
+                            "`{}` callback effect row mismatch: required `{}` but lambda has `{}`",
+                            call_target,
+                            ty_name(&Ty::Fun {
+                                params: vec![Ty::Unknown],
+                                result: Box::new(Ty::Unknown),
+                                effects: expected_outer_effects.clone(),
+                            }),
+                            ty_name(&Ty::Fun {
+                                params: vec![Ty::Unknown],
+                                result: Box::new(Ty::Unknown),
+                                effects: actual_outer_effects.clone(),
+                            }),
+                        ),
+                    });
+                }
                 continue;
             }
             if let Err(mismatch) = match_function_argument_type(
@@ -289,10 +398,11 @@ fn infer_callback_arg_ty(
     subst: &mut TypeSubst,
     row_subst: &mut RowSubst,
     next_id: &mut usize,
+    ctx: CallContext<'_>,
 ) -> Result<Ty, CallbackLambdaMismatch> {
     match expr {
         Expr::Lambda { .. } => {
-            infer_lambda_ty_against_expected(expr, expected, env, subst, row_subst, next_id)
+            infer_lambda_ty_against_expected(expr, expected, env, subst, row_subst, next_id, ctx)
         }
         _ => Ok(resolve_function_value_ty(expr, env, next_id)),
     }
@@ -305,6 +415,7 @@ fn infer_lambda_ty_against_expected(
     subst: &mut TypeSubst,
     row_subst: &mut RowSubst,
     next_id: &mut usize,
+    ctx: CallContext<'_>,
 ) -> Result<Ty, CallbackLambdaMismatch> {
     let Expr::Lambda { param, body } = expr else {
         return Ok(resolve_function_value_ty(expr, env, next_id));
@@ -356,6 +467,7 @@ fn infer_lambda_ty_against_expected(
                 subst,
                 row_subst,
                 next_id,
+                ctx,
             ) {
                 Ok(nested_ty) => nested_ty,
                 Err(CallbackLambdaMismatch::Arity { .. }) => {
@@ -398,10 +510,20 @@ fn infer_lambda_ty_against_expected(
         }
     };
 
+    // EP-2 Step 3a: synthesise the lambda's effect row from its body. This
+    // turns previously-silent callback effects into a proper row that
+    // `unify_types_with_subst` can match against the callee's row variable.
+    let inferred_effects = infer_expr_effects(
+        body.as_ref(),
+        &child_env,
+        ctx.effect_map,
+        ctx.required_effects_map,
+        ctx.covered_ops,
+    );
     let provided = Ty::Fun {
         params: vec![expected_param_ty],
         result: Box::new(body_ty.clone()),
-        effects: EffectRow::closed_empty(),
+        effects: inferred_effects,
     };
 
     if !unify_types_with_subst(
