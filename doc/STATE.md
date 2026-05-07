@@ -85,16 +85,15 @@ Green:
 
 - `cargo test -p goby-core --lib`: 889 tests (EP-2 Step 1 added 10, Step 3b
   added 7 over the EP-1d baseline).
-- `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`:
-  785 / 12-skipped, ~14.5s wall.
+- `cargo nextest run -p goby-wasm`: 787 passed / 11 skipped, ~15s wall
+  (`fold_m5_string_accumulator` now passes after the
+  `build_stdlib_export_map` fix; see `doc/BUGS.md`).
 - `cargo check --workspace`: warning-free.
 - All previously-green Perceus, TCO, and List acceptance tests remain
   green.
 
 Red / ignored:
 
-- `goby-wasm` `tests::fold_m5_string_accumulator` hangs CPU-bound on the
-  EP-1d baseline (see `doc/BUGS.md`); skip with the nextest filter above.
 - Pre-existing `#[ignore]`d perceus / compile_tests entries from the M10
   closure remain ignored; see `doc/PLAN.md` §4.2.
 

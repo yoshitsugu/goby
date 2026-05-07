@@ -4,20 +4,6 @@ This document tracks confirmed, reproducible bugs in the current Goby toolchain.
 
 Open bugs:
 
-- **2026-05-07.** `goby_wasm` lib test
-  `tests::fold_m5_string_accumulator` hangs indefinitely (CPU-bound, not
-  blocking on I/O) under both `cargo test -p goby-wasm` and
-  `cargo nextest run -p goby-wasm`. Reproduced on EP-1d baseline (Track EP
-  changes are unrelated; reproduces with the EP-2 stdlib retrofit reverted).
-  Other `fold_m5_*` tests in the same module pass; only the
-  `String -> Int -> String` accumulator shape (interpolated `"${acc}${x},"`
-  carrying the heap-string accumulator across `__goby_list_fold` iterations)
-  hangs. Suspected cause: heap cursor sync or refcount handling for a
-  string-typed fold accumulator, but the exact root cause has not been
-  isolated. Workarounds while triaging: skip this single test
-  (`cargo test -p goby-wasm --lib --skip fold_m5_string_accumulator`) or
-  rely on the focused `planning::tests` module for HOF planning checks.
-
 - **2026-05-01.** A function whose result is a `case` over a list pattern can
   return `Unit` or the empty-list-arm result instead of evaluating the matching
   non-empty list arm on the current `goby run` path.
@@ -133,6 +119,34 @@ Open bugs:
     function returning a value.
 
 Resolved bugs:
+
+- **2026-05-07.** `goby-wasm` lib test `tests::fold_m5_string_accumulator`
+  hung indefinitely (CPU-bound). `git bisect` between the test's
+  introducing commit (`b5f2f62`) and `main` identified `4d53981`
+  ("Add list append stdlib helper") as the first bad commit.
+
+  Root cause: the test defines a local `append : String -> Int -> String`,
+  and `4d53981` added a stdlib helper `append : List a -> List a -> List a`
+  in `stdlib/goby/list.gb`. `build_stdlib_export_map` in
+  `crates/goby-wasm/src/gen_lower/mod.rs` populated `known_decls` with
+  every export of every (transitively) imported stdlib module without
+  checking for collisions with user declarations. The resolver still
+  picked the user's `append` for typecheck, but wasm lowering bound the
+  `fold` callback to the stdlib `append` (= `__goby_list_concat`). At
+  runtime the string accumulator was reinterpreted as a list header, the
+  decoded chunk count was effectively unbounded, and `__goby_list_concat`
+  spun forever copying.
+
+  Fix: `build_stdlib_export_map` now drops any stdlib declaration whose
+  name collides with a non-`main` user declaration, restoring the
+  resolver's user-first convention on the codegen side. A unit test
+  (`gen_lower::tests::user_decl_shadows_stdlib_export_in_export_map`)
+  guards the invariant.
+
+  Triage tooling: `.config/nextest.toml` now enforces a per-test
+  slow-timeout (~65s) so a future regression that emits an infinite-loop
+  wasm body fails as a timeout instead of hanging the suite under
+  `cargo nextest run`.
 
 - **2026-04-30.** Perceus M10 was marked complete, but the original
   138×138 real-world driver acceptance shape still exhausted Wasm memory.

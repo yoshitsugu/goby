@@ -1485,6 +1485,20 @@ fn build_stdlib_export_map(
     let mut export_map: HashMap<String, (String, goby_core::ast::Declaration)> = HashMap::new();
     let mut visited: HashSet<String> = HashSet::new();
 
+    // Names defined by the user's own module (excluding `main`). User declarations
+    // shadow stdlib declarations of the same name: dropping the stdlib entry here
+    // keeps the wasm-side `known_decls` set consistent with the resolver, which
+    // already prefers user `Decl` over selective imports. Without this, a stdlib
+    // helper such as `append` would silently override a user-defined `append`
+    // during lowering, and a fold callback bound to the user definition would
+    // dispatch to the stdlib body at runtime.
+    let user_decl_names: HashSet<&str> = module
+        .declarations
+        .iter()
+        .filter(|d| d.name != "main")
+        .map(|d| d.name.as_str())
+        .collect();
+
     // Process the user's directly-imported stdlib modules first (in declaration order) so that
     // name conflicts between multiple stdlib modules resolve in favour of the module the user
     // explicitly imported.  Transitive imports are collected in a separate pending list and
@@ -1509,6 +1523,9 @@ fn build_stdlib_export_map(
             }
         }
         for decl in resolved.module.declarations {
+            if user_decl_names.contains(decl.name.as_str()) {
+                continue;
+            }
             export_map
                 .entry(decl.name.clone())
                 .or_insert_with(|| (path.clone(), decl));
@@ -1530,6 +1547,9 @@ fn build_stdlib_export_map(
             }
         }
         for decl in resolved.module.declarations {
+            if user_decl_names.contains(decl.name.as_str()) {
+                continue;
+            }
             // Transitive imports must not override names already registered from direct imports.
             export_map
                 .entry(decl.name.clone())
@@ -2014,6 +2034,39 @@ main =
                 .expect("lowering should not error")
                 .is_ok(),
             "safe handler-only main should enter general lowering"
+        );
+    }
+
+    #[test]
+    fn user_decl_shadows_stdlib_export_in_export_map() {
+        // Regression for the `fold_m5_string_accumulator` hang: a user-defined
+        // declaration whose name collides with a stdlib export (e.g. `append`
+        // from `goby/list`) used to be overwritten by the stdlib version in
+        // `build_stdlib_export_map`. The wasm lowering then dispatched the
+        // user's callback to `__goby_list_concat`, treating a string
+        // accumulator as a list header and looping forever.
+        let module = parse_module(
+            r#"
+import goby/list ( fold )
+
+append : String -> Int -> String
+append acc x = "${acc}${x},"
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  result = fold [1, 2, 3] "" append
+  println result
+"#,
+        )
+        .expect("source should parse");
+
+        let resolver = StdlibResolver::new(resolve_stdlib_root());
+        let export_map = build_stdlib_export_map(&module, &resolver);
+        assert!(
+            !export_map.contains_key("append"),
+            "user-defined `append` must shadow `goby/list.append` in the export map; \
+             otherwise lowering binds the user callback to the stdlib body"
         );
     }
 
