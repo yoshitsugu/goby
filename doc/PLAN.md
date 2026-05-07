@@ -273,13 +273,17 @@ Based on `examples/*.gb`:
 
 - TODO (Deferred): declaration-side generic parameter binders
   (for example, `id : a -> a` with explicit binders).
-- Planned numeric expansion: `Float` type backed by Wasm `f64`.
-  - intended surface type name is `Float`.
-  - initial implementation target is IEEE 754 double precision semantics via Wasm `f64`.
-  - MVP scope should stay explicit about unsupported edge cases until diagnostics/runtime text are defined:
-    - NaN display/equality wording,
-    - infinity parsing/printing policy,
-    - mixed `Int`/`Float` operator coercion rules.
+- Planned numeric expansion: `Float` type backed by Wasm `f64` — **active line
+  (Phase E1 lock 2026-05-07)**. See §4.4 for the phase plan; literal grammar,
+  operator coverage, NaN/Inf, and printing rules are spec-locked in
+  `doc/LANGUAGE_SPEC.md` §3.
+  - surface type name: `Float`.
+  - semantics: IEEE 754 double precision via Wasm `f64`.
+  - mixed `Int`/`Float` arithmetic is **rejected** in this slice; explicit
+    conversion APIs are deferred.
+  - literal grammar in this slice: `<int>.<frac>` only (no exponent, no hex).
+  - NaN/Inf are arithmetic-result-only (no surface literals); printing follows
+    Haskell `show` (`1.0`, `Infinity`, `-Infinity`, `NaN`, `-0.0`, `0.0`).
 - **List `case` pattern typing** (implemented).
   - For `case xs` with list patterns, typecheck verifies scrutinee is `List _` when known.
   - Per-arm local environment extension is implemented:
@@ -689,47 +693,66 @@ Why this is a separate workstream:
 - `Float` crosses language surface, type rules, runtime behavior, stdlib shape, and Wasm lowering.
 - the design needs a few semantics to be locked before implementation to avoid ad-hoc numeric behavior.
 
-Scope to lock before coding:
+Locked surface (Phase E1, 2026-05-07; see `doc/LANGUAGE_SPEC.md` §3):
 
-1. Literal syntax
-   - canonical decimal forms for `Float` literals (for example `1.0`, `0.5`, `-3.25`).
-   - whether exponent notation (`1e3`, `1.2e-3`) is included in the first slice.
-   - parser boundary with tuple/member syntax so `1.0` is never confused with `expr.0`.
-2. Type/system rules
-   - `Float` is a distinct primitive type, not an alias of `Int`.
-   - decide whether mixed arithmetic is rejected initially or whether `Int -> Float` promotion exists for operators/calls.
-   - comparison/equality semantics must be explicit, especially around NaN.
-3. Runtime/CLI behavior
-   - printing/rendering policy for `Float`.
-   - parse/runtime behavior for NaN, `inf`, `-inf`, and division edge cases.
-4. Stdlib surface
-   - introduce a minimal `goby/float` module only if it has a clearly defined first API surface.
+- literals: `<int>.<frac>` only (`1.0`, `0.5`, `-3.25`); negative literals are
+  single tokens, exponent / hex / digit-separator forms are deferred.
+- type discipline: distinct primitive (`Int` and `Float` are not unified, mixed
+  arithmetic is rejected); explicit conversion APIs are deferred.
+- operators: `+`, `-`, `*`, `/` overload on operand type (`Float, Float -> Float`
+  added; `Int, Int -> Int` unchanged, integer division preserved); comparisons
+  `==`, `<`, `<=`, `>`, `>=` accept `Float, Float -> Bool` and follow IEEE 754
+  for NaN. `/=` and `**` are deferred.
+- runtime: division by zero produces `±Infinity` / `NaN` (no abort); printing
+  follows Haskell `show` (`1.0`, `Infinity`, `-Infinity`, `NaN`, `-0.0`, `0.0`).
 
-Execution phases:
+Execution phases (revised after Codex Pass1 review):
 
-1. Phase E1: Syntax and semantic lock
-   - define accepted literal grammar and operator coverage.
-   - decide initial coercion policy:
-     - preferred conservative default: no implicit `Int`/`Float` mixing in MVP; require exact operand types until explicit conversion APIs exist.
-   - update `doc/LANGUAGE_SPEC.md`, examples, and diagnostics wording once semantics are locked.
-2. Phase E2: Core representation and parsing
-   - add `Float` to AST/type representations.
-   - teach the lexer/parser to recognize `Float` literals without regressing tuple-index/member access parsing.
-   - add parser regression tests for decimal literals, negatives, malformed literals, and `expr.0` ambiguity cases.
-3. Phase E3: Typechecker and operators
-   - add `Float` typing rules for literals, annotations, and supported operators.
-   - implement diagnostics for invalid mixed arithmetic if coercion stays disabled.
-   - ensure branch/type-unification paths report `Int` vs `Float` mismatches clearly.
-4. Phase E4: Runtime and Wasm lowering
-   - extend interpreter/fallback runtime with `Float` values and operator execution.
-   - lower `Float` values/operators to Wasm `f64`.
-   - verify parity between fallback execution and native Wasm execution for the supported subset.
-5. Phase E5: Stdlib, examples, and tooling follow-through
-   - add or update canonical examples using `Float`.
-   - extend formatter/linter/LSP assumptions if numeric literal/token handling needs updates.
-   - add diagnostics/hover rendering coverage for `Float`.
+1. **Phase E1: Semantics lock + spec / plan update** (no source changes).
+   Spec text in `doc/LANGUAGE_SPEC.md` §3 and PLAN §2.2 / §4.4 reflect the
+   locked surface above.
+2. **Phase E2: Parser / AST**.
+   - add `Expr::FloatLit(FloatBits)` (`FloatBits(u64)` newtype since `f64`
+     does not implement `Eq`),
+   - add `Ty::Float` with `ty_from_name` / `builtin_type_names` /
+     `typecheck_render` / `unify_types_with_subst` primitive coverage,
+   - extend `parse_expr` to recognize `<int>.<frac>` (with optional leading
+     minus) before falling back to integer parsing; preserve `expr.0`
+     tuple-member access for `Var`-rooted expressions,
+   - parser snapshot tests for valid / invalid forms and the
+     `(1, 2).0` vs `1.0` distinction.
+3. **Phase E3: Typechecker + operator dispatch**.
+   - allow `Float, Float` operand pairs for `+`, `-`, `*`, `/`, `==`, `<`,
+     `<=`, `>`, `>=`; reject mixed `Int` / `Float` with a clear diagnostic,
+   - introduce typed IR variants (e.g. `IrBinOp::FloatAdd`, ...) so the
+     downstream lowering knows which arithmetic to emit; `IrBinOp::Add`
+     keeps its existing tagged-`i64` semantics for `Int`,
+   - acceptance tests on `crates/goby-core/src/typecheck.rs` covering literal
+     typing, mixed-arithmetic rejection, and the `Int` integer-division
+     preservation.
+4. **Phase E4: Wasm runtime value representation lock**.
+   - decide `Float` representation in the Wasm runtime. Default is
+     **heap-boxed `f64`** with a new `TAG_FLOAT`, since the existing 4-bit
+     tag + 60-bit payload cannot carry arbitrary IEEE 754 bit patterns.
+   - add `make_float_value(f64) -> i64` / `extract_float(i64) -> f64`
+     helpers in `gen_lower/value.rs` and verify existing `List` / `Tuple`
+     paths are unaffected.
+5. **Phase E5: Wasm lowering + interpreter fallback + parity**.
+   - lower the typed IR variants to `f64.add`, `f64.div`, `f64.eq`, ...,
+   - extend `RuntimeValue` / `runtime_value_eq` / `to_output_text` /
+     `runtime_expr` literal+binop / `lower.rs::eval_value` /
+     `fallback capability allowlist` for `Float`,
+   - share a `format_float(f: f64) -> String` helper for Haskell-`show`-style
+     rendering (`.0` for integer-valued, `Infinity` / `-Infinity`, `NaN`,
+     `-0.0`, `0.0`),
+   - verify parity between fallback execution and native Wasm execution.
+6. **Phase E6: Examples / formatter / LSP / docs sync**.
+   - add `examples/float_basics.gb` (or equivalent) and a formatter
+     idempotence test,
+   - update `doc/STATE.md` Track Float status; spec was already locked in E1,
+   - run `goby-invariants` before commit.
 
-Acceptance criteria:
+Acceptance criteria (track-level):
 
 - `Float` annotations and literals are accepted by `check` for the supported syntax.
 - supported `Float` arithmetic behaves consistently in fallback runtime and Wasm-native execution.

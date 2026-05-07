@@ -48,7 +48,40 @@ syntax/semantics.
 
 ## 3. Expressions and Statements
 
-- Literals: `Int`, `String`, `Bool` (`True` / `False`), list, tuple.
+- Literals: `Int`, `Float`, `String`, `Bool` (`True` / `False`), list, tuple.
+- `Float` literal and arithmetic contract:
+  - `Float` is a distinct primitive type backed by IEEE 754 double precision
+    (Wasm `f64`). It is not unified with `Int`; mixed arithmetic between
+    `Int` and `Float` is rejected at typecheck time.
+  - canonical literal form is `<int>.<frac>` where each side is one or more
+    decimal digits (`1.0`, `0.5`, `123.456`).
+    - a leading minus binds with the digits to form a single negative
+      literal (`-3.25` is a literal, matching the existing handling of
+      negative `Int` literals).
+    - exponent notation (`1e3`, `1.2e-3`), hexadecimal floats, and
+      underscore digit separators are not supported in this slice.
+    - `1.` and `.5` (missing one side) are rejected.
+    - `NaN`, `Infinity`, and `-Infinity` are not surface literals; they
+      arise only as arithmetic results.
+  - operators on `Float`:
+    - `+`, `-`, `*` accept `Float, Float -> Float` in addition to the
+      existing `Int, Int -> Int`. Mixed operand types are rejected.
+    - `/` accepts `Float, Float -> Float` for real (IEEE 754) division.
+      `Int, Int -> Int` continues to mean integer division and is unchanged.
+    - `==`, `<`, `<=`, `>`, `>=` accept `Float, Float -> Bool`. NaN
+      comparisons follow IEEE 754: `NaN == NaN` is `False`, and any
+      ordering comparison involving `NaN` is `False`.
+    - a not-equal operator (`/=`) is not part of the surface; floating-point
+      exponentiation (`**`) is deferred.
+  - runtime semantics:
+    - division by zero produces `+Infinity`, `-Infinity`, or `NaN` per
+      IEEE 754; the program is not aborted.
+    - `Float` values render through `print` / interpolation with
+      Haskell-`show`-style formatting:
+      - integer-valued floats render with a trailing `.0` (`1.0`),
+      - `+Infinity` → `Infinity`, `-Infinity` → `-Infinity`,
+      - `NaN` → `NaN`,
+      - negative zero → `-0.0`, zero → `0.0`.
 - `List` contract (published M8):
   - `List` is Goby's default ordered collection surface.
   - Runtime representation is intentionally not specified as a linked-list

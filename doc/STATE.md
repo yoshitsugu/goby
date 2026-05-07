@@ -1,33 +1,41 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-07 (Track EP closed; Track PC (`doc/PLAN.md` §4.6
-Parser Combinator) is the new active line, gated only by §3.3 multi-shot
-classification + branch-local state surface.)
+Last updated: 2026-05-07 (Track EP closed. Track PC (`doc/PLAN.md` §4.6
+Parser Combinator) is in user design review (`tmp/pc.md`); Track Float
+(`doc/PLAN.md` §4.4) is the active implementation line with Phase E1
+spec lock landed.)
 
 ## Current Focus
 
-**Track PC: Parser Combinator on Algebraic Effects**
-(`doc/PLAN.md` §4.6).
+**Track Float: `Float` / Wasm `f64` Support**
+(`doc/PLAN.md` §4.4).
 
-Track PC is the next concrete forcing function for the Goby effect
-system: a small, idiomatic parser-combinator surface that uses effects
-as the composition mechanism rather than decoration. With effect-row
-polymorphism landed (2026-05-07), the only remaining hard PC-2
-prerequisite is **§3.3 multi-shot classification + branch-local state
-surface**: `alt` and `many` need either a sanctioned multi-shot path or
-an explicit branch-local state construct to roll the input cursor back
-without violating ordinary-`mut` semantics.
+User-locked surface (2026-05-07): literal grammar is `<int>.<frac>` only
+(`1.0`, `0.5`, `-3.25`); other semantics follow Haskell (distinct from
+`Int`, mixed arithmetic rejected, IEEE 754 NaN/Inf, `(/)` is real
+division on `Float`, integer division on `Int` is unchanged, printing
+follows `show`-style). `doc/LANGUAGE_SPEC.md` §3 carries the locked
+literal/operator/runtime contract.
 
-PC execution phases are described in `doc/PLAN.md` §4.6:
+Execution phases (revised after Codex Pass1 plan review):
 
-- **PC-0**: Surface / protocol / backtracking lock (no implementation).
-- **PC-1**: Cursor-threaded MVP without multi-shot — produces fixtures
-  that exercise HOF effect propagation and basic combinators.
-- **PC-2**: Multi-shot `alt` / `many` once §3.3 unblocks.
-- **PC-3**: Stdlib polish, error-reporting, examples.
+- **E1** (this update): semantics lock + spec/plan update. No source
+  changes.
+- **E2**: parser / AST — `Expr::FloatLit(FloatBits)` and `Ty::Float`
+  primitive coverage; parser preference for `<int>.<frac>` over
+  qualified-access `expr.0`.
+- **E3**: typecheck + operator dispatch — `Float, Float -> Float`
+  overloads; typed IR variants (`IrBinOp::FloatAdd`, ...) so the
+  downstream lowering knows which arithmetic to emit.
+- **E4**: Wasm value representation lock — heap-boxed `f64` with a new
+  `TAG_FLOAT`, since the existing 4-bit tag + 60-bit payload cannot
+  carry arbitrary IEEE 754 bit patterns.
+- **E5**: Wasm lowering + interpreter fallback + parity testing.
+- **E6**: examples / formatter / LSP / docs sync.
 
-PC-0 should land first (design lock), in parallel with §3.3
-classification work.
+**Track PC** (`doc/PLAN.md` §4.6) remains queued — design exploration is
+in progress in `tmp/pc.md`; PC-2 still gated on §3.3 multi-shot /
+branch-local state.
 
 ## Known Red / Green State
 
@@ -48,19 +56,26 @@ Red / ignored:
 
 ## Next Step
 
-**Primary:**
+**Primary (Track Float):**
 
-1. **PC-0 design lock** (`doc/PLAN.md` §4.6): record the chosen `Parser`
-   shape, effect protocol, and backtracking story in
-   `doc/LANGUAGE_SPEC.md` (or a dedicated stdlib design note). Add
-   motivating examples (number parser, JSON-like literal, simple
-   arithmetic-expression parser) as failing/aspirational fixtures.
-2. **§3.3 multi-shot classification + branch-local state surface**
-   (parallelizable with PC-0): the remaining hard PC-2 blocker.
+1. **Phase E2** (`doc/PLAN.md` §4.4): add `Expr::FloatLit(FloatBits)` and
+   `Ty::Float` primitive coverage; extend `parse_expr` to recognize
+   `<int>.<frac>` literals (with optional leading minus) before integer
+   parsing; preserve `expr.0` tuple-member access for `Var`-rooted
+   expressions; add parser snapshot tests for valid / invalid forms and
+   the `(1, 2).0` vs `1.0` distinction.
+
+**Parallel (queued, parallelizable):**
+
+- **PC-0 design lock** (`doc/PLAN.md` §4.6): user is reviewing the
+  design options in `tmp/pc.md` (`Parser` shape, effect protocol,
+  backtracking, error type). Once locked, motivating examples land as
+  failing fixtures.
+- **§3.3 multi-shot classification + branch-local state surface**: the
+  only remaining hard PC-2 blocker.
 
 **Other queued tracks** (lower priority unless a concrete pull exists):
 
-- **Track Float** (`doc/PLAN.md`): floating-point support. Self-contained.
 - **Track OOB** (`doc/PLAN.md`): out-of-bounds handling polish.
 - **Track D D5/D6 follow-ups** (`goby lint`).
 - **Track RR-6 limit tuning**.
