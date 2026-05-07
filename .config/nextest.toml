@@ -1,0 +1,13 @@
+# nextest configuration for the Goby workspace.
+#
+# `slow-timeout` kills any single test that does not finish within the
+# deadline. Compiler/runtime test cases finish in seconds per case under
+# nextest's per-process model, so an outlier this slow is a regression —
+# typically an infinite loop in generated wasm. Surfacing it as a timeout
+# failure is better than a CI worker hang.
+#
+# `period`: warning threshold (a "SLOW [>30s]" line, the test keeps running).
+# `terminate-after`: how many `period`s the test may exceed before nextest
+# sends SIGTERM, then SIGKILL after `grace-period`.
+[profile.default]
+slow-timeout = { period = "30s", terminate-after = 2, grace-period = "5s" }

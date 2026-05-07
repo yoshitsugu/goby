@@ -35,3 +35,8 @@ Read `AGENTS.md` for product invariants. This file adds Claude-Code-specific wor
 - When the change is localised, narrow the run with
   `cargo test -p goby-wasm --lib <module>::tests` (e.g.
   `planning::tests` finishes 16 cases in well under a second).
+- `.config/nextest.toml` enforces a per-test slow-timeout (≈65s with
+  grace) so a regressed compiler that emits an infinite-loop wasm body
+  no longer hangs the suite — the offending case is killed and reported
+  as a timeout failure. Plain `cargo test` does not honour this, so
+  prefer `cargo nextest run` when triaging hangs.
