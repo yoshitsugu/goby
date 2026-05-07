@@ -1,14 +1,14 @@
 join : List String -> String -> String
 join values sep = __goby_list_join_string values sep
 
-each : List a -> (a -> Unit) -> Unit
+each : List a -> (a -> Unit can {e}) -> Unit can {e}
 # M7-2 ownership note:
 # stepping/consumption for callback-style traversal stays on this public fold-based
 # shape (`__goby_list_fold`), not in symbol-name-magic runtime branches.
 each xs f =
   __goby_list_fold xs () (fn _ x -> f x)
 
-map : List a -> (a -> b) -> List b
+map : List a -> (a -> b can {e}) -> List b can {e}
 map xs f = __goby_list_map xs f
 
 length : List a -> Int
@@ -23,7 +23,7 @@ append : List a -> List a -> List a
 append xs ys = __goby_list_concat xs ys
 
 # Left fold. The callback receives the accumulator first: f acc elem.
-fold : List a -> b -> (b -> a -> b) -> b
+fold : List a -> b -> (b -> a -> b can {e}) -> b can {e}
 fold xs acc f = __goby_list_fold xs acc f
 
 # Immutable point update. Returns a new list with element at index i replaced by v.

@@ -386,11 +386,12 @@ Based on `examples/*.gb`:
   - after migration, trim builtin-only `map` special handling so runtime/compiler has a single semantics source.
 - `List.fold` addition (complete, 2026-03-28):
   - `fold : List a -> b -> (b -> a -> b) -> b` — curried left-fold, accumulator-first callback.
+    (EP-2, 2026-05-07: signature retrofitted to `(b -> a -> b can {e}) -> b can {e}`
+    so callback effects propagate through row unification.)
   - Implemented in `stdlib/goby/list.gb` via ordinary stdlib recursion; no compiler special-casing.
   - Backend: `IndirectCall { arity: 2 }` generalized for 2-arg HOF callbacks.
-  - Effect policy: follows same callback-effect treatment as `each`/`map` (effectful callbacks
-    permitted if caller's `can` clause covers them; cross-path guarantee deferred until HOF
-    effect propagation is formally designed).
+  - Effect policy: callback effects propagate to the caller's `can` clause via
+    Track EP row unification (LANGUAGE_SPEC §5; EP-2 landed 2026-05-07).
 
 ### 2.5 Runtime / Compiler Scope (MVP)
 

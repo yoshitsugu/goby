@@ -383,18 +383,20 @@ syntax/semantics.
 
 - Builtins currently include `print`, `fetch_env_var`, `string.split`, `list.join`.
 - Stdlib `goby/list` provides the following higher-order list functions:
-  - `each : List a -> (a -> Unit) -> Unit`
+  - `each : List a -> (a -> Unit can {e}) -> Unit can {e}`
     - applies a callback to each element in order; discards results.
-  - `map : List a -> (a -> b) -> List b`
+    - `{e}` is a row variable: callback effects propagate to the caller's
+      `can` clause via Track EP row unification (LANGUAGE_SPEC §5).
+  - `map : List a -> (a -> b can {e}) -> List b can {e}`
     - transforms each element via a callback; returns a new list.
-  - `fold : List a -> b -> (b -> a -> b) -> b`
+    - same row-polymorphic effect propagation as `each`.
+  - `fold : List a -> b -> (b -> a -> b can {e}) -> b can {e}`
     - left fold: accumulates a result over a list using a binary callback.
     - semantics: `fold [x1, x2, x3] init f == f (f (f init x1) x2) x3`
     - callback argument order: accumulator first, then element (`f acc elem`).
     - `fold [] init f == init` (empty list returns the initial accumulator).
-    - **Temporary limitation (2026-03-28):** effectful callbacks follow the same
-      caller-`can`-clause model as `each` and `map`; this is not guaranteed to work
-      in all execution paths until effect propagation through HOFs is formally designed.
+    - effectful callbacks propagate via row variable `{e}` to the caller's
+      `can` clause (Track EP, EP-2 / 2026-05-07).
   - `length : List a -> Int`
     - returns the number of elements in the list.
   - `push : List a -> a -> List a`
