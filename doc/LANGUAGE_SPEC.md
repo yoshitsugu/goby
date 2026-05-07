@@ -82,6 +82,14 @@ syntax/semantics.
       - `+Infinity` → `Infinity`, `-Infinity` → `-Infinity`,
       - `NaN` → `NaN`,
       - negative zero → `-0.0`, zero → `0.0`.
+  - implementation status (2026-05-08): the literal grammar, type rules,
+    operator overloading, and diagnostics described above are live. Wasm
+    code emission and runtime printing land in Track Float Phase E5
+    (`doc/PLAN.md` §4.4); until then any module containing a `Float`
+    literal is rejected at the `compile_module` boundary with
+    "Float values are not yet runnable on the wasm path", so the
+    runtime-semantics paragraphs above describe the locked target
+    behaviour rather than today's executable behaviour.
 - `List` contract (published M8):
   - `List` is Goby's default ordered collection surface.
   - Runtime representation is intentionally not specified as a linked-list

@@ -274,7 +274,8 @@ fn lower_expr_as_comp_non_value(
             })
         }
         ResolvedExpr::BinOp { op, left, right } => {
-            lower_binop_anf(ctx, lower_binop(op), left, right)
+            let ir_op = lower_binop_with_operands(op, left, right);
+            lower_binop_anf(ctx, ir_op, left, right)
         }
         ResolvedExpr::MethodCall {
             receiver, method, ..
@@ -384,7 +385,7 @@ fn try_lower_value(
                 return Ok(None);
             };
             Ok(Some(ValueExpr::BinOp {
-                op: lower_binop(op),
+                op: lower_binop_with_operands(op, left, right),
                 left: Box::new(l),
                 right: Box::new(r),
             }))
@@ -883,6 +884,71 @@ fn lower_binop(op: &BinOpKind) -> IrBinOp {
         BinOpKind::Gt => IrBinOp::Gt,
         BinOpKind::Le => IrBinOp::Le,
         BinOpKind::Ge => IrBinOp::Ge,
+    }
+}
+
+/// Track Float Phase E3: choose between integer and Float IR variants
+/// based on the operands' surface shape.
+///
+/// The shared IR does not yet thread per-operand types through every node,
+/// so this helper does a shallow inspection of the resolved operands: if
+/// either side is recognisably `Float` (literal or a binary op already
+/// producing a Float), the Float variant is selected. This is sufficient
+/// because the typechecker rejects mixed `Int` / `Float` operands, so a
+/// well-typed program will see a consistent classification on both sides.
+/// `Var`-rooted operands fall back to the integer variant for now; a more
+/// precise type-aware lowering pass arrives with Phase E5 alongside the
+/// Float runtime representation.
+fn lower_binop_with_operands(
+    op: &BinOpKind,
+    left: &ResolvedExpr,
+    right: &ResolvedExpr,
+) -> IrBinOp {
+    if !matches!(
+        op,
+        BinOpKind::Add
+            | BinOpKind::Sub
+            | BinOpKind::Mul
+            | BinOpKind::Div
+            | BinOpKind::Eq
+            | BinOpKind::Lt
+            | BinOpKind::Le
+            | BinOpKind::Gt
+            | BinOpKind::Ge
+    ) {
+        return lower_binop(op);
+    }
+    if !(resolved_expr_is_float(left) || resolved_expr_is_float(right)) {
+        return lower_binop(op);
+    }
+    match op {
+        BinOpKind::Add => IrBinOp::FloatAdd,
+        BinOpKind::Sub => IrBinOp::FloatSub,
+        BinOpKind::Mul => IrBinOp::FloatMul,
+        BinOpKind::Div => IrBinOp::FloatDiv,
+        BinOpKind::Eq => IrBinOp::FloatEq,
+        BinOpKind::Lt => IrBinOp::FloatLt,
+        BinOpKind::Le => IrBinOp::FloatLe,
+        BinOpKind::Gt => IrBinOp::FloatGt,
+        BinOpKind::Ge => IrBinOp::FloatGe,
+        _ => lower_binop(op),
+    }
+}
+
+/// Shallow Float-shape detector for the IR-lowering operator dispatcher.
+fn resolved_expr_is_float(expr: &ResolvedExpr) -> bool {
+    match expr {
+        ResolvedExpr::FloatLit(_) => true,
+        ResolvedExpr::BinOp { op, left, right } => match op {
+            BinOpKind::Add
+            | BinOpKind::Sub
+            | BinOpKind::Mul
+            | BinOpKind::Div => {
+                resolved_expr_is_float(left) || resolved_expr_is_float(right)
+            }
+            _ => false,
+        },
+        _ => false,
     }
 }
 

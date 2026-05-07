@@ -108,11 +108,25 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
                 (BinOpKind::Div, Ty::Int, Ty::Int) => Ty::Int,
                 (BinOpKind::Mod, Ty::Int, Ty::Int) => Ty::Int,
                 (BinOpKind::BitXor, Ty::Int, Ty::Int) => Ty::Int,
+                // Track Float Phase E3: `+`, `-`, `*`, `/` overload on
+                // operand type. `Float, Float -> Float`; the integer
+                // arithmetic above is unchanged. Mixed `Int` / `Float`
+                // operands fall through to the diagnostic path.
+                (BinOpKind::Add, Ty::Float, Ty::Float) => Ty::Float,
+                (BinOpKind::Sub, Ty::Float, Ty::Float) => Ty::Float,
+                (BinOpKind::Mul, Ty::Float, Ty::Float) => Ty::Float,
+                (BinOpKind::Div, Ty::Float, Ty::Float) => Ty::Float,
                 (BinOpKind::Eq, _, _) if is_equality_comparable(env, &lt, &rt) => Ty::Bool,
                 (BinOpKind::Lt, Ty::Int, Ty::Int) => Ty::Bool,
                 (BinOpKind::Gt, Ty::Int, Ty::Int) => Ty::Bool,
                 (BinOpKind::Le, Ty::Int, Ty::Int) => Ty::Bool,
                 (BinOpKind::Ge, Ty::Int, Ty::Int) => Ty::Bool,
+                // Track Float Phase E3: ordering comparisons on `Float`
+                // produce `Bool`. NaN handling follows IEEE 754 at runtime.
+                (BinOpKind::Lt, Ty::Float, Ty::Float) => Ty::Bool,
+                (BinOpKind::Gt, Ty::Float, Ty::Float) => Ty::Bool,
+                (BinOpKind::Le, Ty::Float, Ty::Float) => Ty::Bool,
+                (BinOpKind::Ge, Ty::Float, Ty::Float) => Ty::Bool,
                 (_, Ty::Unknown, _) | (_, _, Ty::Unknown) => Ty::Unknown,
                 _ => Ty::Unknown,
             }

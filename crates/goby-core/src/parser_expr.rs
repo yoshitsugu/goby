@@ -1392,6 +1392,21 @@ mod tests {
     }
 
     #[test]
+    fn parenthesised_float_literal_remains_a_float() {
+        // Phase E3 follow-up: Track Float guard relies on a Float literal
+        // anywhere in the AST being detectable. Parens around a Float must
+        // not erase the literal (parsing as `Call` or unrelated would
+        // bypass the wasm runtime guard for var-rooted Float arguments).
+        use crate::ast::FloatBits;
+        let parsed = parse_expr("(1.0)").expect("`(1.0)` should parse");
+        let inner = match &parsed {
+            Expr::Spanned { expr, .. } => expr.as_ref(),
+            other => other,
+        };
+        assert_eq!(inner, &Expr::FloatLit(FloatBits::from_f64(1.0)));
+    }
+
+    #[test]
     fn float_literal_does_not_collide_with_qualified_access() {
         // `pair.0` is tuple-member access, not a Float literal: the
         // receiver is a `Var`, not a digit run, so the Float branch must

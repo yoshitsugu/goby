@@ -621,6 +621,11 @@ pub(crate) enum GeneralLowerUnsupportedReason {
     UserDeclIrLoweringFailed,
     /// A stdlib declaration (imported from the standard library) failed IR lowering.
     StdlibDeclIrLoweringFailed,
+    /// Track Float Phase E3: the module contains `Float` literals or `Float`
+    /// arithmetic. Phase E5 wires the runtime representation and Wasm
+    /// emission; until then we reject the program here so a var-rooted
+    /// Float operand cannot silently fall through to integer arithmetic.
+    FloatNotYetRunnable,
     // Note: EmitNotSupported is intentionally absent — emit::supports_instrs currently
     // returns true for all instructions, so that rejection path is unreachable.
 }
@@ -664,8 +669,97 @@ impl std::fmt::Display for GeneralLowerUnsupportedReason {
             Self::StdlibDeclIrLoweringFailed => {
                 write!(f, "stdlib declaration could not be lowered to backend IR")
             }
+            Self::FloatNotYetRunnable => {
+                write!(
+                    f,
+                    "Float values are not yet runnable on the wasm path (Track Float Phase E5)"
+                )
+            }
         }
     }
+}
+
+/// Re-export of [`module_contains_float`] for the wasm crate's runtime
+/// guard at the public `compile_module` boundary.
+pub(crate) fn module_contains_float_for_runtime_guard(module: &Module) -> bool {
+    module_contains_float(module)
+}
+
+/// Track Float Phase E3 safety net: scan the AST for any `Float` literal so
+/// the wasm pipeline can refuse modules that would otherwise let a Float
+/// value flow through integer-tagged code paths. A more precise check
+/// (annotation-aware, including `Float` parameters) lands in Phase E5
+/// together with the runtime representation.
+fn module_contains_float(module: &Module) -> bool {
+    fn expr_has_float(expr: &goby_core::Expr) -> bool {
+        use goby_core::Expr;
+        match expr {
+            Expr::FloatLit(_) => true,
+            Expr::Spanned { expr, .. } => expr_has_float(expr),
+            Expr::InterpolatedString(parts) => parts.iter().any(|part| match part {
+                goby_core::ast::InterpolatedPart::Text(_) => false,
+                goby_core::ast::InterpolatedPart::Expr(inner) => expr_has_float(inner),
+            }),
+            Expr::ListLit { elements, spread } => {
+                elements.iter().any(expr_has_float)
+                    || spread.as_deref().is_some_and(expr_has_float)
+            }
+            Expr::TupleLit(items) => items.iter().any(expr_has_float),
+            Expr::RecordConstruct { fields, .. } => {
+                fields.iter().any(|(_, value)| expr_has_float(value))
+            }
+            Expr::UnaryOp { expr, .. } => expr_has_float(expr),
+            Expr::BinOp { left, right, .. } => expr_has_float(left) || expr_has_float(right),
+            Expr::Call { callee, arg, .. } => expr_has_float(callee) || expr_has_float(arg),
+            Expr::MethodCall { args, .. } => args.iter().any(expr_has_float),
+            Expr::Pipeline { value, .. } => expr_has_float(value),
+            Expr::Lambda { body, .. } => expr_has_float(body),
+            Expr::With { handler, body } => {
+                expr_has_float(handler) || stmts_have_float(body)
+            }
+            Expr::Resume { value } => expr_has_float(value),
+            Expr::Block(stmts) => stmts_have_float(stmts),
+            Expr::Case { scrutinee, arms } => {
+                expr_has_float(scrutinee) || arms.iter().any(|a| expr_has_float(&a.body))
+            }
+            Expr::If {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                expr_has_float(condition)
+                    || expr_has_float(then_expr)
+                    || expr_has_float(else_expr)
+            }
+            Expr::ListIndex { list, index } => expr_has_float(list) || expr_has_float(index),
+            Expr::Handler { clauses } => clauses.iter().any(|clause| {
+                clause
+                    .parsed_body
+                    .as_ref()
+                    .is_some_and(|body| stmts_have_float(body))
+            }),
+            Expr::IntLit(_)
+            | Expr::BoolLit(_)
+            | Expr::StringLit(_)
+            | Expr::Var { .. }
+            | Expr::Qualified { .. } => false,
+        }
+    }
+
+    fn stmts_have_float(stmts: &[goby_core::Stmt]) -> bool {
+        use goby_core::Stmt;
+        stmts.iter().any(|stmt| match stmt {
+            Stmt::Binding { value, .. }
+            | Stmt::MutBinding { value, .. }
+            | Stmt::Assign { value, .. }
+            | Stmt::Expr(value, _) => expr_has_float(value),
+        })
+    }
+
+    module
+        .declarations
+        .iter()
+        .any(|decl| decl.parsed_body.as_ref().is_some_and(|b| stmts_have_float(b)))
 }
 
 fn type_expr_returns_wasm_heap(expr: &TypeExpr) -> bool {
@@ -1590,6 +1684,14 @@ fn assert_general_lower_perceus_pipeline() {
 /// or `Err(CodegenError)` on hard codegen failures.
 pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResult, CodegenError> {
     assert_general_lower_perceus_pipeline();
+    // Track Float Phase E3: until Phase E5 wires the runtime representation
+    // and Wasm emission for `Float`, reject any module whose source already
+    // contains a Float literal. The lowering pipeline still treats integer
+    // arithmetic exactly as before, but we cannot let a var-rooted Float
+    // operand silently fall through to integer wasm ops (Codex review).
+    if module_contains_float(module) {
+        return Ok(Err(GeneralLowerUnsupportedReason::FloatNotYetRunnable));
+    }
     let handler_legality = analyze_module_handler_legality(module)?;
     let allow_safe_handler_lowering = handler_legality.all_one_shot_tail_resumptive();
     let stdlib_resolver = StdlibResolver::new(resolve_stdlib_root());

@@ -9225,6 +9225,24 @@ fn emit_bin_op(
             function.instruction(&Instruction::I64And);
             Ok(())
         }
+        // Track Float Phase E3 stub: Float operator emission lands in
+        // Phase E5 once the Wasm value representation (E4 — heap-boxed
+        // f64) is locked. Until then, programs that reach these IR
+        // variants are reported as unsupported codegen forms rather than
+        // panicking.
+        IrBinOp::FloatAdd
+        | IrBinOp::FloatSub
+        | IrBinOp::FloatMul
+        | IrBinOp::FloatDiv
+        | IrBinOp::FloatEq
+        | IrBinOp::FloatLt
+        | IrBinOp::FloatGt
+        | IrBinOp::FloatLe
+        | IrBinOp::FloatGe => Err(CodegenError {
+            message:
+                "Float arithmetic and comparisons are not yet supported by the Wasm backend (Track Float Phase E5)"
+                    .to_string(),
+        }),
     }
 }
 

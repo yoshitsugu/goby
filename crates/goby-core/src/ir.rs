@@ -64,6 +64,20 @@ pub enum IrBinOp {
     Gt,
     Le,
     Ge,
+    // Track Float Phase E3: typed Float arithmetic / comparison variants.
+    // The integer `Add` / ... variants keep their existing tagged-i64
+    // semantics, while these variants emit `f64.add` / `f64.lt` / ...
+    // at the wasm layer (Phase E5). Splitting at the IR level avoids the
+    // backend having to recover operand type from surrounding context.
+    FloatAdd,
+    FloatSub,
+    FloatMul,
+    FloatDiv,
+    FloatEq,
+    FloatLt,
+    FloatGt,
+    FloatLe,
+    FloatGe,
 }
 
 /// A pure value expression that does not perform effects.
@@ -521,16 +535,16 @@ fn fmt_value(out: &mut String, v: &ValueExpr) {
                 IrBinOp::Or => "||",
                 IrBinOp::And => "&&",
                 IrBinOp::BitXor => "^",
-                IrBinOp::Add => "+",
-                IrBinOp::Sub => "-",
-                IrBinOp::Mul => "*",
-                IrBinOp::Div => "/",
+                IrBinOp::Add | IrBinOp::FloatAdd => "+",
+                IrBinOp::Sub | IrBinOp::FloatSub => "-",
+                IrBinOp::Mul | IrBinOp::FloatMul => "*",
+                IrBinOp::Div | IrBinOp::FloatDiv => "/",
                 IrBinOp::Mod => "%",
-                IrBinOp::Eq => "==",
-                IrBinOp::Lt => "<",
-                IrBinOp::Gt => ">",
-                IrBinOp::Le => "<=",
-                IrBinOp::Ge => ">=",
+                IrBinOp::Eq | IrBinOp::FloatEq => "==",
+                IrBinOp::Lt | IrBinOp::FloatLt => "<",
+                IrBinOp::Gt | IrBinOp::FloatGt => ">",
+                IrBinOp::Le | IrBinOp::FloatLe => "<=",
+                IrBinOp::Ge | IrBinOp::FloatGe => ">=",
             });
             out.push(' ');
             fmt_value(out, right);

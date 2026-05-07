@@ -2190,6 +2190,108 @@ main =
     // `main` carries auto-discharge for the prelude's embedded effects (Print,
     // Read), which would mask a row-variable leak.
 
+    // ----- Track Float Phase E3 acceptance (`doc/PLAN.md` §4.4) -----
+
+    #[test]
+    fn float_literal_with_explicit_annotation_typechecks() {
+        // Phase E3: a `Float` literal under a `Float` annotation must
+        // typecheck cleanly.
+        let source = "\
+pi : Unit -> Float
+pi = 3.14
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("Float literal under Float annotation should pass");
+    }
+
+    #[test]
+    fn float_addition_typechecks_as_float() {
+        let source = "\
+sum : Unit -> Float
+sum = 1.5 + 2.5
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("Float + Float -> Float should typecheck");
+    }
+
+    #[test]
+    fn float_division_uses_real_division_and_keeps_int_division_unchanged() {
+        let source = "\
+real_div : Unit -> Float
+real_div = 7.0 / 2.0
+
+int_div : Unit -> Int
+int_div = 7 / 2
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect(
+            "`/` overloads on operand type: Float / Float -> Float, Int / Int -> Int",
+        );
+    }
+
+    #[test]
+    fn float_comparison_returns_bool() {
+        let source = "\
+less : Unit -> Bool
+less = 1.0 < 2.0
+
+equal : Unit -> Bool
+equal = 1.0 == 1.0
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("Float ordering and equality should produce Bool");
+    }
+
+    #[test]
+    fn negative_float_literal_typechecks_as_float() {
+        let source = "\
+v : Unit -> Float
+v = -3.25
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("`-3.25` should typecheck as a single Float literal");
+    }
+
+    #[test]
+    fn passing_float_where_int_required_reports_distinct_diagnostic() {
+        // Phase E3 acceptance: the typechecker must clearly distinguish
+        // `Int` from `Float` in mismatch diagnostics. The argument-type
+        // mismatch path renders both names directly via `ty_name`, which
+        // now prints `Ty::Float` as `"Float"`.
+        let source = "\
+take_int : Int -> Int
+take_int x = x
+
+main : Unit -> Unit can Print
+main = print \"${take_int (1.0)}\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err =
+            typecheck_module(&module).expect_err("Float argument to Int parameter should fail");
+        assert!(
+            err.message.contains("Float") && err.message.contains("Int"),
+            "diagnostic should mention both `Int` and `Float`, got: {err}"
+        );
+    }
+
+    #[test]
+    fn passing_int_where_float_required_reports_distinct_diagnostic() {
+        let source = "\
+take_float : Float -> Float
+take_float x = x
+
+main : Unit -> Unit can Print
+main = print \"${take_float (1)}\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err =
+            typecheck_module(&module).expect_err("Int argument to Float parameter should fail");
+        assert!(
+            err.message.contains("Float") && err.message.contains("Int"),
+            "diagnostic should mention both `Int` and `Float`, got: {err}"
+        );
+    }
+
     #[test]
     fn ep2_each_effectful_lambda_without_can_clause_is_rejected() {
         // `each xs (fn n -> emit(n))` in a function declared without

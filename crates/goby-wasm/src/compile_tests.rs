@@ -106,6 +106,56 @@ fn parse_alloc_stats_field(stderr: &str, field: &str) -> u64 {
         .unwrap_or_else(|e| panic!("invalid {field} field in alloc stats: {e}: {stderr}"))
 }
 
+// ----- Track Float Phase E3 wasm-guard tests -----
+
+#[test]
+fn compile_module_rejects_float_literal_in_main_until_phase_e5() {
+    // Phase E3 safety net: Float literals reach the wasm pipeline but
+    // cannot run yet (Phase E5 work). Programs that include a Float
+    // literal must surface a clear codegen error rather than silently
+    // falling through integer-tagged execution.
+    let source = "\
+main : Unit -> Unit can Print
+main = print \"${1.0}\"
+";
+    let module = parse_module(source).expect("should parse");
+    let err = compile_module(&module)
+        .expect_err("Float literal in main should be rejected at codegen");
+    assert!(
+        err.message.contains("Float"),
+        "diagnostic should mention Float, got: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Phase E5") || err.message.contains("not yet runnable"),
+        "diagnostic should point at the deferred Phase E5 work, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn compile_module_rejects_var_rooted_float_arithmetic_until_phase_e5() {
+    // Phase E3 safety net for the Codex-Pass1 high finding: a helper
+    // that adds two Float parameters via `a + b` (no Float literal in
+    // the helper body itself) must still be rejected at codegen so a
+    // Float value cannot flow into integer wasm ops via `IrBinOp::Add`.
+    let source = "\
+my_add : Float -> Float -> Float
+my_add a b = a + b
+
+main : Unit -> Unit can Print
+main = print \"${my_add 1.0 2.0}\"
+";
+    let module = parse_module(source).expect("should parse");
+    let err = compile_module(&module)
+        .expect_err("Float arithmetic via a helper should also be rejected at codegen");
+    assert!(
+        err.message.contains("Float"),
+        "diagnostic should mention Float, got: {}",
+        err.message
+    );
+}
+
 #[test]
 fn compile_module_self_tail_decl_member_uses_shared_dispatcher_without_wrapper_recursion() {
     let source = r#"
