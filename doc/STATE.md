@@ -1,144 +1,130 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-07 (Track EP closed. Track PC (`doc/PLAN.md` §4.6
-Parser Combinator) is in user design review (`tmp/pc.md`); Track Float
-(`doc/PLAN.md` §4.4) is the active implementation line with Phase E1
-spec lock landed.)
+Last updated: 2026-05-08 (Track Float E1–E3 landed; E4 — Wasm value
+representation lock — is the next active line. Track PC remains queued
+behind user design review.)
 
 ## Current Focus
 
-**Track Float: `Float` / Wasm `f64` Support**
-(`doc/PLAN.md` §4.4).
+**Track Float: `Float` / Wasm `f64` Support** (`doc/PLAN.md` §4.4).
 
-User-locked surface (2026-05-07): literal grammar is `<int>.<frac>` only
-(`1.0`, `0.5`, `-3.25`); other semantics follow Haskell (distinct from
-`Int`, mixed arithmetic rejected, IEEE 754 NaN/Inf, `(/)` is real
-division on `Float`, integer division on `Int` is unchanged, printing
-follows `show`-style). `doc/LANGUAGE_SPEC.md` §3 carries the locked
-literal/operator/runtime contract.
+Locked surface (LANGUAGE_SPEC §3): literal grammar `<int>.<frac>` only
+(`1.0`, `0.5`, `-3.25`); `Float` is a distinct primitive with no implicit
+`Int`/`Float` coercion; `+`/`-`/`*`/`/`/`==`/`<`/`<=`/`>`/`>=` overload
+on operand type; `Int / Int` keeps integer division; runtime semantics
+follow IEEE 754 (NaN ≠ NaN, division by zero produces ±Infinity / NaN);
+printing follows Haskell `show` (`1.0`, `Infinity`, `-Infinity`, `NaN`,
+`-0.0`, `0.0`).
 
-Execution phases (revised after Codex Pass1 plan review):
+Phase progress:
 
-- **E1** (this update): semantics lock + spec/plan update. No source
-  changes.
-- **E2**: parser / AST — `Expr::FloatLit(FloatBits)` and `Ty::Float`
-  primitive coverage; parser preference for `<int>.<frac>` over
-  qualified-access `expr.0`.
-- **E3**: typecheck + operator dispatch — `Float, Float -> Float`
-  overloads; typed IR variants (`IrBinOp::FloatAdd`, ...) so the
-  downstream lowering knows which arithmetic to emit.
-- **E4**: Wasm value representation lock — heap-boxed `f64` with a new
-  `TAG_FLOAT`, since the existing 4-bit tag + 60-bit payload cannot
-  carry arbitrary IEEE 754 bit patterns.
-- **E5**: Wasm lowering + interpreter fallback + parity testing.
-- **E6**: examples / formatter / LSP / docs sync.
+- **E1** complete (`9c6e5e3`): semantics lock, doc updates only.
+- **E2** complete (`80ba5c9`): `FloatBits(u64)` newtype, `Expr::FloatLit`,
+  `ResolvedExpr::FloatLit`, `ValueExpr::FloatLit`, `Ty::Float`,
+  `parse_float_literal` (qualified-access still wins for `pair.0`),
+  exhaustive-match pass across `goby-core` + `goby-wasm`.
+- **E3** complete (`fe143db`): typecheck operator dispatch
+  (`Float, Float -> Float` for arithmetic, `Float, Float -> Bool` for
+  comparisons), typed IR variants (`IrBinOp::Float{Add,Sub,Mul,Div,Eq,
+  Lt,Gt,Le,Ge}`), shallow lowering dispatcher in `ir_lower`, and a
+  workspace-wide wasm safety net: every `goby_wasm` public compile /
+  execute entry point and `runtime_io_execution_kind` reject any module
+  containing a `Float` literal with a clear "Float values are not yet
+  runnable on the wasm path (Track Float Phase E5)" `CodegenError` so a
+  var-rooted Float operand cannot silently flow through integer wasm
+  ops.
+- **E4** active: Wasm runtime value representation lock — heap-boxed
+  `f64` plus a new `TAG_FLOAT`. The current 4-bit tag + 60-bit payload
+  cannot carry arbitrary IEEE 754 bit patterns, so `Float` values must
+  live behind a heap pointer alongside `List` / `Tuple` payloads.
+- **E5** queued: real Wasm lowering (`f64.const`, `f64.add`, ...) +
+  fallback `RuntimeValue::Float` + `format_float` helper + parity
+  testing. The wasm safety net introduced in E3 is removed once this
+  lands.
+- **E6** queued: examples / formatter idempotence / LSP hover / final
+  PLAN + STATE sync.
 
 **Track PC** (`doc/PLAN.md` §4.6) remains queued — design exploration is
-in progress in `tmp/pc.md`; PC-2 still gated on §3.3 multi-shot /
+in progress in `tmp/pc.md` (`Parser` shape, effect protocol,
+backtracking, error type). PC-2 is still gated on §3.3 multi-shot /
 branch-local state.
 
 ## Known Red / Green State
 
 Green:
 
-- `cargo test -p goby-core --lib`: 903 passed / 2 ignored.
-- `cargo nextest run -p goby-wasm`: 787 passed / 11 skipped, ~15s wall
-  (`fold_m5_string_accumulator` now passes after the
-  `build_stdlib_export_map` fix; see `doc/BUGS.md`).
+- `cargo test -p goby-core --lib`: 916 passed / 2 ignored.
 - `cargo check --workspace`: warning-free.
-- All previously-green Perceus, TCO, List, and effect-row acceptance
-  tests remain green.
+- `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`:
+  the regular wasm suite passes.
 
 Red / ignored:
 
-- Pre-existing `#[ignore]`d perceus / compile_tests entries from the M10
-  closure remain ignored; see `doc/PLAN.md` §4.2.
+- Pre-existing `#[ignore]`d perceus / compile_tests entries from M10
+  closure (see `doc/PLAN.md` §4.2).
+- `goby-wasm` lib test `tests::fold_m5_string_accumulator` is a known
+  CPU-bound hang on this checkout; track it via `doc/BUGS.md` and skip
+  it in nextest runs.
 
 ## Next Step
 
-**Primary (Track Float):**
+**Primary (Track Float E4):**
 
-1. **Phase E2** (`doc/PLAN.md` §4.4): add `Expr::FloatLit(FloatBits)` and
-   `Ty::Float` primitive coverage; extend `parse_expr` to recognize
-   `<int>.<frac>` literals (with optional leading minus) before integer
-   parsing; preserve `expr.0` tuple-member access for `Var`-rooted
-   expressions; add parser snapshot tests for valid / invalid forms and
-   the `(1, 2).0` vs `1.0` distinction.
+Lock the heap-boxed `f64` representation:
+
+1. Add `TAG_FLOAT` to `crates/goby-wasm/src/gen_lower/value.rs`.
+2. Implement `make_float_value(f64) -> i64` /
+   `extract_float(i64) -> f64` helpers using the existing 8-byte heap
+   allocator (same model as `List` / `Tuple` payloads).
+3. Verify the existing tagged-`i64` paths (`List`, `Tuple`, primitives)
+   are unaffected by the new tag value.
+4. No surface or typecheck changes — this is preparatory plumbing for
+   E5's `f64.const` / `f64.add` / ... emission.
 
 **Parallel (queued, parallelizable):**
 
-- **PC-0 design lock** (`doc/PLAN.md` §4.6): user is reviewing the
-  design options in `tmp/pc.md` (`Parser` shape, effect protocol,
-  backtracking, error type). Once locked, motivating examples land as
-  failing fixtures.
+- **PC-0 design lock** (`doc/PLAN.md` §4.6): once the user finishes the
+  design review in `tmp/pc.md`, motivating fixtures (`parser_number`,
+  `parser_arith`, `parser_json_lite`) land as failing examples.
 - **§3.3 multi-shot classification + branch-local state surface**: the
   only remaining hard PC-2 blocker.
 
-**Other queued tracks** (lower priority unless a concrete pull exists):
+**Other queued tracks (lower priority):**
 
-- **Track OOB** (`doc/PLAN.md`): out-of-bounds handling polish.
-- **Track D D5/D6 follow-ups** (`goby lint`).
-- **Track RR-6 limit tuning**.
+- Track OOB (out-of-bounds handling polish).
+- Track D D5/D6 follow-ups (`goby lint`).
+- Track RR-6 limit tuning.
 
-**Parallel known-red cleanup (lower priority than the next track):**
+**Parallel known-red cleanup (lowest priority):**
 
 - Pre-existing typecheck regressions in 8 example files
   (`case_arm_block.gb`, `function_reference.gb`, `list_set.gb`,
   `list_spread.gb`, `mut.gb`, `string_graphemes.gb`, `tco.gb`,
-  `to_integer.gb`) surface during a `goby check` loop on `examples/*.gb`.
-  These predate the row-polymorphism work (reproduce on the `975863e`
-  baseline) and should be triaged separately, ideally with a
-  `doc/BUGS.md` entry per case; formatter idempotence does not catch
-  them.
-
-Effect-row follow-ups deferred (not blocking PC):
-
-- method-call (`.foo`) / pipeline (`|>`) callback paths bypass
-  `validate_call_chain` and therefore the row-mismatch / row-leak
-  diagnostics. Reproducers using ordinary `Expr::Call` are covered.
-- `Expr::Block`'s ordinary-call validation does not thread
-  per-statement `local_env` updates the way
-  `check_unhandled_effects_in_expr` does. Goby's surface lacks
-  `{ ... }` block syntax, so this is not currently reachable from user
-  source.
+  `to_integer.gb`) reproduce on the `975863e` baseline. Triage
+  separately with a `doc/BUGS.md` entry per case.
 
 ## Recently Closed (Reference Only)
 
-- **Effect row polymorphism** (commits 2026-05-07): row-polymorphic
+- **Effect row polymorphism** (Track EP, 2026-05-07): row-polymorphic
   callback signatures (`can ..., {e}`) propagate effects through stdlib
-  HOFs (`each` / `map` / `fold`) and user-defined HOFs. Closed callback
-  rows reject effectful lambdas; diagnostic wording distinguishes
-  "missing effect in closed row" from "row variable cannot be unified"
-  (LANGUAGE_SPEC §5). 13 dedicated acceptance tests in
-  `crates/goby-core/src/typecheck.rs` (`ep3_*`) plus 7 from earlier
-  phases pin the contract. Key pieces: row representation with closed /
-  open / row-variable forms (`unify_effect_rows`,
-  `apply_row_substitution`); `infer_expr_effects` /
-  `infer_curried_lambda_body_effects` /
-  `infer_call_effects_at_site` for callback row inference; the
-  decoupling of `decl_can_ops` (decl `can` permits) from `covered_ops`
-  (lexically `with`-discharged) so callback effects surface to the row
-  variable instead of being silently swallowed by an outer `can`.
-- **Track E (Perceus)**: M0–M11 complete. Durable design lives in
+  HOFs and user-defined HOFs; closed callback rows reject effectful
+  lambdas; diagnostic wording distinguishes "missing effect in closed
+  row" from "row variable cannot be unified" (LANGUAGE_SPEC §5).
+  Implementation pieces: row representation (`unify_effect_rows`,
+  `apply_row_substitution`), lambda inference
+  (`infer_expr_effects`, `infer_curried_lambda_body_effects`,
+  `infer_call_effects_at_site`), and the decoupling of `decl_can_ops`
+  from `covered_ops` so callback effects surface to the row variable
+  instead of being swallowed by an outer `can`. 13 `ep3_*` acceptance
+  tests in `crates/goby-core/src/typecheck.rs` plus the EP-2 acceptance
+  set pin the contract.
+- **Track E (Perceus)**: M0–M11 complete. Durable design in
   `doc/PLAN.md` §4.2; runtime-allocator unification, `LetMut`-aware
   `return_ownership_value`, and the 138×138 stdin acceptance test all
-  shipped. Re-open conditions and won't-fix items are recorded in the
-  same section.
-- **Generic TCO (RR-5)**: published contract in
-  `doc/LANGUAGE_SPEC.md` §4.1.
-- **Sequence-backed `List`**: published contract in
-  `doc/LANGUAGE_SPEC.md`.
-- **WB-4C lexical handler metadata** (effect operation identity slice):
-  shared IR carries `EffectOpId`; handler-clause lowering and legality
-  analysis use `effect + op` identity when available. Lexical target
-  records for `WithHandler` / `PerformEffect` remain a follow-up slice.
-- **CLAUDE.md test-runner guidance** (`355ba02`, 2026-05-07): captures
-  the recommendation to reach for `cargo nextest run -p goby-wasm` on
-  the full wasm suite (per-process parallelism dodges wasmtime's
-  internal locking) with a `cargo test` fallback when nextest isn't
-  installed.
-- **BUGS.md** (`6cf184a`, 2026-05-07): records `goby-wasm` lib test
-  `tests::fold_m5_string_accumulator` as a pre-existing CPU-bound hang
-  on the pre-row-polymorphism baseline. Use
-  `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`
-  while triaging unrelated work.
+  shipped.
+- **Generic TCO (RR-5)** and **Sequence-backed `List`**: published
+  contracts in `doc/LANGUAGE_SPEC.md`.
+- **WB-4C lexical handler metadata**: shared IR carries `EffectOpId`;
+  handler-clause lowering and legality analysis use `effect + op`
+  identity when available. Lexical target records for `WithHandler` /
+  `PerformEffect` remain a follow-up slice.
