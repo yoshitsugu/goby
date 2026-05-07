@@ -1,4 +1,77 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
+
+/// Identifier for an effect-row variable. Surface form is `{e}`; the inner
+/// string keeps the user-written name for diagnostics. Fresh row variables at
+/// instantiation use names of the form `__goby_fresh_row_N`.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct RowVarId(pub(crate) String);
+
+/// An effect row in the type system. Set + optional row tail variable.
+/// `tail = None` denotes a closed row (exact set of effects).
+/// `tail = Some(_)` denotes an open row (additional effects allowed via the var).
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct EffectRow {
+    pub(crate) fixed: BTreeSet<String>,
+    pub(crate) tail: Option<RowVarId>,
+}
+
+// EP-1a introduces these types ahead of EP-1b/EP-1c wiring; the `allow(dead_code)`
+// attributes scattered through this section suppress unused-warning noise on
+// `cargo check` (lib profile) until parser/Ty integration consumes them.
+#[allow(dead_code)]
+impl EffectRow {
+    pub(crate) fn closed_empty() -> Self {
+        EffectRow {
+            fixed: BTreeSet::new(),
+            tail: None,
+        }
+    }
+
+    pub(crate) fn closed_from<I: IntoIterator<Item = String>>(effects: I) -> Self {
+        EffectRow {
+            fixed: effects.into_iter().collect(),
+            tail: None,
+        }
+    }
+
+    pub(crate) fn is_closed(&self) -> bool {
+        self.tail.is_none()
+    }
+
+    pub(crate) fn is_empty_closed(&self) -> bool {
+        self.fixed.is_empty() && self.tail.is_none()
+    }
+}
+
+/// Substitution map for effect-row variables. Kept separate from `TypeSubst`
+/// because row variables substitute to rows, not to types.
+#[allow(dead_code)]
+pub(crate) type RowSubst = HashMap<RowVarId, EffectRow>;
+
+/// Parsed `can` clause (EP-0 surface): a set of fixed effect names plus an
+/// optional row variable. `explicit_empty` distinguishes `can {}` from omission
+/// at the source level (both denote the closed-empty row, but the former is
+/// written explicitly).
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CanClause {
+    pub(crate) fixed: Vec<String>,
+    pub(crate) row_var: Option<String>,
+    pub(crate) explicit_empty: bool,
+}
+
+#[allow(dead_code)]
+impl CanClause {
+    pub(crate) fn empty_closed() -> Self {
+        CanClause {
+            fixed: Vec::new(),
+            row_var: None,
+            explicit_empty: false,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Ty {
@@ -202,5 +275,101 @@ impl TypeEnv {
             },
             _ => ty.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod effect_row_tests {
+    use super::*;
+
+    #[test]
+    fn closed_empty_has_no_fixed_or_tail() {
+        let row = EffectRow::closed_empty();
+        assert!(row.fixed.is_empty());
+        assert!(row.tail.is_none());
+        assert!(row.is_closed());
+        assert!(row.is_empty_closed());
+    }
+
+    #[test]
+    fn closed_from_collects_into_set() {
+        let row = EffectRow::closed_from(["Print".to_string(), "Read".to_string()]);
+        assert_eq!(row.fixed.len(), 2);
+        assert!(row.fixed.contains("Print"));
+        assert!(row.fixed.contains("Read"));
+        assert!(row.is_closed());
+        assert!(!row.is_empty_closed());
+    }
+
+    #[test]
+    fn closed_rows_with_same_effects_are_equal_regardless_of_input_order() {
+        let a = EffectRow::closed_from(["Print".to_string(), "Read".to_string()]);
+        let b = EffectRow::closed_from(["Read".to_string(), "Print".to_string()]);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn closed_rows_normalize_duplicates_idempotently() {
+        let row = EffectRow::closed_from([
+            "Print".to_string(),
+            "Print".to_string(),
+            "Read".to_string(),
+        ]);
+        assert_eq!(row.fixed.len(), 2);
+    }
+
+    #[test]
+    fn open_row_carries_tail_variable() {
+        let row = EffectRow {
+            fixed: BTreeSet::from(["Print".to_string()]),
+            tail: Some(RowVarId("e".to_string())),
+        };
+        assert!(!row.is_closed());
+        assert_eq!(row.tail.as_ref().map(|v| v.0.as_str()), Some("e"));
+    }
+
+    #[test]
+    fn open_rows_with_same_fixed_and_same_tail_are_equal() {
+        let a = EffectRow {
+            fixed: BTreeSet::from(["Print".to_string(), "Read".to_string()]),
+            tail: Some(RowVarId("e".to_string())),
+        };
+        let b = EffectRow {
+            fixed: BTreeSet::from(["Read".to_string(), "Print".to_string()]),
+            tail: Some(RowVarId("e".to_string())),
+        };
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn open_rows_with_different_tails_are_unequal() {
+        let a = EffectRow {
+            fixed: BTreeSet::from(["Print".to_string()]),
+            tail: Some(RowVarId("e".to_string())),
+        };
+        let b = EffectRow {
+            fixed: BTreeSet::from(["Print".to_string()]),
+            tail: Some(RowVarId("r".to_string())),
+        };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn empty_can_clause_is_closed_without_explicit_braces() {
+        let clause = CanClause::empty_closed();
+        assert!(clause.fixed.is_empty());
+        assert!(clause.row_var.is_none());
+        assert!(!clause.explicit_empty);
+    }
+
+    #[test]
+    fn row_subst_maps_row_var_to_row() {
+        let mut subst: RowSubst = RowSubst::new();
+        subst.insert(
+            RowVarId("e".to_string()),
+            EffectRow::closed_from(["Print".to_string()]),
+        );
+        let bound = subst.get(&RowVarId("e".to_string())).cloned();
+        assert_eq!(bound, Some(EffectRow::closed_from(["Print".to_string()])));
     }
 }
