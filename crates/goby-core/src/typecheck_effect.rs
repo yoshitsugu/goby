@@ -644,10 +644,16 @@ fn effect_fully_covered(
     ops.iter().all(|op| covered_ops.contains(op))
 }
 
-/// Best-effort handler-coverage extraction for `infer_expr_effects`.
+/// Best-effort handler-coverage extraction for `infer_expr_effects` and the
+/// EP-3 `validate_call_chain` `Expr::With` branch.
+///
 /// Diagnostics are produced elsewhere; here we silently treat malformed or
 /// unresolved handlers as covering nothing so we do not under-report effects.
-fn covered_ops_from_handler(handler: &Expr, env: &TypeEnv, effect_map: &EffectMap) -> HashSet<String> {
+pub(crate) fn covered_ops_from_handler(
+    handler: &Expr,
+    env: &TypeEnv,
+    effect_map: &EffectMap,
+) -> HashSet<String> {
     let mut out = HashSet::new();
     let unwrapped = match handler {
         Expr::Spanned { expr, .. } => expr.as_ref(),

@@ -181,8 +181,22 @@ pub(crate) fn check_unhandled_effects_in_expr(
     required_effects_map: &HashMap<String, Vec<String>>,
     effect_map: &EffectMap,
     covered_ops: &HashSet<String>,
+    decl_can_ops: &HashSet<String>,
     decl_name: &str,
 ) -> Result<(), TypecheckError> {
+    // EP-3 root-cause split: the *incoming* `covered_ops` carries only ops
+    // discharged by an enclosing `with`, while `decl_can_ops` carries ops
+    // permitted by the surrounding decl's `can` clause. We keep a separate
+    // `with_only_covered_ops` for lambda body effect inference (so callback
+    // effects surface to the row variable) and locally shadow `covered_ops`
+    // with the effective union for op-call validation, preserving the
+    // existing "can clause permits this op" behaviour.
+    let with_only_covered_ops = covered_ops;
+    let covered_ops_owned: HashSet<String> = covered_ops
+        .union(decl_can_ops)
+        .cloned()
+        .collect();
+    let covered_ops: &HashSet<String> = &covered_ops_owned;
     fn check_effect_op_call_arg_types_in_handler_scope(
         op_name: &str,
         args: &[&Expr],
@@ -284,7 +298,8 @@ pub(crate) fn check_unhandled_effects_in_expr(
                 local_mutability,
                 required_effects_map,
                 effect_map,
-                covered_ops,
+                with_only_covered_ops,
+                decl_can_ops,
                 decl_name,
             )
         };
@@ -295,7 +310,8 @@ pub(crate) fn check_unhandled_effects_in_expr(
                 local_mutability,
                 required_effects_map,
                 effect_map,
-                covered_ops,
+                with_only_covered_ops,
+                decl_can_ops,
                 decl_name,
             )
         };
@@ -398,10 +414,15 @@ pub(crate) fn check_unhandled_effects_in_expr(
             // their inferred effects, so the resolved row's `fixed` set
             // names the effects this call requires beyond the callee's
             // declared `required_effects_map` entry.
+            //
+            // EP-3: pass `with_only_covered_ops` so lambda body inference does
+            // not silently swallow effects that the outer decl's `can` clause
+            // permits — those effects should surface to the row variable so
+            // they can be (re)bound at the call site here.
             let ctx = CallContext {
                 effect_map,
                 required_effects_map,
-                covered_ops,
+                covered_ops: with_only_covered_ops,
             };
             if let Some(call_effects) = infer_call_effects_at_site(expr, env, ctx) {
                 for effect_name in &call_effects {
@@ -530,7 +551,8 @@ pub(crate) fn check_unhandled_effects_in_expr(
                         decl_name,
                         None,
                         &param_refs,
-                        covered_ops,
+                        with_only_covered_ops,
+                        decl_can_ops,
                     )?;
                 }
             }
@@ -540,7 +562,9 @@ pub(crate) fn check_unhandled_effects_in_expr(
             recurse!(handler)?;
             let handler_covered =
                 infer_handler_covered_ops_strict(handler, env, effect_map, decl_name)?;
-            let mut merged = covered_ops.clone();
+            // EP-3: extend the *with-derived* set only. `decl_can_ops` is
+            // immutable per declaration and is threaded through unchanged.
+            let mut merged = with_only_covered_ops.clone();
             merged.extend(handler_covered);
             check_body_stmts(
                 body,
@@ -552,6 +576,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
                 None,
                 &[],
                 &merged,
+                decl_can_ops,
             )
         }
         Expr::Resume { value } => recurse!(value),
@@ -574,7 +599,8 @@ pub(crate) fn check_unhandled_effects_in_expr(
                             local_mutability,
                             required_effects_map,
                             effect_map,
-                            covered_ops,
+                            with_only_covered_ops,
+                            decl_can_ops,
                             decl_name,
                         )?;
                         let ty = check_expr(value, &local_env);
@@ -588,7 +614,8 @@ pub(crate) fn check_unhandled_effects_in_expr(
                             local_mutability,
                             required_effects_map,
                             effect_map,
-                            covered_ops,
+                            with_only_covered_ops,
+                            decl_can_ops,
                             decl_name,
                         )?;
                     }
@@ -600,7 +627,8 @@ pub(crate) fn check_unhandled_effects_in_expr(
                             local_mutability,
                             required_effects_map,
                             effect_map,
-                            covered_ops,
+                            with_only_covered_ops,
+                            decl_can_ops,
                             decl_name,
                         )?;
                     }

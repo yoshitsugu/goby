@@ -103,15 +103,20 @@ pub(crate) fn check_declaration_bodies(
             .iter()
             .map(|(name, ty)| (name.as_str(), ty.clone()))
             .collect();
-        let mut decl_covered_ops =
+        // EP-3: `decl_can_ops` carries the ops permitted by the decl's `can`
+        // clause; it is NOT a `with`-discharged set. Keep `covered_ops` empty
+        // here so lambda body effect inference does not silently swallow ops
+        // that the outer `can` permits.
+        let mut decl_can_ops =
             ops_from_can_clause(decl.type_annotation.as_deref(), &checking.effect_map);
         if decl.name == "main" {
             for effect_name in &checking.embedded_default_effects {
                 if let Some(ops) = checking.effect_map.effect_to_ops.get(effect_name) {
-                    decl_covered_ops.extend(ops.iter().cloned());
+                    decl_can_ops.extend(ops.iter().cloned());
                 }
             }
         }
+        let covered_ops: HashSet<String> = HashSet::new();
         check_resume_in_stmts(stmts, &checking.env, &decl.name, &param_ty_refs, None)
             .map_err(|err| body_error_to_source_span(decl, err))?;
         check_body_stmts(
@@ -123,7 +128,8 @@ pub(crate) fn check_declaration_bodies(
             &decl.name,
             declared_return_ty,
             &param_ty_refs,
-            &decl_covered_ops,
+            &covered_ops,
+            &decl_can_ops,
         )
         .map_err(|err| body_error_to_source_span(decl, err))?;
     }
@@ -162,15 +168,16 @@ pub(crate) fn check_declaration_bodies_collect(
             .iter()
             .map(|(name, ty)| (name.as_str(), ty.clone()))
             .collect();
-        let mut decl_covered_ops =
+        let mut decl_can_ops =
             ops_from_can_clause(decl.type_annotation.as_deref(), &checking.effect_map);
         if decl.name == "main" {
             for effect_name in &checking.embedded_default_effects {
                 if let Some(ops) = checking.effect_map.effect_to_ops.get(effect_name) {
-                    decl_covered_ops.extend(ops.iter().cloned());
+                    decl_can_ops.extend(ops.iter().cloned());
                 }
             }
         }
+        let covered_ops: HashSet<String> = HashSet::new();
         if let Err(e) =
             check_resume_in_stmts(stmts, &checking.env, &decl.name, &param_ty_refs, None)
         {
@@ -186,7 +193,8 @@ pub(crate) fn check_declaration_bodies_collect(
             &decl.name,
             declared_return_ty,
             &param_ty_refs,
-            &decl_covered_ops,
+            &covered_ops,
+            &decl_can_ops,
         ) {
             errors.push(body_error_to_source_span(decl, e));
         }

@@ -25,6 +25,7 @@ pub(crate) fn check_body_stmts(
     declared_return_ty: Option<Ty>,
     param_tys: &[(&str, Ty)],
     covered_ops: &HashSet<String>,
+    decl_can_ops: &HashSet<String>,
 ) -> Result<(), TypecheckError> {
     let mut local_env = TypeEnv {
         globals: env.globals.clone(),
@@ -50,6 +51,7 @@ pub(crate) fn check_body_stmts(
         required_effects_map,
         decl_name,
         covered_ops,
+        decl_can_ops,
     )?;
     check_declared_return_type(stmts, env, &local_env, decl_name, declared_return_ty)
 }
@@ -64,6 +66,7 @@ fn check_statement_sequence(
     required_effects_map: &HashMap<String, Vec<String>>,
     decl_name: &str,
     covered_ops: &HashSet<String>,
+    decl_can_ops: &HashSet<String>,
 ) -> Result<(), TypecheckError> {
     for stmt in stmts {
         check_stmt(
@@ -75,6 +78,7 @@ fn check_statement_sequence(
             required_effects_map,
             decl_name,
             covered_ops,
+            decl_can_ops,
         )?;
     }
     Ok(())
@@ -90,6 +94,7 @@ fn check_stmt(
     required_effects_map: &HashMap<String, Vec<String>>,
     decl_name: &str,
     covered_ops: &HashSet<String>,
+    decl_can_ops: &HashSet<String>,
 ) -> Result<(), TypecheckError> {
     match stmt {
         Stmt::Binding { name, value, span } => {
@@ -110,6 +115,7 @@ fn check_stmt(
                 required_effects_map,
                 effect_map,
                 covered_ops,
+                decl_can_ops,
                 decl_name,
             )?;
             let ty = infer_expr_binding_ty(value, local_env);
@@ -135,6 +141,7 @@ fn check_stmt(
                 required_effects_map,
                 effect_map,
                 covered_ops,
+                decl_can_ops,
                 decl_name,
             )?;
             let ty = infer_expr_binding_ty(value, local_env);
@@ -173,6 +180,7 @@ fn check_stmt(
                         required_effects_map,
                         effect_map,
                         covered_ops,
+                        decl_can_ops,
                         decl_name,
                     )?;
                     let current_ty = local_env.locals.get(name).cloned().unwrap_or(Ty::Unknown);
@@ -233,6 +241,7 @@ fn check_stmt(
                         required_effects_map,
                         effect_map,
                         covered_ops,
+                        decl_can_ops,
                         decl_name,
                     )?;
                     // Walk the target chain and check each projection's receiver and index types.
@@ -271,6 +280,7 @@ fn check_stmt(
             required_effects_map,
             effect_map,
             covered_ops,
+            decl_can_ops,
             decl_name,
         ),
     }
@@ -329,6 +339,7 @@ fn check_assign_target_chain(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_stmt_value(
     expr: &Expr,
     local_env: &TypeEnv,
@@ -336,10 +347,21 @@ fn validate_stmt_value(
     required_effects_map: &HashMap<String, Vec<String>>,
     effect_map: &EffectMap,
     covered_ops: &HashSet<String>,
+    decl_can_ops: &HashSet<String>,
     decl_name: &str,
 ) -> Result<(), TypecheckError> {
     ensure_known_call_targets_in_expr(expr, local_env, decl_name)?;
     ensure_no_ambiguous_refs_in_expr(expr, local_env, decl_name)?;
+    // EP-3 root-cause fix: `covered_ops` here means *with-discharged* ops only.
+    // `decl_can_ops` are the ops permitted by the surrounding `can` clause but
+    // not actually handled, so they must NOT be passed into lambda body effect
+    // inference (`infer_expr_effects` reachable via `CallContext.covered_ops`).
+    // Callback bodies need their effects to surface so the row variable on the
+    // callee picks them up; otherwise an effectful lambda is silently treated
+    // as pure. We pass both sets through to `check_unhandled_effects_in_expr`
+    // below; that function constructs the effective union internally so the
+    // op-call check still accepts decl-level "can clause permits this op"
+    // shapes.
     let ctx = CallContext {
         effect_map,
         required_effects_map,
@@ -353,6 +375,7 @@ fn validate_stmt_value(
         required_effects_map,
         effect_map,
         covered_ops,
+        decl_can_ops,
         decl_name,
     )?;
     check_branch_type_consistency_in_expr(expr, local_env, decl_name)

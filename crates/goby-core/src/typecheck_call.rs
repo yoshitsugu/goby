@@ -112,8 +112,27 @@ pub(crate) fn check_ordinary_call_arg_types_in_expr(
         }
         Expr::With { handler, body } => {
             check_ordinary_call_arg_types_in_expr(handler, env, decl_name, ctx)?;
+            // EP-3 Codex follow-up: a callback inside `with H in ... cb ...`
+            // must see the handler's covered ops on `CallContext.covered_ops`,
+            // otherwise lambda body inference (`infer_expr_effects`) reports
+            // effects that the enclosing handler already discharges. Mirror
+            // the merge that `check_unhandled_effects_in_expr` does on the
+            // `Expr::With` branch.
+            let handler_covered =
+                crate::typecheck_effect::covered_ops_from_handler(
+                    handler,
+                    env,
+                    ctx.effect_map,
+                );
+            let mut merged = ctx.covered_ops.clone();
+            merged.extend(handler_covered);
+            let inner_ctx = CallContext {
+                effect_map: ctx.effect_map,
+                required_effects_map: ctx.required_effects_map,
+                covered_ops: &merged,
+            };
             for stmt in body {
-                check_ordinary_call_arg_types_in_stmt(stmt, env, decl_name, ctx)?;
+                check_ordinary_call_arg_types_in_stmt(stmt, env, decl_name, inner_ctx)?;
             }
             Ok(())
         }

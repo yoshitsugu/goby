@@ -2332,6 +2332,287 @@ run xs =
         );
     }
 
+    // ----- EP-3 acceptance (PLAN.md §4.6 EP-3) -----
+
+    #[test]
+    fn ep3_partial_discharge_log_handler_handles_log_propagates_print() {
+        // P-1+: a function whose body calls another function with two effects
+        // (`Log` + `Print2`); a `with` handler discharges `Log`. The remaining
+        // `Print2` must still be required by the surrounding `can` clause.
+        let source = "\
+effect Log
+  emit : Int -> Unit
+effect Print2
+  println2 : Int -> Unit
+
+do_log_and_print : Int -> Unit can Log, Print2
+do_log_and_print x =
+  emit(x)
+
+run : Int -> Unit can Print2
+run x =
+  with
+    emit _ -> resume ()
+  in
+    do_log_and_print x
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("partial discharge: with-handled Log + outer can Print2 should pass");
+    }
+
+    #[test]
+    fn ep3_partial_discharge_log_handler_without_outer_print_can_is_rejected() {
+        // P-1−: same as above but the surrounding `can` does not list
+        // `Print2`. The diagnostic must mention the un-handled effect.
+        let source = "\
+effect Log
+  emit : Int -> Unit
+effect Print2
+  println2 : Int -> Unit
+
+do_log_and_print : Int -> Unit can Log, Print2
+do_log_and_print x =
+  emit(x)
+
+run : Int -> Unit
+run x =
+  with
+    emit _ -> resume ()
+  in
+    do_log_and_print x
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("with-handled Log but missing outer can Print2 should fail");
+        assert!(
+            err.message.contains("Print2"),
+            "diagnostic should mention the un-handled `Print2` effect, got: {err}"
+        );
+    }
+
+    #[test]
+    fn ep3_partial_discharge_callback_log_handled_print_propagates() {
+        // P-2+: callback passed to a row-poly HOF returning a list of ints
+        // calls both `Log` and `Print2`; an enclosing `with` handler
+        // discharges `Log`, while the outer `can Print2` carries the
+        // residual effect through.
+        let source = "\
+import goby/list ( map )
+effect Log
+  emit : Int -> Int
+effect Print2
+  println2 : Int -> Int
+
+run : List Int -> List Int can Print2
+run xs =
+  with
+    emit _ -> resume 0
+  in
+    map xs (fn n -> emit(n) + println2(n) - n)
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("callback partial discharge with outer can Print2 should pass");
+    }
+
+    #[test]
+    fn ep3_partial_discharge_callback_print_not_handled_is_rejected() {
+        // P-2−: same callback but the outer `can` is empty. The lambda's
+        // `Print2` must not be silently swallowed by the inner `with` (which
+        // only handles `Log`); the diagnostic must mention `Print2`.
+        let source = "\
+import goby/list ( map )
+effect Log
+  emit : Int -> Int
+effect Print2
+  println2 : Int -> Int
+
+run : List Int -> List Int
+run xs =
+  with
+    emit _ -> resume 0
+  in
+    map xs (fn n -> emit(n) + println2(n) - n)
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("callback `Print2` not handled by inner with or outer can should fail");
+        assert!(
+            err.message.contains("Print2"),
+            "diagnostic should mention `Print2`, got: {err}"
+        );
+    }
+
+    #[test]
+    fn ep3_generic_pure_callback_with_no_can_passes() {
+        // G-1: passing a closed-empty callback to a row-poly HOF binds the
+        // row variable to closed-empty and does not require any outer `can`.
+        let source = "\
+import goby/list ( map )
+
+myid : Int -> Int
+myid x = x
+
+run : List Int -> List Int
+run xs = map xs myid
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("pure callback into row-poly HOF should not require can");
+    }
+
+    #[test]
+    fn ep3_generic_effectful_callback_requires_matching_can() {
+        // G-2 +/−: an effectful lambda binds the row variable to its inferred
+        // row, which must be reflected in the outer `can`.
+        let source_with_can = "\
+import goby/list ( map )
+effect Log
+  emit : Int -> Int
+
+run : List Int -> List Int can Log
+run xs = map xs (fn x -> emit(x))
+";
+        let module = parse_module(source_with_can).expect("should parse");
+        typecheck_module(&module)
+            .expect("effectful callback with matching outer can should pass");
+
+        let source_without_can = "\
+import goby/list ( map )
+effect Log
+  emit : Int -> Int
+
+run : List Int -> List Int
+run xs = map xs (fn x -> emit(x))
+";
+        let module = parse_module(source_without_can).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("effectful callback without outer can should fail");
+        assert!(
+            err.message.contains("Log"),
+            "diagnostic should mention `Log`, got: {err}"
+        );
+    }
+
+    #[test]
+    fn ep3_generic_two_independent_map_calls_dont_interfere() {
+        // G-3: two `map` calls in the same body, each with a callback that
+        // contributes a different effect. Per LANGUAGE_SPEC §5, each call
+        // freshly instantiates the row variable, so both effects land in the
+        // outer `can` independently and the calls do not interfere.
+        let source = "\
+import goby/list ( map )
+effect Log
+  emit : Int -> Int
+effect Print2
+  println2 : Int -> Int
+
+run : List Int -> List Int can Log, Print2
+run xs =
+  let ys = map xs (fn x -> emit(x))
+  let zs = map ys (fn x -> println2(x))
+  zs
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("two independent row-poly HOF calls with different effects should compose");
+    }
+
+    #[test]
+    fn ep3_diag_closed_callback_rejects_extra_effect_lambda() {
+        // D-1: a HOF whose callback is typed with a *closed* `can Log` row.
+        // The lambda body produces both `Log` and `Print2`; the closed row
+        // must reject the extra effect rather than silently swallowing it
+        // via the surrounding `can` clause.
+        let source = "\
+effect Log
+  emit : Int -> Int
+effect Print2
+  println2 : Int -> Int
+
+take_cb : (Int -> Int can Log) -> Int can Log
+take_cb cb = cb 1
+
+run : Int can Log, Print2
+run = take_cb (fn n -> emit(n) + println2(n))
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err(
+            "closed callback row must reject a lambda with extra effects",
+        );
+        assert!(
+            err.message.contains("Print2") || err.message.contains("row mismatch"),
+            "diagnostic should mention the offending effect or row mismatch, got: {err}"
+        );
+    }
+
+    #[test]
+    fn ep3_partial_discharge_with_handler_in_call_chain_lifts_callback_effects() {
+        // Regression test (Codex Pass1 follow-up): when a `with H in ...`
+        // wraps a call site whose callback would otherwise emit `H`'s ops,
+        // the handler's covered ops must be visible to the lambda effect
+        // inference reachable through `CallContext`. Without that merge,
+        // the lambda was reported as carrying `Log` even though the outer
+        // `with Log` already discharges it, producing a spurious closed-row
+        // mismatch against `(Int -> Int can Print2)`.
+        let source = "\
+effect Log
+  emit : Int -> Int
+effect Print2
+  println2 : Int -> Int
+
+take_cb : (Int -> Int can Print2) -> Int can Print2
+take_cb cb = cb 1
+
+run : Int can Print2
+run =
+  with
+    emit _ -> resume 0
+  in
+    take_cb (fn n -> emit(n) + println2(n))
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect(
+            "outer `with Log handler` should discharge the lambda's `Log` effect when binding the closed callback row",
+        );
+    }
+
+    #[test]
+    fn ep3_diag_two_callback_hof_with_conflicting_effects_is_rejected() {
+        // D-2 (Goby-parser-friendly form): named effectful functions passed as
+        // the two callbacks of a HOF that shares a row variable `{e}`. The
+        // shared `{e}` cannot bind to two distinct closed effects at once,
+        // so the call must be rejected. (Inline lambda pairs hit a parser
+        // limitation around argument grouping; named-fn passing exercises
+        // the same row-unification rule.)
+        let source = "\
+effect Log
+  emit : Int -> Int
+effect Print2
+  println2 : Int -> Int
+
+both : (Int -> Int can {e}) -> (Int -> Int can {e}) -> Int can {e}
+both f g = f 1 + g 2
+
+emit_fn : Int -> Int can Log
+emit_fn n = emit(n)
+
+println2_fn : Int -> Int can Print2
+println2_fn n = println2(n)
+
+run : Int can Log, Print2
+run = both emit_fn println2_fn
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err(
+            "shared `{e}` must not unify with two distinct closed effect rows",
+        );
+        assert!(
+            err.message.contains("Log") || err.message.contains("Print2"),
+            "diagnostic should mention one of the conflicting effects, got: {err}"
+        );
+    }
+
     #[test]
     fn typechecks_with_operation_from_imported_effect_without_redeclaration() {
         let source = "\
