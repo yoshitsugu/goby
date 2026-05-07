@@ -760,14 +760,21 @@ fn effect_decl_signature(effect_decl: &crate::ast::EffectDecl) -> String {
 }
 
 fn ty_from_import_annotation(annotation: &str) -> Ty {
-    // EP-1c: ty_from_annotation now lifts the top-level `can` clause into
-    // Ty::Fun.effects, so we no longer hand-build the function type after
-    // stripping. Pass the full annotation; ty_from_annotation handles both
-    // function and non-function shapes.
+    // EP-1c: ty_from_annotation lifts the top-level `can` clause into
+    // Ty::Fun.effects for function shapes. Non-function imports (e.g. a
+    // type-aliased value) cannot syntactically carry `can`, so passing the
+    // already-stripped `base` is equivalent to passing `annotation`. The
+    // debug_assert pins that invariant — if it ever fires we want to know
+    // before the silent drop changes observable behavior.
     let base = strip_effect_clause(annotation).trim();
     if parse_function_type(base).is_some() {
         ty_from_annotation(annotation)
     } else {
+        debug_assert!(
+            find_top_level_can_keyword_index(annotation).is_none(),
+            "non-function import annotation unexpectedly carries a `can` clause: {:?}",
+            annotation
+        );
         ty_from_annotation(base)
     }
 }

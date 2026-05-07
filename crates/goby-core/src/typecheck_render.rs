@@ -151,8 +151,11 @@ mod tests {
             }),
             effects: EffectRow::closed_empty(),
         };
-        // Inner function gets parenthesized by `format_fun_segment`, so the
-        // rendered form makes the binding unambiguous.
+        // The result type is rendered via `ty_name`, not
+        // `format_fun_segment`, so the inner function is *not* parenthesized
+        // and the rendered form remains ambiguous about which arrow the
+        // `can` attaches to. Pinning the current observable shape here so
+        // any future change to the renderer is visible.
         assert_eq!(ty_name(&ty), "Int -> Int -> Int can Print");
     }
 

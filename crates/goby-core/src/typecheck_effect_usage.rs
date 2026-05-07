@@ -223,17 +223,19 @@ pub(crate) fn check_unhandled_effects_in_expr(
                         &mut next_id,
                     )
                 {
-                    let expected_rendered =
-                        apply_type_substitution(expected, &subst, &row_subst, env);
+                    // EP-1d follow-up: render the *pre-unification* snapshot
+                    // so a partially-mutated subst from the failed unify call
+                    // cannot bleed into the diagnostic. `expected_after_subst`
+                    // was computed earlier with the same expected type.
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
                         span: best_available_expr_span(arg),
                         message: format!(
                             "effect operation `{}` expects argument of type `{}` but got `{}`{}",
                             op_name,
-                            ty_name(&expected_rendered),
+                            ty_name(&expected_after_subst),
                             ty_name(&actual),
-                            type_hole_conflict_note(&expected_rendered)
+                            type_hole_conflict_note(&expected_after_subst)
                         ),
                     });
                 }

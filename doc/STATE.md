@@ -35,6 +35,29 @@ Track EP (effect row polymorphism, `doc/PLAN.md` §4.6) is the active line.
   - The callback nested-`can` validation gap (e.g.
     `(Int -> Int can Ghost) -> Int` previously slipping past validate)
     is closed in EP-1c via recursive segment validation.
+- **EP-1c** (Ty::Fun extension + nested validate): complete (2026-05-07).
+  - `Ty::Fun` carries an `effects: EffectRow` field, propagated through
+    every construction / destructuring site in `typecheck_*` (resolve_alias,
+    apply_type_substitution, instantiate_ty_with_fresh_type_vars, partial
+    application, callback rest, branch merging).
+  - `EffectRow::from_can_clause` lifts the surface `CanClause` into the
+    internal row.
+  - `ty_from_annotation` is now string-based and threads a shared type-hole
+    counter through nested function segments. It peels matching outer
+    parens and lifts each segment's `can` clause into its own
+    `Ty::Fun.effects`.
+  - `validate_type_annotation` recurses into each function segment, closing
+    the EP-1b follow-up gap for callback annotations with malformed or
+    unknown effects.
+  - `typecheck_render` appends ` can ...` only when the row is non-empty
+    (snapshot compatibility).
+  - `typecheck_build::build_type_env` and
+    `typecheck_validate::ty_from_import_annotation` route through
+    `ty_from_annotation` so global / imported function types preserve
+    their `can` clauses.
+  - `TypeEnv::are_compatible` and `unify_types_with_subst` ignore the
+    `effects` field as a temporary contract; row unification arrives in
+    EP-1d (below).
 - **EP-1d** (unification + freshening): complete (2026-05-07).
   - `unify_effect_rows` implements the LANGUAGE_SPEC §5 rules (closed-closed,
     closed-open, open-open same-var, open-open distinct vars with occurs
