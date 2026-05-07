@@ -399,6 +399,7 @@ fn collect_value_lambda_envs(
             collect_value_lambda_envs(index, bindings, known_decls, envs);
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::Var(_)
@@ -546,6 +547,7 @@ fn analyze_value(
             analyze_value(index, bindings, known_decls, captures);
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::GlobalRef { .. }

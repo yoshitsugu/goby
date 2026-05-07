@@ -84,6 +84,7 @@ pub(crate) fn format_expr(expr: &Expr, indent: usize) -> String {
     match expr {
         Expr::Spanned { expr, .. } => format_expr(expr, indent),
         Expr::IntLit(n) => n.to_string(),
+        Expr::FloatLit(bits) => crate::ast::format_float_literal(bits.to_f64()),
         Expr::BoolLit(v) => if *v { "True" } else { "False" }.to_string(),
         Expr::StringLit(s) => format!("\"{}\"", escape_string(s)),
         Expr::InterpolatedString(parts) => {

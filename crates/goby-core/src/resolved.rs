@@ -117,6 +117,7 @@ pub enum ResolvedRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedExpr {
     IntLit(i64),
+    FloatLit(crate::ast::FloatBits),
     BoolLit(bool),
     StringLit(String),
     InterpolatedString(Vec<ResolvedInterpolatedPart>),
@@ -395,6 +396,7 @@ impl Resolver {
         match expr {
             Expr::Spanned { expr, .. } => self.resolve_expr(expr),
             Expr::IntLit(n) => ResolvedExpr::IntLit(*n),
+            Expr::FloatLit(bits) => ResolvedExpr::FloatLit(*bits),
             Expr::BoolLit(b) => ResolvedExpr::BoolLit(*b),
             Expr::StringLit(s) => ResolvedExpr::StringLit(s.clone()),
             Expr::InterpolatedString(parts) => ResolvedExpr::InterpolatedString(

@@ -1031,7 +1031,7 @@ fn rebase_expr_span_from_handler_body(
             rebase_expr_span_from_handler_body(list, clause_line, clause_col, inline_body_col);
             rebase_expr_span_from_handler_body(index, clause_line, clause_col, inline_body_col);
         }
-        Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) => {}
+        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) => {}
     }
 }
 

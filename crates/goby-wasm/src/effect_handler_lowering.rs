@@ -431,6 +431,7 @@ fn rewrite_value(value: &ValueExpr, names: &mut NameSupply) -> Result<ValueExpr,
             index: Box::new(rewrite_value(index, names)?),
         }),
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::Var(_)

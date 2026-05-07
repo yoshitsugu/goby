@@ -943,6 +943,7 @@ fn expr_contains_runtime_read(expr: &Expr) -> bool {
                 || expr_contains_runtime_read(else_expr)
         }
         Expr::IntLit(_)
+        | Expr::FloatLit(_)
         | Expr::BoolLit(_)
         | Expr::StringLit(_)
         | Expr::Var { name: _, .. }

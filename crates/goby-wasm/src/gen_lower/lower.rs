@@ -610,6 +610,7 @@ fn matches_empty_list_value(value: &ValueExpr) -> bool {
 fn value_expr_mentions_var(value: &ValueExpr, target: &str) -> bool {
     match value {
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::GlobalRef { .. }
@@ -716,6 +717,7 @@ fn comp_expr_mentions_var(comp: &CompExpr, target: &str) -> bool {
 fn rename_value_var(value: &ValueExpr, from: &str, to: &str) -> ValueExpr {
     match value {
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::GlobalRef { .. }
@@ -3494,6 +3496,14 @@ fn lower_value_ctx(
     match v {
         ValueExpr::Unit => Ok(vec![WasmBackendInstr::I64Const(encode_unit())]),
         ValueExpr::IntLit(n) => Ok(vec![WasmBackendInstr::I64Const(encode_int(*n)?)]),
+        // Phase E2 stub: Float lowering lands in Phase E5 alongside the Wasm
+        // value-representation work. Programs that already include a Float
+        // literal can reach this branch (E1 spec accepts `Float`, E2 wires
+        // the AST/IR variant), so report `UnsupportedForm` rather than
+        // panicking until E5 implements `f64.const` + heap-boxed payload.
+        ValueExpr::FloatLit(_) => Err(LowerError::UnsupportedForm {
+            node: "Float literal (Track Float Phase E5 not yet implemented)".to_string(),
+        }),
         ValueExpr::BoolLit(b) => Ok(vec![WasmBackendInstr::I64Const(encode_bool(*b))]),
         ValueExpr::StrLit(text) => Ok(vec![WasmBackendInstr::PushStaticString {
             text: text.clone(),
@@ -3636,6 +3646,10 @@ fn lower_value_ctx(
 fn static_heap_value(value: &ValueExpr) -> Option<StaticHeapValue> {
     match value {
         ValueExpr::IntLit(n) => Some(StaticHeapValue::Int(*n)),
+        // Phase E2 stub: Float static-heap representation lands in Phase E4.
+        // Returning `None` keeps the static-heap fast path off, which is
+        // safe even though Float programs cannot actually run yet.
+        ValueExpr::FloatLit(_) => None,
         ValueExpr::BoolLit(b) => Some(StaticHeapValue::Bool(*b)),
         ValueExpr::StrLit(text) => Some(StaticHeapValue::Str(text.clone())),
         ValueExpr::Unit => Some(StaticHeapValue::Unit),

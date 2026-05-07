@@ -761,6 +761,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.eval_expr_ast(expr, locals, callables, evaluators, depth)
             }
             Expr::IntLit(n) => Some(RuntimeValue::Int(*n)),
+            // Phase E2 stub: RuntimeValue does not carry Float yet (Phase E5
+            // adds it). Returning None defers the question to the regular
+            // evaluator path, which still cannot produce a Float.
+            Expr::FloatLit(_) => None,
             Expr::BoolLit(b) => Some(RuntimeValue::Bool(*b)),
             Expr::StringLit(s) => Some(RuntimeValue::String(s.clone())),
             Expr::InterpolatedString(_) => {

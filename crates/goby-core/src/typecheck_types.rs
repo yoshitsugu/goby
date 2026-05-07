@@ -291,6 +291,7 @@ fn ty_from_type_expr_with_holes(expr: &TypeExpr, type_hole_counter: &mut usize) 
 fn ty_from_name(name: &str) -> Ty {
     match name {
         "Int" => Ty::Int,
+        "Float" => Ty::Float,
         "Bool" => Ty::Bool,
         "String" => Ty::Str,
         "Unit" => Ty::Unit,
@@ -308,8 +309,8 @@ pub(crate) fn is_type_variable_name(name: &str) -> bool {
         .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
 }
 
-fn builtin_type_names() -> [&'static str; 5] {
-    ["Int", "Bool", "String", "Unit", "List"]
+fn builtin_type_names() -> [&'static str; 6] {
+    ["Int", "Float", "Bool", "String", "Unit", "List"]
 }
 
 #[cfg(test)]

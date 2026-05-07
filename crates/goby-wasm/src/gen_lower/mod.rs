@@ -75,6 +75,7 @@ struct FoldPrependCallbackShape {
 fn value_mentions_name(value: &ValueExpr, target: &str) -> bool {
     match value {
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::GlobalRef { .. }
@@ -838,6 +839,7 @@ fn value_has_handler_constructs(value: &goby_core::ir::ValueExpr) -> bool {
             value_has_handler_constructs(list) || value_has_handler_constructs(index)
         }
         goby_core::ir::ValueExpr::IntLit(_)
+        | goby_core::ir::ValueExpr::FloatLit(_)
         | goby_core::ir::ValueExpr::BoolLit(_)
         | goby_core::ir::ValueExpr::StrLit(_)
         | goby_core::ir::ValueExpr::Var(_)
@@ -869,6 +871,7 @@ fn value_has_rooted_list_update(value: &goby_core::ir::ValueExpr) -> bool {
             value_has_rooted_list_update(list) || value_has_rooted_list_update(index)
         }
         goby_core::ir::ValueExpr::IntLit(_)
+        | goby_core::ir::ValueExpr::FloatLit(_)
         | goby_core::ir::ValueExpr::BoolLit(_)
         | goby_core::ir::ValueExpr::StrLit(_)
         | goby_core::ir::ValueExpr::Var(_)
@@ -910,6 +913,7 @@ fn value_has_handler_rewrite_entrypoints(value: &goby_core::ir::ValueExpr) -> bo
                 || value_has_handler_rewrite_entrypoints(index)
         }
         goby_core::ir::ValueExpr::IntLit(_)
+        | goby_core::ir::ValueExpr::FloatLit(_)
         | goby_core::ir::ValueExpr::BoolLit(_)
         | goby_core::ir::ValueExpr::StrLit(_)
         | goby_core::ir::ValueExpr::Var(_)
@@ -986,6 +990,7 @@ fn value_contains_future_handler_intrinsics(value: &goby_core::ir::ValueExpr) ->
                 || value_contains_future_handler_intrinsics(index)
         }
         goby_core::ir::ValueExpr::IntLit(_)
+        | goby_core::ir::ValueExpr::FloatLit(_)
         | goby_core::ir::ValueExpr::BoolLit(_)
         | goby_core::ir::ValueExpr::StrLit(_)
         | goby_core::ir::ValueExpr::Var(_)
@@ -1053,6 +1058,7 @@ fn value_has_effect_boundary_activity(value: &goby_core::ir::ValueExpr) -> bool 
             value_has_effect_boundary_activity(list) || value_has_effect_boundary_activity(index)
         }
         goby_core::ir::ValueExpr::IntLit(_)
+        | goby_core::ir::ValueExpr::FloatLit(_)
         | goby_core::ir::ValueExpr::BoolLit(_)
         | goby_core::ir::ValueExpr::StrLit(_)
         | goby_core::ir::ValueExpr::Var(_)

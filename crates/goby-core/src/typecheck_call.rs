@@ -166,6 +166,7 @@ pub(crate) fn check_ordinary_call_arg_types_in_expr(
             check_ordinary_call_arg_types_in_expr(index, env, decl_name, ctx)
         }
         Expr::IntLit(_)
+        | Expr::FloatLit(_)
         | Expr::BoolLit(_)
         | Expr::StringLit(_)
         | Expr::Var { .. }

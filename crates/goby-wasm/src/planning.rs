@@ -518,6 +518,7 @@ fn inspect_ir_value(
             inspect_ir_value(index, out, declaration_names, qualified_operation_index);
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::Var(_)
@@ -606,6 +607,7 @@ fn inspect_expr(
             op_name_index,
         ),
         Expr::IntLit(_)
+        | Expr::FloatLit(_)
         | Expr::BoolLit(_)
         | Expr::StringLit(_)
         | Expr::Var { name: _, .. }
@@ -874,6 +876,7 @@ fn expr_contains_handler_resume(expr: &Expr) -> bool {
     match expr {
         Expr::Spanned { expr, .. } => expr_contains_handler_resume(expr),
         Expr::IntLit(_)
+        | Expr::FloatLit(_)
         | Expr::BoolLit(_)
         | Expr::StringLit(_)
         | Expr::Var { name: _, .. }

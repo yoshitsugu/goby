@@ -515,6 +515,7 @@ fn ensure_known_call_targets_in_expr(
             ensure_known_call_targets_in_expr(else_expr, env, decl_name)
         }
         Expr::IntLit(_)
+        | Expr::FloatLit(_)
         | Expr::BoolLit(_)
         | Expr::StringLit(_)
         | Expr::Var { .. }

@@ -661,7 +661,11 @@ fn first_disallowed_intrinsic_in_expr(
     match expr {
         Expr::Spanned { expr, .. } => first_disallowed_intrinsic_in_expr(expr, is_stdlib_source),
         Expr::Var { name, .. } => classify(name),
-        Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) | Expr::Qualified { .. } => None,
+        Expr::IntLit(_)
+        | Expr::FloatLit(_)
+        | Expr::BoolLit(_)
+        | Expr::StringLit(_)
+        | Expr::Qualified { .. } => None,
         Expr::InterpolatedString(parts) => parts.iter().find_map(|part| match part {
             InterpolatedPart::Text(_) => None,
             InterpolatedPart::Expr(expr) => {

@@ -218,7 +218,7 @@ pub(crate) fn apply_type_substitution(
                 .collect(),
         },
         Ty::Handler { covered_ops } => Ty::Handler { covered_ops },
-        Ty::Int | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => resolved,
+        Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => resolved,
     }
 }
 
@@ -255,7 +255,11 @@ pub(crate) fn unify_types_with_subst(
         (Ty::Unknown, _) | (_, Ty::Unknown) => true,
         (Ty::Var(name), ty) => bind_type_variable(&name, &ty, type_subst, row_subst, env, next_id),
         (ty, Ty::Var(name)) => bind_type_variable(&name, &ty, type_subst, row_subst, env, next_id),
-        (Ty::Int, Ty::Int) | (Ty::Bool, Ty::Bool) | (Ty::Str, Ty::Str) | (Ty::Unit, Ty::Unit) => {
+        (Ty::Int, Ty::Int)
+        | (Ty::Float, Ty::Float)
+        | (Ty::Bool, Ty::Bool)
+        | (Ty::Str, Ty::Str)
+        | (Ty::Unit, Ty::Unit) => {
             true
         }
         (Ty::List(left), Ty::List(right)) => {
@@ -382,7 +386,7 @@ pub(crate) fn instantiate_ty_with_fresh_type_vars(
         Ty::Handler { covered_ops } => Ty::Handler {
             covered_ops: covered_ops.clone(),
         },
-        Ty::Int | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => ty.clone(),
+        Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => ty.clone(),
     }
 }
 
@@ -477,7 +481,7 @@ pub(crate) fn ty_contains_type_var(ty: &Ty) -> bool {
         } => params.iter().any(ty_contains_type_var) || ty_contains_type_var(result),
         Ty::Con { args, .. } => args.iter().any(ty_contains_type_var),
         Ty::Handler { .. } => false,
-        Ty::Int | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => false,
+        Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => false,
     }
 }
 
@@ -495,7 +499,7 @@ fn ty_contains_anonymous_type_hole(ty: &Ty) -> bool {
                 || ty_contains_anonymous_type_hole(result)
         }
         Ty::Con { args, .. } => args.iter().any(ty_contains_anonymous_type_hole),
-        Ty::Handler { .. } | Ty::Int | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => false,
+        Ty::Handler { .. } | Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => false,
     }
 }
 

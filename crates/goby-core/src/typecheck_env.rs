@@ -83,6 +83,7 @@ impl CanClause {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Ty {
     Int,
+    Float,
     Bool,
     Str,
     Unit,
@@ -409,6 +410,7 @@ fn max_fresh_row_id(ty: &Ty) -> usize {
             Ty::Var(_)
             | Ty::Handler { .. }
             | Ty::Int
+            | Ty::Float
             | Ty::Bool
             | Ty::Str
             | Ty::Unit

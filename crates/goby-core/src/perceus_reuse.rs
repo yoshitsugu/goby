@@ -495,6 +495,7 @@ fn insert_reuse_value(
             )
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::Var(_)

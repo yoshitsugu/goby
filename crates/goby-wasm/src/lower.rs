@@ -393,6 +393,11 @@ fn eval_value(
     match value {
         ValueExpr::StrLit(s) => Some(NativeValue::String(s.clone())),
         ValueExpr::IntLit(n) => Some(NativeValue::Int(*n)),
+        // Phase E2 stub: NativeValue does not carry Float yet (Phase E5 adds
+        // it together with the rest of the runtime fallback). Return None
+        // so this fast path falls back to the regular lowered code, which
+        // still cannot produce a Float value until Phase E5.
+        ValueExpr::FloatLit(_) => None,
         ValueExpr::BoolLit(b) => Some(NativeValue::Bool(*b)),
         ValueExpr::Unit => Some(NativeValue::Unit),
         ValueExpr::ListLit { .. }

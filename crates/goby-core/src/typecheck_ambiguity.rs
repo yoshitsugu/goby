@@ -17,7 +17,7 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
 ) -> Result<(), TypecheckError> {
     match expr {
         Expr::Spanned { expr, .. } => ensure_no_ambiguous_refs_in_expr(expr, env, decl_name),
-        Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) => Ok(()),
+        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) => Ok(()),
         Expr::InterpolatedString(parts) => {
             for part in parts {
                 if let InterpolatedPart::Expr(expr) = part {

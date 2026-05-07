@@ -308,6 +308,7 @@ fn try_lower_value(
 ) -> Result<Option<ValueExpr>, LowerError> {
     match expr {
         ResolvedExpr::IntLit(n) => Ok(Some(ValueExpr::IntLit(*n))),
+        ResolvedExpr::FloatLit(bits) => Ok(Some(ValueExpr::FloatLit(*bits))),
         ResolvedExpr::BoolLit(b) => Ok(Some(ValueExpr::BoolLit(*b))),
         ResolvedExpr::StringLit(s) => Ok(Some(ValueExpr::StrLit(s.clone()))),
         ResolvedExpr::TupleLit(items) if items.is_empty() => Ok(Some(ValueExpr::Unit)),

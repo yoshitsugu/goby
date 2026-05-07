@@ -15,6 +15,7 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
     match expr {
         Expr::Spanned { expr, .. } => infer_expr_ty(expr, env),
         Expr::IntLit(_) => Ty::Int,
+        Expr::FloatLit(_) => Ty::Float,
         Expr::BoolLit(_) => Ty::Bool,
         Expr::StringLit(_) => Ty::Str,
         Expr::InterpolatedString(_) => Ty::Str,
@@ -219,7 +220,10 @@ fn is_equality_comparable(env: &TypeEnv, left: &Ty, right: &Ty) -> bool {
 
 fn equality_type_supported(ty: &Ty) -> bool {
     match ty {
-        Ty::Int | Ty::Bool | Ty::Str | Ty::Unit => true,
+        // `Float` participates in `==`, `<`, etc. via Phase E3 dispatch.
+        // NaN comparisons follow IEEE 754 (`NaN == NaN == False`); the
+        // typechecker only verifies type compatibility here.
+        Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit => true,
         Ty::List(inner) => equality_type_supported(inner),
         Ty::Tuple(items) => items.iter().all(equality_type_supported),
         Ty::Con { args, .. } => args.iter().all(equality_type_supported),

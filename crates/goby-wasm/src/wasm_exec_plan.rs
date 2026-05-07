@@ -186,6 +186,7 @@ fn ir_handler_clause_to_ast(clause: &IrHandlerClause) -> Option<HandlerClause> {
 fn value_to_expr(value: &ValueExpr) -> Option<Expr> {
     match value {
         ValueExpr::IntLit(n) => Some(Expr::IntLit(*n)),
+        ValueExpr::FloatLit(bits) => Some(Expr::FloatLit(*bits)),
         ValueExpr::BoolLit(b) => Some(Expr::BoolLit(*b)),
         ValueExpr::StrLit(text) => Some(Expr::StringLit(text.clone())),
         ValueExpr::ListLit { elements, spread } => Some(Expr::ListLit {

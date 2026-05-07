@@ -297,6 +297,7 @@ fn collect_value_legality(
             collect_value_legality(decl_name, index, env, mutable_scope, summary);
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::Var(_)
@@ -679,6 +680,7 @@ fn collect_ir_value_effect_mutable_captures(
             collect_ir_value_effect_mutable_captures(index, mutable_scope, handled_ops, captured);
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::Var(_)
@@ -774,6 +776,7 @@ fn ir_value_contains_resume(value: &ValueExpr) -> bool {
             ir_value_contains_resume(list) || ir_value_contains_resume(index)
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::Var(_)
@@ -809,6 +812,7 @@ fn ir_value_contains_resume_under_lambda(value: &ValueExpr) -> bool {
                 || ir_value_contains_resume_under_lambda(index)
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::Var(_)
@@ -980,6 +984,7 @@ fn collect_ast_expr_legality(
             collect_ast_expr_legality(decl_name, index, env, mutable_scope, summary);
         }
         Expr::IntLit(_)
+        | Expr::FloatLit(_)
         | Expr::BoolLit(_)
         | Expr::StringLit(_)
         | Expr::Var { .. }
@@ -1149,6 +1154,7 @@ fn analyze_ast_expr_for_resume(
             analyze_ast_expr_for_resume(index, false, in_lambda, stats);
         }
         Expr::IntLit(_)
+        | Expr::FloatLit(_)
         | Expr::BoolLit(_)
         | Expr::StringLit(_)
         | Expr::Var { .. }
@@ -1209,6 +1215,7 @@ fn ast_expr_contains_resume(expr: &Expr) -> bool {
             ast_expr_contains_resume(list) || ast_expr_contains_resume(index)
         }
         Expr::IntLit(_)
+        | Expr::FloatLit(_)
         | Expr::BoolLit(_)
         | Expr::StringLit(_)
         | Expr::Var { .. }
@@ -1443,6 +1450,7 @@ fn collect_ast_expr_effect_mutable_captures(
             collect_ast_expr_effect_mutable_captures(index, mutable_scope, handled_ops, captured);
         }
         Expr::IntLit(_)
+        | Expr::FloatLit(_)
         | Expr::BoolLit(_)
         | Expr::StringLit(_)
         | Expr::Var { .. }

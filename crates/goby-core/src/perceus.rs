@@ -354,6 +354,7 @@ fn collect_scalar_param_evidence_value(
             collect_scalar_param_evidence_value(tuple, params, scalar);
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::Var(_)
@@ -702,6 +703,7 @@ fn classify_return_value(
         }
         ValueExpr::Var(name) => demote_owner(name, classes, params, aliases),
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::GlobalRef { .. }
@@ -768,6 +770,7 @@ fn classify_borrowed_value(
             classify_borrowed_value(index, classes, params, aliases);
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::Var(_)
@@ -824,6 +827,7 @@ fn classify_consumed_value(
             classify_consumed_value(index, classes, params, aliases);
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::GlobalRef { .. }
@@ -979,6 +983,7 @@ fn value_is_fresh_heap(value: &ValueExpr) -> bool {
         | ValueExpr::Interp(_) => true,
         ValueExpr::Lambda { .. } => false,
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::Var(_)
@@ -1300,6 +1305,7 @@ fn return_ownership_value(
         // walker, which is out of scope for §4.100 Step 1.
         ValueExpr::TupleProject { .. } => OwnershipClass::Borrowed,
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::Unit
@@ -1423,6 +1429,7 @@ fn collect_value_var_names(value: &ValueExpr, out: &mut HashSet<String>) {
             collect_value_var_names(index, out);
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::GlobalRef { .. }
@@ -2349,6 +2356,7 @@ fn callee_can_lower_to_tail_decl_call(callee: &ValueExpr) -> bool {
         ValueExpr::Var(name) => !name.starts_with("__goby_"),
         ValueExpr::GlobalRef { .. } => true,
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::ListLit { .. }
@@ -2622,6 +2630,7 @@ fn collect_owned_var_mentions(
             collect_owned_var_mentions(index, ownership, out);
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::Var(_)
@@ -2777,6 +2786,7 @@ fn return_value_consumes_name(value: &ValueExpr, name: &str) -> bool {
             false
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::GlobalRef { .. }
@@ -2916,6 +2926,7 @@ fn collect_live_value(value: &ValueExpr, live: &mut HashSet<String>) {
             collect_live_value(index, live);
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::GlobalRef { .. }
@@ -3033,6 +3044,7 @@ fn count_var_uses_value(value: &ValueExpr, name: &str) -> usize {
             count_var_uses_value(list, name) + count_var_uses_value(index, name)
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::GlobalRef { .. }

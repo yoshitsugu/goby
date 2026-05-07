@@ -267,7 +267,7 @@ fn walk_expr_for_effects(
             covered_ops,
             out,
         ),
-        Expr::IntLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) => {}
+        Expr::IntLit(_) | Expr::FloatLit(_) | Expr::BoolLit(_) | Expr::StringLit(_) => {}
         Expr::InterpolatedString(parts) => {
             for part in parts {
                 if let InterpolatedPart::Expr(inner) = part {

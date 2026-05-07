@@ -183,6 +183,10 @@ pub(crate) fn parse_expr(src: &str) -> Option<Expr> {
         return Some(Expr::BoolLit(false));
     }
 
+    if let Some(expr) = parse_float_literal(src) {
+        return Some(expr);
+    }
+
     if let Ok(n) = src.parse::<i64>() {
         return Some(Expr::IntLit(n));
     }
@@ -192,6 +196,36 @@ pub(crate) fn parse_expr(src: &str) -> Option<Expr> {
     }
 
     None
+}
+
+/// Parse a `Float` literal of the locked surface form `<int>.<frac>`.
+///
+/// The grammar is intentionally narrow (Track Float Phase E1):
+/// - both the integer and fractional parts are one or more decimal digits,
+/// - a single leading `-` is allowed, matching how `IntLit` already
+///   absorbs negative integer literals.
+/// Exponent notation (`1e3`), hex floats, digit separators, and the
+/// shorthand forms `1.` / `.5` are rejected.
+fn parse_float_literal(src: &str) -> Option<Expr> {
+    let body = src.strip_prefix('-').unwrap_or(src);
+    let (int_part, frac_part) = body.split_once('.')?;
+    if int_part.is_empty() || frac_part.is_empty() {
+        return None;
+    }
+    if !int_part.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    if !frac_part.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let value: f64 = src.parse().ok()?;
+    if !value.is_finite() {
+        // The grammar covers only finite literals; an overflow into ±Infinity
+        // is reported by rejecting the literal so the user sees a parse-level
+        // failure rather than a silent IEEE 754 surprise.
+        return None;
+    }
+    Some(Expr::FloatLit(crate::ast::FloatBits::from_f64(value)))
 }
 
 pub(crate) fn enrich_expr_spans(expr: &mut Expr, src: &str, line: usize, col: usize) {
@@ -1312,6 +1346,65 @@ mod tests {
     fn parses_int_literal() {
         assert_eq!(parse_expr("42"), Some(Expr::IntLit(42)));
         assert_eq!(parse_expr("-5"), Some(Expr::IntLit(-5)));
+    }
+
+    #[test]
+    fn parses_float_literal_canonical_form() {
+        use crate::ast::FloatBits;
+        assert_eq!(
+            parse_expr("1.0"),
+            Some(Expr::FloatLit(FloatBits::from_f64(1.0)))
+        );
+        assert_eq!(
+            parse_expr("0.5"),
+            Some(Expr::FloatLit(FloatBits::from_f64(0.5)))
+        );
+        assert_eq!(
+            parse_expr("123.456"),
+            Some(Expr::FloatLit(FloatBits::from_f64(123.456)))
+        );
+    }
+
+    #[test]
+    fn parses_negative_float_literal_as_single_token() {
+        use crate::ast::FloatBits;
+        assert_eq!(
+            parse_expr("-3.25"),
+            Some(Expr::FloatLit(FloatBits::from_f64(-3.25)))
+        );
+    }
+
+    #[test]
+    fn rejects_partial_float_literals() {
+        // Phase E1 lock: `<int>.<frac>` requires both sides; `1.` and `.5`
+        // must be rejected so future surface extensions stay open.
+        assert_eq!(parse_expr("1."), None);
+        assert_eq!(parse_expr(".5"), None);
+    }
+
+    #[test]
+    fn rejects_exponent_and_hex_float_forms() {
+        // Phase E1 lock: exponent notation, hex floats, and digit
+        // separators are explicitly out of scope.
+        assert_eq!(parse_expr("1e3"), None);
+        assert_eq!(parse_expr("1.2e-3"), None);
+        assert_eq!(parse_expr("0x1p10"), None);
+    }
+
+    #[test]
+    fn float_literal_does_not_collide_with_qualified_access() {
+        // `pair.0` is tuple-member access, not a Float literal: the
+        // receiver is a `Var`, not a digit run, so the Float branch must
+        // not fire and the qualified-access branch should win.
+        match parse_expr("pair.0") {
+            Some(Expr::Qualified {
+                receiver, member, ..
+            }) => {
+                assert_eq!(receiver, "pair");
+                assert_eq!(member, "0");
+            }
+            other => panic!("expected qualified access, got {:?}", other),
+        }
     }
 
     #[test]

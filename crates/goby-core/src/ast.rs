@@ -225,6 +225,62 @@ pub enum InterpolatedPart {
     Expr(Box<Expr>),
 }
 
+/// Bit-pattern representation of a `Float` (Wasm `f64`) literal.
+///
+/// `f64` does not implement `Eq` / `Hash` because IEEE 754 NaN is not equal to
+/// itself. AST / IR / snapshot machinery upstream relies on `Eq` for both
+/// structural identity and round-trip stability, so `Float` literals carry the
+/// raw 64-bit pattern and convert back via `FloatBits::to_f64` (`f64::from_bits`)
+/// when evaluating. Storing bits also keeps `-0.0` distinguishable from `0.0`
+/// for printing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FloatBits(pub u64);
+
+impl FloatBits {
+    /// Wrap an `f64` into its bit pattern.
+    pub fn from_f64(value: f64) -> Self {
+        FloatBits(value.to_bits())
+    }
+
+    /// Recover the underlying `f64` value.
+    pub fn to_f64(self) -> f64 {
+        f64::from_bits(self.0)
+    }
+}
+
+/// Render a `Float` literal value back to its surface spelling.
+///
+/// Used by `to_str_repr` (legacy string-based evaluator bridge) and other
+/// AST → source paths during the migration. Follows the locked
+/// `LANGUAGE_SPEC.md` §3 `<int>.<frac>` form: integer-valued floats render
+/// with a trailing `.0`. Special IEEE 754 values (NaN, ±Infinity) cannot
+/// arise from a literal — they are arithmetic results — but render here as
+/// `"NaN"` / `"Infinity"` / `"-Infinity"` for safety. `Float` runtime
+/// printing uses a richer helper introduced in Phase E5.
+pub fn format_float_literal(value: f64) -> String {
+    if value.is_nan() {
+        return "NaN".to_string();
+    }
+    if value.is_infinite() {
+        return if value.is_sign_negative() {
+            "-Infinity".to_string()
+        } else {
+            "Infinity".to_string()
+        };
+    }
+    if value == 0.0 {
+        return if value.is_sign_negative() {
+            "-0.0".to_string()
+        } else {
+            "0.0".to_string()
+        };
+    }
+    if value == value.trunc() {
+        return format!("{:.1}", value);
+    }
+    value.to_string()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Expr {
     Spanned {
@@ -232,6 +288,7 @@ pub enum Expr {
         span: Span,
     },
     IntLit(i64),
+    FloatLit(FloatBits),
     BoolLit(bool),
     StringLit(String),
     InterpolatedString(Vec<InterpolatedPart>),
@@ -428,6 +485,7 @@ impl Expr {
         match self {
             Expr::Spanned { expr, .. } => expr.to_str_repr(),
             Expr::IntLit(n) => Some(n.to_string()),
+            Expr::FloatLit(bits) => Some(format_float_literal(bits.to_f64())),
             Expr::BoolLit(v) => Some(if *v { "True" } else { "False" }.to_string()),
             Expr::StringLit(s) => Some(format!("\"{}\"", s)),
             Expr::InterpolatedString(_) => None,

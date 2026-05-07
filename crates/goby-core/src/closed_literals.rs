@@ -28,9 +28,11 @@ pub fn collect_closed_literals(module: &IrModule) -> Vec<ValueExpr> {
 
 fn closed_literal_shape(value: &ValueExpr) -> bool {
     match value {
-        ValueExpr::IntLit(_) | ValueExpr::BoolLit(_) | ValueExpr::StrLit(_) | ValueExpr::Unit => {
-            true
-        }
+        ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
+        | ValueExpr::BoolLit(_)
+        | ValueExpr::StrLit(_)
+        | ValueExpr::Unit => true,
         ValueExpr::ListLit { elements, spread } => {
             spread.is_none() && elements.iter().all(closed_literal_shape)
         }
@@ -153,6 +155,7 @@ fn collect_closed_literals_in_value(value: &ValueExpr, out: &mut Vec<ValueExpr>)
             collect_closed_literals_in_value(index, out);
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::Var(_)

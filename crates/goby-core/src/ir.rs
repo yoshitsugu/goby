@@ -70,6 +70,7 @@ pub enum IrBinOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValueExpr {
     IntLit(i64),
+    FloatLit(crate::ast::FloatBits),
     BoolLit(bool),
     StrLit(String),
     /// List literal with optional spread tail.
@@ -427,6 +428,9 @@ fn fmt_type(out: &mut String, ty: &IrType) {
 fn fmt_value(out: &mut String, v: &ValueExpr) {
     match v {
         ValueExpr::IntLit(n) => out.push_str(&n.to_string()),
+        ValueExpr::FloatLit(bits) => {
+            out.push_str(&crate::ast::format_float_literal(bits.to_f64()));
+        }
         ValueExpr::BoolLit(b) => out.push_str(if *b { "true" } else { "false" }),
         ValueExpr::StrLit(s) => {
             out.push('"');
@@ -1124,6 +1128,7 @@ fn validate_value(value: &ValueExpr, decl_name: &str) -> Result<(), IrValidateEr
             validate_value(index, decl_name)
         }
         ValueExpr::IntLit(_)
+        | ValueExpr::FloatLit(_)
         | ValueExpr::BoolLit(_)
         | ValueExpr::StrLit(_)
         | ValueExpr::Var(_)
