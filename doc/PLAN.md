@@ -330,10 +330,13 @@ Based on `examples/*.gb`:
   (2026-05-07): the `can EffectA, EffectB` form is the closed-row spelling, and
   open rows use `can EffectA, {e}` with a single row variable in braces. See
   `doc/LANGUAGE_SPEC.md` §5 for the full surface lock.
-- Effect propagation rules for higher-order functions — surface and semantics
-  locked under Track EP Phase 0 (2026-05-07); internal representation and
-  unification are deferred to EP-1, stdlib HOF propagation to EP-2. See §4.6.
-- Effect diagnostics UX polish (wording/format consistency) — deferred.
+- Effect propagation rules for higher-order functions — Track EP §4.6 has
+  shipped through EP-2 (EP-0 surface lock 2026-05-07; EP-1 internal row
+  representation 2026-05-07 `0da40c7`; EP-2 stdlib HOF propagation
+  2026-05-07, wrapped up by Step 4 example `1f34991`). EP-3 remains the
+  active line. See §4.6.
+- Effect diagnostics UX polish (wording/format consistency) — tracked
+  under §4.6 EP-3 (diagnostics polish).
 - Warning mechanism for lexical shadowing of visible effect operation names
   (for example local `a` shadows operation `a`) — deferred.
   - resolution rule remains: lexical value namespace wins.
@@ -945,10 +948,13 @@ Acceptance criteria:
 
 ### 4.6 Track EP: Effect Row Polymorphism
 
-Priority: **raised (2026-05-01)**. Track EP and the multi-shot / branch-local
-state portion of §3.3 are now prerequisites for Track PC (§4.7 Parser
-Combinator). EP-0 → EP-2 should advance ahead of other deferred tracks until
-PC's blockers are cleared.
+Priority: **raised (2026-05-01)**. Effect-row polymorphism through EP-2
+and the multi-shot / branch-local state portion of §3.3 are
+prerequisites for Track PC (§4.7 Parser Combinator). EP-0 → EP-2 are
+complete (2026-05-07); EP-3 (diagnostics polish, partial-discharge
+interaction, generic interaction) is the active line within Track EP,
+but is not a strict PC-2 blocker. The remaining hard PC-2 prerequisite
+is the §3.3 multi-shot / branch-local state work.
 
 Goal: add effect-variable quantification so higher-order functions propagate
 callee effects through the type system, closing the largest gap between Goby's
@@ -999,30 +1005,49 @@ Execution phases:
    - Backward compat: existing `can E1, E2` declarations are reinterpreted as
      closed rows with no behavioral change. Callback parameters omitting `can`
      remain the closed-empty row.
-   - Motivating example (uses EP-2-final stdlib signatures; will type-check
-     once EP-2 lands):
+   - Motivating example (now type-checks under EP-2, 2026-05-07):
      ```goby
      # `Print` propagates from the callback through `each` to the caller.
      log_each : List String -> Unit can Print
      log_each xs = list.each xs (fn s -> print s)
      ```
-     Today, the user must write `can Print` on `log_each` even though `each`'s
-     type does not mention `Print`. After EP-2, `each : List a -> (a -> Unit
-     can {e}) -> Unit can {e}` makes the same example type-check with `{e}`
-     instantiated to `Print` at the call site.
+     Pre-EP, the user had to write `can Print` on `log_each` even though
+     `each`'s type did not mention `Print`. EP-2 made
+     `each : List a -> (a -> Unit can {e}) -> Unit can {e}` the stdlib
+     signature, so the same example type-checks with `{e}` instantiated to
+     `Print` at the call site. See also `examples/hof_effect.gb`.
 
-2. **EP-1: Internal effect-row representation**
-   - extend `Ty` / effect representation with effect variables.
-   - implement effect-row unification in `typecheck_unify.rs`.
-   - keep runtime behavior unchanged (effects remain name-dispatched).
+2. **EP-1: Internal effect-row representation** (complete, 2026-05-07)
+   - `Ty::Fun` carries an effect row; row variables live in their own
+     namespace (EP-1a `5371b4e`, EP-1b parser wiring, EP-1c
+     `c70dcd8`).
+   - row unification (`unify_effect_rows`), row substitution
+     (`apply_row_substitution`), and row freshening are wired into
+     `unify_types_with_subst` / `TypeEnv::are_compatible` /
+     `instantiate_ty_with_fresh_type_vars` (EP-1d `0da40c7`,
+     CodeRabbit follow-ups `48c030a`).
+   - runtime behavior unchanged; effects remain name-dispatched.
 
-3. **EP-2: HOF effect propagation**
-   - teach the typechecker to infer effect variables for callback parameters.
-   - stdlib HOFs (`each`, `map`, `fold`) get polymorphic effect annotations.
-   - add regression tests: effectful callback through `map`/`fold` must propagate
-     the callback's effects to the caller's `can` clause.
+3. **EP-2: HOF effect propagation** (complete, 2026-05-07)
+   - Step 1 (`538ea56`): pure helper `infer_expr_effects` covers direct
+     and qualified op calls, nested-lambda containment, handler discharge,
+     known-callee discharge, local-binding shadowing, and pure bodies.
+   - Step 2 (`2dd8ffe`): stdlib `each` / `map` / `fold` retrofitted to
+     `... can {e}` row-polymorphic signatures (LANGUAGE_SPEC §5 / §7).
+   - Step 3a (`bf0b0c9`): lambda inferred row threaded through
+     `unify_effect_rows` at every call site; closed callback rows reject
+     effectful lambdas.
+   - Step 3b (`1a43446`): curried-lambda body aggregation via
+     `infer_curried_lambda_body_effects`, fully-applied row leak
+     diagnostic via `infer_call_effects_at_site`, and 7 acceptance tests
+     in `crates/goby-core/src/typecheck.rs` covering each / map / fold
+     positive and negative cases plus partial application and
+     handler-inside-lambda discharge.
+   - Step 4 (`1f34991`): user-facing `examples/hof_effect.gb` demonstrates
+     the row-propagation contract through inline-lambda, named-callback,
+     and curried-lambda shapes; covered by formatter idempotence.
 
-4. **EP-3: Diagnostics and edge cases**
+4. **EP-3: Diagnostics and edge cases** (active line)
    - error messages for effect-variable mismatch.
    - interaction with `with` discharge (effect variable partially discharged).
    - interaction with generic type parameters (effect + type polymorphism).
@@ -1095,17 +1120,17 @@ Scope to lock before coding:
 
 Blocking dependencies (must land before PC-2 implementation):
 
-- **§4.6 EP-2 (HOF effect propagation).** Without effect row polymorphism,
-  `map`, `bind`, and any user-defined combinator cannot type-propagate the
-  parser's effects through callback parameters; PC would otherwise require
-  every combinator to monomorphize its `can` clause by hand, which is the
-  exact gap EP exists to close.
+- **§4.6 EP-2 (HOF effect propagation).** Satisfied (complete,
+  2026-05-07): row polymorphism for HOF callbacks is in place. The
+  remaining EP-side work is EP-3 (diagnostics polish for partially
+  discharged effect rows), which is the active line but not strictly
+  blocking PC-2 implementation.
 - **§3.3 multi-shot classification + branch-local state surface.** `alt`
   and `many` need either a sanctioned multi-shot path or an explicit
   branch-local state construct to roll the cursor back without violating
-  ordinary-`mut` semantics.
+  ordinary-`mut` semantics. This is now the only hard PC-2 blocker.
 
-Both dependencies have their priority raised by this track.
+The §3.3 dependency has its priority raised by this track.
 
 Execution phases:
 
@@ -1162,8 +1187,9 @@ effect Fail
   fail : String -> a
 
 # Combinator shapes are written as ordinary Goby functions.
-# Effect rows would propagate via Track EP once EP-2 lands; until then,
-# `can Parse, Fail` is written explicitly at every combinator boundary.
+# Effect rows now propagate via Track EP (EP-2 landed 2026-05-07);
+# the explicit `can Parse, Fail` at every combinator boundary below is
+# retained only for the pre-PC era illustration (see post-EP note below).
 
 digit : Unit -> String can Parse, Fail
 digit () =
@@ -1203,10 +1229,11 @@ parse_int src =
       Some (int.parse (list.join digits ""))
 ```
 
-Note: the sketch is intentionally pre-EP. Once EP-2 lands, the explicit
-`can Parse, Fail` on every combinator collapses into an effect-variable row,
-and `many_digits` can be expressed via a generic `many : Parser a -> Parser (List a)`
-combinator without per-call `can` rewriting.
+Note: the sketch is intentionally pre-EP. Now that EP-2 has landed
+(2026-05-07), the explicit `can Parse, Fail` on every combinator can
+collapse into an effect-variable row, and `many_digits` can be expressed
+via a generic `many : Parser a -> Parser (List a)` combinator without
+per-call `can` rewriting.
 
 References:
 

@@ -1,13 +1,17 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-07 (Track EP — EP-2 Step 4 landed: user-facing
-`examples/hof_effect.gb` exercising row-polymorphic effect propagation
-through `each` / `map` / `fold`, with formatter-idempotence coverage)
+Last updated: 2026-05-07 (Track EP — EP-2 wrap-up: `doc/PLAN.md` §4.6 EP-1
+and EP-2 marked complete; EP-3 (diagnostics polish, partial-discharge
+interaction, generic-type interaction) is now the active line.)
 
 ## Current Focus
 
-Track EP (effect row polymorphism, `doc/PLAN.md` §4.6) is the active line.
-EP-2 ("HOF effect propagation") is the in-flight milestone.
+Track EP (effect row polymorphism, `doc/PLAN.md` §4.6): EP-0 surface
+lock, EP-1 internal row representation, and EP-2 HOF effect propagation
+are all complete (2026-05-07). The active milestone is **EP-3**:
+diagnostics polish for effect-row mismatch, interaction with `with`
+discharge when an effect row is only partially handled, and interaction
+between effect rows and generic type parameters.
 
 ### EP history (closed phases)
 
@@ -20,25 +24,12 @@ EP-2 ("HOF effect propagation") is the in-flight milestone.
   rules; `unify_effect_rows`, `apply_row_substitution`, and row freshening
   are wired into `unify_types_with_subst` / `TypeEnv::are_compatible` and
   `instantiate_ty_with_fresh_type_vars`.
-
-### EP-2 progress (this milestone)
-
 - **EP-2 Step 1** (`538ea56`, 2026-05-07): pure helper
   `infer_expr_effects(expr, env, effect_map, required_effects_map, covered_ops)`
   added in `crates/goby-core/src/typecheck_effect.rs` with 10 unit tests
   covering direct and qualified op calls, nested-lambda containment, handler
   discharge (inline / qualified / handler-value), known-callee discharge,
   local-binding shadowing, and pure bodies.
-- **CLAUDE.md test-runner guidance** (`355ba02`, 2026-05-07): captures the
-  recommendation to reach for `cargo nextest run -p goby-wasm` on the full
-  wasm suite (per-process parallelism dodges wasmtime's internal locking)
-  with a `cargo test` fallback when nextest isn't installed. Independent
-  process-tooling change, not part of the EP track itself.
-- **BUGS.md** (`6cf184a`, 2026-05-07): records `goby-wasm` lib test
-  `tests::fold_m5_string_accumulator` as a pre-existing CPU-bound hang
-  reproduced on the EP-1d baseline. Use
-  `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`
-  while triaging unrelated work.
 - **EP-2 Step 2** (`2dd8ffe`, 2026-05-07): stdlib `each` / `map` / `fold`
   signatures retrofitted to LANGUAGE_SPEC §5's row-polymorphic shape:
   - `each : List a -> (a -> Unit can {e}) -> Unit can {e}`
@@ -54,7 +45,7 @@ EP-2 ("HOF effect propagation") is the in-flight milestone.
   `check_ordinary_call_arg_types_in_expr` /
   `check_ordinary_call_arg_types_in_stmt` / `infer_callback_arg_ty`. Closed
   callback rows now reject effectful lambdas per LANGUAGE_SPEC §5.
-- **EP-2 Step 3b** (2026-05-07):
+- **EP-2 Step 3b** (`1a43446`, 2026-05-07):
   - `infer_curried_lambda_body_effects` aggregates the body row of a
     possibly-curried lambda by walking through nested `Expr::Lambda`
     layers, so a flat callback annotation (`(b -> a -> b can {e})`)
@@ -79,7 +70,7 @@ EP-2 ("HOF effect propagation") is the in-flight milestone.
     6. `fold xs 0` partial application typechecks without any `can`.
     7. A handler inside the lambda discharges its own effect; the
        surrounding declaration needs no `can`.
-- **EP-2 Step 4** (2026-05-07): user-facing example added.
+- **EP-2 Step 4** (`1f34991`, 2026-05-07): user-facing example added.
   - `examples/hof_effect.gb`: walks through `each` / `map` / `fold`
     with `Log` callbacks, showing inline-lambda, named-callback, and
     curried-lambda (`fn acc -> fn x -> ...`) shapes; the wrappers
@@ -91,6 +82,25 @@ EP-2 ("HOF effect propagation") is the in-flight milestone.
   - `crates/goby-core/src/formatter.rs` adds `idempotent_hof_effect`
     so the file is covered by the formatter idempotence battery.
   - `examples/README.md` "Stdlib And Effects" lists the new entry.
+- **EP-2 Step 5** (2026-05-07, this update): `doc/PLAN.md` §2.3 / §4.6 /
+  §4.7 synced with the EP-1/EP-2 completion (motivating example moved to
+  the present tense, EP-1 / EP-2 phase entries marked
+  `(complete, 2026-05-07)`, Track PC blocking-dependency note records
+  EP-2 as satisfied so the only remaining PC-2 prerequisite is the §3.3
+  multi-shot / branch-local state work). No source changes.
+
+### Related same-day cleanup (non-EP work)
+
+- **CLAUDE.md test-runner guidance** (`355ba02`, 2026-05-07): captures the
+  recommendation to reach for `cargo nextest run -p goby-wasm` on the full
+  wasm suite (per-process parallelism dodges wasmtime's internal locking)
+  with a `cargo test` fallback when nextest isn't installed. Independent
+  process-tooling change, not part of the EP track itself.
+- **BUGS.md** (`6cf184a`, 2026-05-07): records `goby-wasm` lib test
+  `tests::fold_m5_string_accumulator` as a pre-existing CPU-bound hang
+  reproduced on the EP-1d baseline. Use
+  `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`
+  while triaging unrelated work.
 
 ## Known Red / Green State
 
@@ -112,19 +122,27 @@ Red / ignored:
 
 ## Next Step
 
-1. EP-2 Step 5 / wrap-up: mark EP-2 complete in `doc/PLAN.md` §4.6, then
-   move on to EP-3 (diagnostics polish, partial discharge interaction).
+**Primary:**
+
+1. EP-3 (Track EP §4.6): diagnostics polish for effect-row mismatch,
+   interaction with `with`-based partial discharge of an effect row, and
+   interaction between effect rows and generic type parameters. Scope
+   the work in PLAN §4.6 EP-3 before coding (no Step plan locked yet).
+
+**Parallel known-red cleanup (lower priority than EP-3):**
+
 2. Pre-existing typecheck regressions in 8 example files
    (`case_arm_block.gb`, `function_reference.gb`, `list_set.gb`,
    `list_spread.gb`, `mut.gb`, `string_graphemes.gb`, `tco.gb`,
    `to_integer.gb`) surface during a `goby check` loop on `examples/*.gb`.
    These predate EP-2 Step 4 (reproduce on the `975863e` baseline) and
-   should be triaged separately; formatter idempotence does not catch
-   them.
+   should be triaged separately, ideally with a `doc/BUGS.md` entry per
+   case; formatter idempotence does not catch them.
 
 Other active tracks remain queued in `doc/PLAN.md` §4 (Track D `goby
 lint` D5/D6 follow-ups, Track Float, Track OOB, Track RR-6 limit
-tuning, Track PC parser combinator — gated by EP).
+tuning, Track PC parser combinator — PC-2 is now gated only by §3.3,
+since EP-2 has landed).
 
 ## Recently Closed (Reference Only)
 
