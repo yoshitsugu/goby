@@ -4,7 +4,7 @@ use crate::typecheck_check::{
     check_expr, check_list_index_constraints, check_list_spread_constraints,
     env_with_case_pattern_bindings, is_list_case_pattern,
 };
-use crate::typecheck_env::{ResumeContext, Ty, TypeEnv, TypeSubst};
+use crate::typecheck_env::{ResumeContext, RowSubst, Ty, TypeEnv, TypeSubst};
 use crate::typecheck_render::ty_name;
 use crate::typecheck_span::best_available_expr_span;
 use crate::typecheck_unify::{
@@ -216,7 +216,9 @@ fn check_resume_in_expr(
             };
             let actual = check_expr(value, env);
             let mut subst = TypeSubst::new();
-            let expected_after_subst = apply_type_substitution(expected, &subst, env);
+            let mut row_subst = RowSubst::new();
+            let mut next_id = 0usize;
+            let expected_after_subst = apply_type_substitution(expected, &subst, &row_subst, env);
             if actual == Ty::Unknown && ty_contains_type_var(&expected_after_subst) {
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
@@ -227,9 +229,17 @@ fn check_resume_in_expr(
                     ),
                 });
             }
-            if actual != Ty::Unknown && !unify_types_with_subst(expected, &actual, &mut subst, env)
+            if actual != Ty::Unknown
+                && !unify_types_with_subst(
+                    expected,
+                    &actual,
+                    &mut subst,
+                    &mut row_subst,
+                    env,
+                    &mut next_id,
+                )
             {
-                let expected_rendered = apply_type_substitution(expected, &subst, env);
+                let expected_rendered = apply_type_substitution(expected, &subst, &row_subst, env);
                 return Err(TypecheckError {
                     declaration: Some(decl_name.to_string()),
                     span: best_available_expr_span(value),

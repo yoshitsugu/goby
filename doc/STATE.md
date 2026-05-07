@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-07 (EP-1c Ty::Fun.effects landed)
+Last updated: 2026-05-07 (EP-1d unify_effect_rows landed)
 
 ## Current Focus
 
@@ -35,10 +35,34 @@ Track EP (effect row polymorphism, `doc/PLAN.md` §4.6) is the active line.
   - The callback nested-`can` validation gap (e.g.
     `(Int -> Int can Ghost) -> Int` previously slipping past validate)
     is closed in EP-1c via recursive segment validation.
-- **EP-1d** (next): integrate `unify_effect_rows` and replace the
-  EP-1c "ignore effects" placeholders. See **Next Step** below.
-- **EP-1e**: typecheck regression tests for callback row variables and
-  freshening independence (likely folded into EP-1d).
+- **EP-1d** (unification + freshening): complete (2026-05-07).
+  - `unify_effect_rows` implements the LANGUAGE_SPEC §5 rules (closed-closed,
+    closed-open, open-open same-var, open-open distinct vars with occurs
+    check). `apply_row_substitution` walks tails through `RowSubst` with a
+    `visited: HashSet<RowVarId>` to detect direct and indirect cycles.
+  - `apply_type_substitution` and `unify_types_with_subst` are now
+    row-aware; `RowSubst` is threaded alongside `TypeSubst` through
+    `match_function_argument_type`, `infer_callback_arg_ty`,
+    `infer_lambda_ty_against_expected`, `resolve_function_value_ty`, and
+    the call-validation chain.
+  - `instantiate_ty_with_fresh_type_vars` freshens `RowVarId` per call site
+    via a dedicated `row_mapping`; same-named row variables within one
+    instantiation share the same fresh tail.
+  - `TypeEnv::are_compatible` recurses through `Ty::Fun` and `Ty::Con`
+    args using a single shared `RowSubst`, and seeds `next_id` past any
+    `__goby_fresh_row_N` already present in the inputs to avoid collisions.
+  - `unify_open_with_open` rolls back the first bind when the second
+    occurs check fails so callers never observe a half-applied row
+    substitution.
+  - `branch_types_compatible` / `merge_branch_type` now require equal
+    residual rows on `Ty::Fun` branches; mismatched function rows
+    collapse the merged type to `Ty::Unknown` rather than silently
+    dropping effects.
+  - LANGUAGE_SPEC §5 is updated with the open-open *same row variable*
+    rule that the implementation already follows (`S1 == S2`, no fresh
+    binding).
+- **EP-1e**: folded into EP-1d (callback freshening, partial application,
+  collision avoidance covered by tests).
 - **EP-2**: retrofit stdlib HOFs (`each` / `map` / `fold`) with
   row-polymorphic signatures and add user-facing examples.
 
@@ -66,10 +90,11 @@ tuning, Track PC parser combinator — gated by EP).
 
 Green:
 
-- `cargo test -p goby-core --lib`: 854 tests (EP-1c added 24:
-  `from_can_clause` 4, render 5, annotation lift 7, callback validate
-  4, unify/are_compatible "ignore" 3, doubly-parenthesized 1) all
-  green; `cargo check --workspace` warning-free.
+- `cargo test -p goby-core --lib`: 872 tests (EP-1d added 18 over the
+  EP-1c baseline: 13 unify_effect_rows unit tests, 2 freshening tests,
+  3 reverted-and-rewritten EP-1c "ignore" placeholders converted to
+  EP-1d acceptance/rejection asserts, plus a fresh-row collision guard);
+  `cargo check --workspace` warning-free.
 - `cargo test -p goby-wasm --lib planning::tests`: 16/16 green.
 - All previously-green Perceus, TCO, and List acceptance tests remain
   green.
@@ -83,11 +108,8 @@ Red / ignored:
 
 ## Next Step
 
-Implement EP-1d: introduce `unify_effect_rows` (closed/closed,
-closed/open, open/open with occurs check per LANGUAGE_SPEC §5) and wire
-it into `unify_types_with_subst`'s `Ty::Fun` branch and into
-`TypeEnv::are_compatible`. Replace the EP-1c "effects: _" placeholders
-in the unify code paths and the documenting "ignore effects" tests.
-Extend `instantiate_ty_with_fresh_type_vars` with a row-var mapping so
-independent call sites of a row-polymorphic function get distinct fresh
-row variables (the TODO comment left in EP-1c).
+Implement EP-2: retrofit stdlib HOFs (`each` / `map` / `fold`) with
+row-polymorphic signatures (e.g. `map : List a -> (a -> b can {e}) ->
+List b can {e}`) and add user-facing examples. The EP-1d unification
+machinery is in place to make these signatures actually propagate
+callback effects to the caller's `can` clause.

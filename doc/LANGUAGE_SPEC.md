@@ -271,6 +271,8 @@ syntax/semantics.
 - Unification rules (for type-checker implementations):
   - `closed{S1} ~ closed{S2}`: ok iff `S1 == S2` as sets.
   - `closed{S1} ~ open{S2; e}`: ok iff `S2 ⊆ S1`; binds `e := S1 \ S2` (closed).
+  - `open{S1; e} ~ open{S2; e}` (same row variable): ok iff `S1 == S2` as
+    sets. The variable is already shared, so no fresh binding is introduced.
   - `open{S1; e1} ~ open{S2; e2}` (distinct vars): bind both vars to a fresh
     open row whose fixed part absorbs the symmetric residual; standard
     Rémy/Leijen row unification with occurs check.

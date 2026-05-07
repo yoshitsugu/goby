@@ -4,7 +4,7 @@ use crate::ast::{Expr, InterpolatedPart, Span, Stmt};
 use crate::typecheck::TypecheckError;
 use crate::typecheck_ambiguity::ensure_no_ambiguous_refs_in_expr;
 use crate::typecheck_check::{check_expr, env_with_case_pattern_bindings};
-use crate::typecheck_env::{EffectMap, Ty, TypeEnv, TypeSubst};
+use crate::typecheck_env::{EffectMap, RowSubst, Ty, TypeEnv, TypeSubst};
 use crate::typecheck_render::ty_name;
 use crate::typecheck_span::{best_available_expr_span, best_available_name_use_span};
 use crate::typecheck_stmt::check_body_stmts;
@@ -191,13 +191,16 @@ pub(crate) fn check_unhandled_effects_in_expr(
                 });
             }
             let mut subst = TypeSubst::new();
+            let mut row_subst = RowSubst::new();
+            let mut next_id = 0usize;
             for (idx, arg) in args.iter().enumerate() {
                 let expected = &params[idx];
                 if *expected == Ty::Unknown {
                     continue;
                 }
                 let actual = check_expr(arg, env);
-                let expected_after_subst = apply_type_substitution(expected, &subst, env);
+                let expected_after_subst =
+                    apply_type_substitution(expected, &subst, &row_subst, env);
                 if actual == Ty::Unknown && ty_contains_type_var(&expected_after_subst) {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
@@ -211,9 +214,17 @@ pub(crate) fn check_unhandled_effects_in_expr(
                     });
                 }
                 if actual != Ty::Unknown
-                    && !unify_types_with_subst(expected, &actual, &mut subst, env)
+                    && !unify_types_with_subst(
+                        expected,
+                        &actual,
+                        &mut subst,
+                        &mut row_subst,
+                        env,
+                        &mut next_id,
+                    )
                 {
-                    let expected_rendered = apply_type_substitution(expected, &subst, env);
+                    let expected_rendered =
+                        apply_type_substitution(expected, &subst, &row_subst, env);
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
                         span: best_available_expr_span(arg),

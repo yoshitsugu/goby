@@ -56,7 +56,6 @@ impl EffectRow {
 
 /// Substitution map for effect-row variables. Kept separate from `TypeSubst`
 /// because row variables substitute to rows, not to types.
-#[allow(dead_code)]
 pub(crate) type RowSubst = HashMap<RowVarId, EffectRow>;
 
 /// Parsed `can` clause (EP-0 surface): a set of fixed effect names plus an
@@ -209,12 +208,39 @@ impl TypeEnv {
     }
 
     pub(crate) fn are_compatible(&self, expected: &Ty, actual: &Ty) -> bool {
+        // EP-1d: keep a single RowSubst across the whole structural walk so
+        // nested `Ty::Fun` instances within one comparison share row-variable
+        // bindings (e.g. expected `(_ -> _ can {e}) -> _ can {e}` must reject
+        // `(_ -> _ can Print) -> _ can Read` because the same `{e}` cannot
+        // bind to both `Print` and `Read`).
+        //
+        // Seed `next_id` past the highest `__goby_fresh_row_N` already
+        // present in either input so a fresh row introduced during
+        // `unify_open_with_open` cannot collide with a previously freshened
+        // tail and look self-referential.
+        let mut row_subst = crate::typecheck_env::RowSubst::new();
+        let mut next_id = max_fresh_row_id(expected).max(max_fresh_row_id(actual));
+        self.are_compatible_with_row_subst(expected, actual, &mut row_subst, &mut next_id)
+    }
+
+    fn are_compatible_with_row_subst(
+        &self,
+        expected: &Ty,
+        actual: &Ty,
+        row_subst: &mut crate::typecheck_env::RowSubst,
+        next_id: &mut usize,
+    ) -> bool {
         let expected = self.resolve_alias(expected, 0);
         let actual = self.resolve_alias(actual, 0);
         match (&expected, &actual) {
             (Ty::Unknown, _) | (_, Ty::Unknown) => return true,
             (Ty::List(expected_inner), Ty::List(actual_inner)) => {
-                return self.are_compatible(expected_inner, actual_inner);
+                return self.are_compatible_with_row_subst(
+                    expected_inner,
+                    actual_inner,
+                    row_subst,
+                    next_id,
+                );
             }
             (Ty::Tuple(expected_items), Ty::Tuple(actual_items))
                 if expected_items.len() == actual_items.len() =>
@@ -222,31 +248,51 @@ impl TypeEnv {
                 return expected_items
                     .iter()
                     .zip(actual_items.iter())
-                    .all(|(expected, actual)| self.are_compatible(expected, actual));
+                    .all(|(expected, actual)| {
+                        self.are_compatible_with_row_subst(expected, actual, row_subst, next_id)
+                    });
             }
-            // EP-1c: function-type compatibility recurses on params/result and
-            // *ignores* the residual effect row. Row compatibility is plumbed
-            // in EP-1d. Without this branch, derive(PartialEq) would compare
-            // the new `effects` field via `expected == actual` below and break
-            // every compatibility check whose row differs (e.g. an annotation
-            // with `can Print` against an inferred closed-empty function).
             (
                 Ty::Fun {
                     params: ep,
                     result: er,
-                    effects: _,
+                    effects: e_eff,
                 },
                 Ty::Fun {
                     params: ap,
                     result: ar,
-                    effects: _,
+                    effects: a_eff,
                 },
             ) if ep.len() == ap.len() => {
-                return ep
+                if !ep
                     .iter()
                     .zip(ap.iter())
-                    .all(|(e, a)| self.are_compatible(e, a))
-                    && self.are_compatible(er, ar);
+                    .all(|(e, a)| self.are_compatible_with_row_subst(e, a, row_subst, next_id))
+                    || !self.are_compatible_with_row_subst(er, ar, row_subst, next_id)
+                {
+                    return false;
+                }
+                return crate::typecheck_unify::unify_effect_rows(e_eff, a_eff, row_subst, next_id);
+            }
+            // EP-1d: also recurse through `Ty::Con` arguments so a function
+            // type buried inside e.g. `List (Int -> Int can {e})` shares the
+            // surrounding RowSubst. Without this, a row-polymorphic callback
+            // wrapped in a Con would fall through to the structural equality
+            // check below and bypass `unify_effect_rows`.
+            (
+                Ty::Con {
+                    name: e_name,
+                    args: e_args,
+                },
+                Ty::Con {
+                    name: a_name,
+                    args: a_args,
+                },
+            ) if e_name == a_name && e_args.len() == a_args.len() => {
+                return e_args
+                    .iter()
+                    .zip(a_args.iter())
+                    .all(|(e, a)| self.are_compatible_with_row_subst(e, a, row_subst, next_id));
             }
             _ => {}
         }
@@ -325,6 +371,53 @@ impl TypeEnv {
             _ => ty.clone(),
         }
     }
+}
+
+/// Walk a `Ty` and return one past the largest numeric suffix found in any
+/// `__goby_fresh_row_N` row variable. Used by `are_compatible` to seed
+/// `next_id` so freshly introduced row variables cannot collide with rows
+/// that were already freshened earlier in the typecheck pipeline.
+fn max_fresh_row_id(ty: &Ty) -> usize {
+    fn extract(name: &str) -> Option<usize> {
+        const PREFIX: &str = "__goby_fresh_row_";
+        name.strip_prefix(PREFIX)
+            .and_then(|rest| rest.parse::<usize>().ok())
+            .map(|n| n + 1)
+    }
+    fn walk_row(row: &EffectRow, acc: &mut usize) {
+        if let Some(tail) = &row.tail
+            && let Some(next) = extract(&tail.0)
+            && next > *acc
+        {
+            *acc = next;
+        }
+    }
+    fn walk(ty: &Ty, acc: &mut usize) {
+        match ty {
+            Ty::List(inner) => walk(inner, acc),
+            Ty::Tuple(items) => items.iter().for_each(|t| walk(t, acc)),
+            Ty::Fun {
+                params,
+                result,
+                effects,
+            } => {
+                params.iter().for_each(|p| walk(p, acc));
+                walk(result, acc);
+                walk_row(effects, acc);
+            }
+            Ty::Con { args, .. } => args.iter().for_each(|a| walk(a, acc)),
+            Ty::Var(_)
+            | Ty::Handler { .. }
+            | Ty::Int
+            | Ty::Bool
+            | Ty::Str
+            | Ty::Unit
+            | Ty::Unknown => {}
+        }
+    }
+    let mut acc = 0usize;
+    walk(ty, &mut acc);
+    acc
 }
 
 #[cfg(test)]

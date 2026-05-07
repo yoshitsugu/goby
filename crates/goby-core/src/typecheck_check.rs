@@ -359,12 +359,12 @@ pub(crate) fn merge_branch_type(env: &TypeEnv, left: Ty, right: Ty) -> Ty {
             Ty::Fun {
                 params: lps,
                 result: lr,
-                effects: _,
+                effects: l_eff,
             },
             Ty::Fun {
                 params: rps,
                 result: rr,
-                effects: _,
+                effects: r_eff,
             },
         ) if lps.len() == rps.len() => {
             let merged_params = lps
@@ -372,12 +372,18 @@ pub(crate) fn merge_branch_type(env: &TypeEnv, left: Ty, right: Ty) -> Ty {
                 .zip(rps)
                 .map(|(l, r)| merge_branch_type(env, l, r))
                 .collect();
+            // EP-1d: keep the row only when both branches agree on it.
+            // Row union is not yet specified (LANGUAGE_SPEC §5 leaves
+            // multi-branch joins implicit), so when rows differ we collapse
+            // the entire merged Ty::Fun to Unknown rather than silently
+            // dropping effects.
+            if l_eff != r_eff {
+                return Ty::Unknown;
+            }
             Ty::Fun {
                 params: merged_params,
                 result: Box::new(merge_branch_type(env, *lr, *rr)),
-                // EP-1c: branch merging picks closed-empty as the conservative
-                // residual; EP-1d will compute the union of branch rows.
-                effects: EffectRow::closed_empty(),
+                effects: l_eff,
             }
         }
         (Ty::Con { name: ln, args: la }, Ty::Con { name: rn, args: ra })
@@ -413,18 +419,22 @@ pub(crate) fn branch_types_compatible(env: &TypeEnv, left: &Ty, right: &Ty) -> b
             Ty::Fun {
                 params: lps,
                 result: lr,
-                effects: _,
+                effects: l_eff,
             },
             Ty::Fun {
                 params: rps,
                 result: rr,
-                effects: _,
+                effects: r_eff,
             },
         ) if lps.len() == rps.len() => {
-            // EP-1c: ignore effects; row compatibility lands in EP-1d.
-            lps.iter()
-                .zip(rps.iter())
-                .all(|(l, r)| branch_types_compatible(env, l, r))
+            // EP-1d: branch types must agree on params, result, and the
+            // residual effect row. Row union is not part of LANGUAGE_SPEC §5
+            // yet, so we require equality for now.
+            l_eff == r_eff
+                && lps
+                    .iter()
+                    .zip(rps.iter())
+                    .all(|(l, r)| branch_types_compatible(env, l, r))
                 && branch_types_compatible(env, &lr, &rr)
         }
         (Ty::Con { name: ln, args: la }, Ty::Con { name: rn, args: ra })
