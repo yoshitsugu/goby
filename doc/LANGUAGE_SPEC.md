@@ -251,9 +251,8 @@ syntax/semantics.
   - `{e}` is a lowercase identifier in braces. Row variables live in a separate
     namespace from ordinary type variables (`a`, `b`, ...). Implicit universal
     quantification at the declaration applies to both.
-  - At most one row variable may appear in a single `can` clause through EP-0
-    and EP-1; this limit may be revisited in a later phase if a concrete use
-    case appears.
+  - At most one row variable may appear in a single `can` clause; this
+    limit may be revisited in a later phase if a concrete use case appears.
   - `{}` is the explicit closed-empty row and is equivalent to omitting `can`.
 - Row variables may appear inside callback parameter types, propagating
   callback effects through higher-order functions:
@@ -289,12 +288,10 @@ syntax/semantics.
   - **any surviving row tail**: a single "callback row variable cannot be
     unified" hint covers closed/open subset failures and open/open
     fixed-set conflicts.
-- Implementation phases for the row machinery are tracked under Track EP in
-  `doc/PLAN.md` §4.6 and are all complete (2026-05-07). EP-0 locks the
-  surface and semantics; EP-1 implements the internal row representation
-  and unification; EP-2 introduces row variables on stdlib HOFs; EP-3 covers
-  diagnostics polish, partial-discharge interaction, and the interaction
-  with generic type parameters.
+- The row-polymorphism machinery is implemented and stable as of
+  2026-05-07: row representation, unification, stdlib row-polymorphic
+  HOFs, partial-discharge interaction, diagnostic distinction, and
+  generic+row interaction all behave per the rules above.
 - `can` describes the unhandled effects of the annotated function body, not the effects used internally while evaluating it.
 - Effect declarations define operations only.
   - current spec does not assign `can` semantics to effect member signatures.
@@ -395,7 +392,7 @@ syntax/semantics.
   - `each : List a -> (a -> Unit can {e}) -> Unit can {e}`
     - applies a callback to each element in order; discards results.
     - `{e}` is a row variable: callback effects propagate to the caller's
-      `can` clause via Track EP row unification (LANGUAGE_SPEC §5).
+      `can` clause via row unification (§5).
   - `map : List a -> (a -> b can {e}) -> List b can {e}`
     - transforms each element via a callback; returns a new list.
     - same row-polymorphic effect propagation as `each`.
@@ -405,7 +402,7 @@ syntax/semantics.
     - callback argument order: accumulator first, then element (`f acc elem`).
     - `fold [] init f == init` (empty list returns the initial accumulator).
     - effectful callbacks propagate via row variable `{e}` to the caller's
-      `can` clause (Track EP, EP-2 / 2026-05-07).
+      `can` clause (§5).
   - `length : List a -> Int`
     - returns the number of elements in the list.
   - `push : List a -> a -> List a`
