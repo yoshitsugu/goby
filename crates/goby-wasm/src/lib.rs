@@ -105,7 +105,6 @@ pub struct CodegenError {
 ///   native lowering nor resolvable as static print output.
 /// - Internal Wasm encoding fails (e.g. string literal too large).
 pub fn compile_module(module: &Module) -> Result<Vec<u8>, CodegenError> {
-    reject_float_modules_until_phase_e5(module)?;
     execution_plan::compile_module_entrypoint(module)
 }
 
@@ -114,27 +113,7 @@ pub fn compile_module_with_options(
     module: &Module,
     options: CompileOptions,
 ) -> Result<Vec<u8>, CodegenError> {
-    reject_float_modules_until_phase_e5(module)?;
     execution_plan::compile_module_with_options_entrypoint(module, options)
-}
-
-/// Track Float Phase E3 safety net.
-///
-/// `Float` literals already parse, typecheck, and reach IR (Phase E2 / E3),
-/// but the runtime representation, fallback evaluator, and Wasm code
-/// emission for `Float` land later (Phases E4 / E5). Reject every module
-/// that mentions a `Float` literal at the wasm compile boundary so a
-/// well-typed Float program cannot silently fall through integer-tagged
-/// code paths during execution.
-fn reject_float_modules_until_phase_e5(module: &Module) -> Result<(), CodegenError> {
-    if crate::gen_lower::module_contains_float_for_runtime_guard(module) {
-        return Err(CodegenError {
-            message:
-                "Float values are not yet runnable on the wasm path (Track Float Phase E5)"
-                    .to_string(),
-        });
-    }
-    Ok(())
 }
 
 /// Execute an [`InterpreterBridge`][`crate::RuntimeIoExecutionKind::InterpreterBridge`]
@@ -169,7 +148,6 @@ pub fn execute_module_with_stdin(
     module: &Module,
     stdin_seed: Option<String>,
 ) -> Result<Option<String>, CodegenError> {
-    reject_float_modules_until_phase_e5(module)?;
     execution_plan::execute_module_with_stdin_entrypoint(module, stdin_seed)
 }
 
@@ -191,7 +169,6 @@ pub fn execute_runtime_module_with_stdin(
     module: &Module,
     stdin_seed: Option<String>,
 ) -> Result<Option<String>, CodegenError> {
-    reject_float_modules_until_phase_e5(module)?;
     execution_plan::execute_runtime_module_with_stdin_entrypoint(module, stdin_seed)
 }
 
@@ -202,7 +179,6 @@ pub fn execute_runtime_module_with_stdin_and_config(
     stdin_seed: Option<String>,
     memory_config: Option<memory_config::WasmMemoryConfig>,
 ) -> Result<Option<String>, CodegenError> {
-    reject_float_modules_until_phase_e5(module)?;
     execution_plan::execute_runtime_module_with_stdin_and_config_entrypoint(
         module,
         stdin_seed,
@@ -217,7 +193,6 @@ pub fn execute_runtime_module_with_stdin_config_and_options(
     memory_config: Option<memory_config::WasmMemoryConfig>,
     compile_options: CompileOptions,
 ) -> Result<Option<String>, CodegenError> {
-    reject_float_modules_until_phase_e5(module)?;
     execution_plan::execute_runtime_module_with_stdin_config_and_options_entrypoint(
         module,
         stdin_seed,
@@ -234,7 +209,6 @@ pub fn execute_runtime_module_with_stdin_config_and_options_captured(
     memory_config: Option<memory_config::WasmMemoryConfig>,
     compile_options: CompileOptions,
 ) -> Result<Option<CapturedRuntimeOutput>, CodegenError> {
-    reject_float_modules_until_phase_e5(module)?;
     execution_plan::execute_runtime_module_with_stdin_config_and_options_captured_entrypoint(
         module,
         stdin_seed,
@@ -342,6 +316,46 @@ main =
         let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
             .expect("compiled list spread program should execute");
         assert_eq!(output, "[\"a\", \"b\", \"c\"]");
+    }
+
+    /// Track Float Phase E5-A acceptance: a `Float` literal must round-trip
+    /// through TAG_FLOAT codegen and the host-side `format_tagged_value`
+    /// (which calls `format_float`) when interpolated as `"${expr}"`.
+    /// Binop / fallback parity arrive in E5-B / E5-C.
+    #[test]
+    fn float_literal_executes_via_compiled_wasm() {
+        let module = parse_module(
+            r#"
+main : Unit -> Unit
+main = print "${1.0}"
+"#,
+        )
+        .expect("source should parse");
+
+        let wasm = compile_module(&module).expect("Float literal program should compile");
+        assert_valid_wasm_module(&wasm);
+
+        let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+            .expect("compiled Float literal program should execute");
+        assert_eq!(output, "1.0");
+    }
+
+    /// Float specials must format using Haskell `show` conventions when surfaced
+    /// through the host `format_tagged_value` path.
+    #[test]
+    fn float_special_values_render_via_format_float() {
+        let module = parse_module(
+            r#"
+main : Unit -> Unit
+main = print "${0.5} ${-3.25}"
+"#,
+        )
+        .expect("source should parse");
+        let wasm = compile_module(&module).expect("Float specials program should compile");
+        assert_valid_wasm_module(&wasm);
+        let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+            .expect("Float specials program should execute");
+        assert_eq!(output, "0.5 -3.25");
     }
 
     #[test]

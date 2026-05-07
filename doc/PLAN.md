@@ -743,14 +743,40 @@ Execution phases (revised after Codex Pass1 review):
      representation and verifies tag orthogonality so the existing
      `List` / `Tuple` / `Cell` paths are unaffected.
 5. **Phase E5: Wasm lowering + interpreter fallback + parity**.
-   - lower the typed IR variants to `f64.add`, `f64.div`, `f64.eq`, ...,
-   - extend `RuntimeValue` / `runtime_value_eq` / `to_output_text` /
-     `runtime_expr` literal+binop / `lower.rs::eval_value` /
-     `fallback capability allowlist` for `Float`,
-   - share a `format_float(f: f64) -> String` helper for Haskell-`show`-style
-     rendering (`.0` for integer-valued, `Infinity` / `-Infinity`, `NaN`,
-     `-0.0`, `0.0`),
-   - verify parity between fallback execution and native Wasm execution.
+   Split into focused sub-steps so each ships a green build:
+
+   - **E5-A** (complete): Float literal end-to-end on the Wasm path.
+     `WasmBackendInstr::AllocFloatBox { bits_instrs }` allocates the 8-byte
+     `(bits: i64)` box (Cell-shaped) and emits a TAG_FLOAT-tagged pointer.
+     `__goby_dup` / `__goby_drop` learn TAG_FLOAT (drop is an *independent*
+     branch from Cell — raw IEEE bits must not be recursively dropped — but
+     reuses the Cell free-list slot since the allocation shape is the same).
+     A new `format_float(f: f64) -> String` helper in `gen_lower/value.rs`
+     renders Haskell-`show` form (`1.0`, `Infinity`, `-Infinity`, `NaN`,
+     `-0.0`, `0.0`) and is shared between the host TAG_FLOAT decoder
+     (`wasm_exec::format_tagged_value`) and the future interpreter fallback.
+     The Phase E3 module-level safety net is removed; the GeneralLowered
+     capability gate gains a `has_float_in_comp` clause so `Float` programs
+     no longer fall into the static-output / native-fallback path that
+     cannot render TAG_FLOAT.
+   - **E5-B** (active): real `Float, Float -> Float` and
+     `Float, Float -> Bool` Wasm emission. Replace the deferred
+     `IrBinOp::Float{Add,Sub,Mul,Div,Eq,Lt,Gt,Le,Ge}` codegen errors with
+     `unbox → f64.<op> → rebox` (or `f64.<cmp> → encode_bool`); the
+     re-box reuses the same `AllocFloatBox` variant so allocation shape
+     stays identical between literals and computed results. Stack order
+     for non-commutative ops must be locked via scratch locals to avoid
+     subtle operand swaps. `==` follows IEEE 754 (`f64.eq`) — *not*
+     bit-eq — so `NaN == NaN` is False and `-0.0 == 0.0` is True.
+   - **E5-C** (queued): interpreter fallback. Add `RuntimeValue::Float(f64)`
+     and `NativeValue::Float(f64)`, route `runtime_value_eq` /
+     `format_text` / `runtime_expr` literal+binop / `lower.rs::eval_value`
+     / `runtime_apply.rs` / `runtime_decl.rs` / `runtime_resolver.rs` and
+     the fallback capability allowlist through `format_float`. Equality
+     here also follows IEEE 754, not bit-eq.
+   - **E5-D** (queued): parity acceptance + minimal `examples/float_basics.gb`
+     and removal of the E5-B interim guard test
+     (`compile_tests::compile_module_rejects_var_rooted_float_arithmetic_until_phase_e5b`).
 6. **Phase E6: Examples / formatter / LSP / docs sync**.
    - add `examples/float_basics.gb` (or equivalent) and a formatter
      idempotence test,

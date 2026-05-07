@@ -20,7 +20,7 @@ use crate::gen_lower::backend_ir::{
     BackendAllocInit, BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp,
     StaticHeapValue, WasmBackendInstr,
 };
-use crate::gen_lower::value::{ValueError, encode_bool, encode_int, encode_unit};
+use crate::gen_lower::value::{ValueError, encode_bool, encode_int, encode_unit, float_bits_to_i64};
 
 /// Counter for generating unique lambda auxiliary declaration names (`__lambda_N`).
 static LAMBDA_COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -3496,14 +3496,16 @@ fn lower_value_ctx(
     match v {
         ValueExpr::Unit => Ok(vec![WasmBackendInstr::I64Const(encode_unit())]),
         ValueExpr::IntLit(n) => Ok(vec![WasmBackendInstr::I64Const(encode_int(*n)?)]),
-        // Phase E2 stub: Float lowering lands in Phase E5 alongside the Wasm
-        // value-representation work. Programs that already include a Float
-        // literal can reach this branch (E1 spec accepts `Float`, E2 wires
-        // the AST/IR variant), so report `UnsupportedForm` rather than
-        // panicking until E5 implements `f64.const` + heap-boxed payload.
-        ValueExpr::FloatLit(_) => Err(LowerError::UnsupportedForm {
-            node: "Float literal (Track Float Phase E5 not yet implemented)".to_string(),
-        }),
+        // Phase E5: lower a Float literal to an `AllocFloatBox` whose `bits_instrs`
+        // pushes the IEEE 754 bit pattern as a single i64 constant. The actual
+        // 8-byte heap allocation, store, and TAG_FLOAT pointer push happen at
+        // emit time (see `gen_lower/emit.rs::AllocFloatBox`).
+        ValueExpr::FloatLit(bits) => {
+            let f = f64::from_bits(bits.0);
+            Ok(vec![WasmBackendInstr::AllocFloatBox {
+                bits_instrs: vec![WasmBackendInstr::I64Const(float_bits_to_i64(f))],
+            }])
+        }
         ValueExpr::BoolLit(b) => Ok(vec![WasmBackendInstr::I64Const(encode_bool(*b))]),
         ValueExpr::StrLit(text) => Ok(vec![WasmBackendInstr::PushStaticString {
             text: text.clone(),

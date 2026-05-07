@@ -38,8 +38,9 @@ use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 
 use crate::gen_lower::emit::CHUNK_SIZE;
 use crate::gen_lower::value::{
-    TAG_BOOL, TAG_INT, TAG_LIST, TAG_RECORD, TAG_STRING, TAG_TUPLE, TAG_UNIT, decode_payload_int,
-    decode_payload_ptr, decode_tag, encode_int, encode_list_ptr, encode_string_ptr,
+    TAG_BOOL, TAG_FLOAT, TAG_INT, TAG_LIST, TAG_RECORD, TAG_STRING, TAG_TUPLE, TAG_UNIT,
+    decode_payload_int, decode_payload_ptr, decode_tag, encode_int, encode_list_ptr,
+    encode_string_ptr, format_float, i64_to_float_bits,
 };
 use crate::grapheme_semantics::collect_extended_grapheme_spans;
 use crate::host_runtime::HostIntrinsicImport;
@@ -565,6 +566,12 @@ fn format_tagged_value(
         TAG_LIST => format_tagged_list(caller, tagged, "[", "]", true, memory_config),
         TAG_TUPLE => format_tagged_flat_sequence(caller, tagged, "(", ")", false, memory_config),
         TAG_RECORD => Ok("Record".to_string()),
+        TAG_FLOAT => {
+            // TAG_FLOAT box layout: `(bits: i64)` at payload offset 0.
+            let ptr = decode_payload_ptr(tagged) as usize;
+            let bits = read_i64_le(caller, ptr)?;
+            Ok(format_float(i64_to_float_bits(bits)))
+        }
         _ => Err(()),
     }
 }

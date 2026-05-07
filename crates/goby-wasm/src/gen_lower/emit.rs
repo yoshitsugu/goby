@@ -24,7 +24,7 @@ use crate::gen_lower::ptr::{
 use goby_core::ir::IrBinOp;
 
 use crate::gen_lower::value::{
-    TAG_BOOL, TAG_CELL, TAG_CHUNK, TAG_CLOSURE, TAG_FUNC, TAG_INT, TAG_LIST, TAG_RECORD,
+    TAG_BOOL, TAG_CELL, TAG_CHUNK, TAG_CLOSURE, TAG_FLOAT, TAG_FUNC, TAG_INT, TAG_LIST, TAG_RECORD,
     TAG_STRING, TAG_TUPLE, encode_bool, encode_int, encode_list_ptr, encode_record_ptr,
     encode_string_ptr, encode_tuple_ptr, encode_unit,
 };
@@ -885,6 +885,9 @@ pub(crate) fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBacken
             WasmBackendInstr::AllocMutableCell { init_instrs } => {
                 result.extend(collect_all_instrs(init_instrs));
             }
+            WasmBackendInstr::AllocFloatBox { bits_instrs } => {
+                result.extend(collect_all_instrs(bits_instrs));
+            }
             WasmBackendInstr::StoreCellValue {
                 cell_ptr_instrs,
                 value_instrs,
@@ -914,6 +917,7 @@ pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                 | WasmBackendInstr::ListReverseFoldPrepend { .. }
                 | WasmBackendInstr::CreateClosure { .. }
                 | WasmBackendInstr::AllocMutableCell { .. }
+                | WasmBackendInstr::AllocFloatBox { .. }
                 | WasmBackendInstr::Intrinsic {
                     intrinsic: BackendIntrinsic::StringSplit
                         | BackendIntrinsic::ValueToString
@@ -1010,6 +1014,11 @@ pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                     }
                     WasmBackendInstr::AllocMutableCell { init_instrs } => {
                         if has_heap_pattern(init_instrs) {
+                            return true;
+                        }
+                    }
+                    WasmBackendInstr::AllocFloatBox { bits_instrs } => {
+                        if has_heap_pattern(bits_instrs) {
                             return true;
                         }
                     }
@@ -1184,6 +1193,9 @@ fn required_heap_base_spill_count_instr(instr: &WasmBackendInstr) -> u32 {
         }
         WasmBackendInstr::AllocMutableCell { init_instrs } => {
             required_heap_base_spill_count(init_instrs)
+        }
+        WasmBackendInstr::AllocFloatBox { bits_instrs } => {
+            required_heap_base_spill_count(bits_instrs)
         }
         _ => 0,
     }
@@ -3643,6 +3655,44 @@ fn emit_instrs_with_heap_depth(
                 emit_push_tagged_ptr(function, s_cell_ptr, TAG_CELL, pw);
             }
 
+            WasmBackendInstr::AllocFloatBox { bits_instrs } => {
+                // Allocate 8 bytes, store IEEE 754 bit pattern at offset 0, push TAG_FLOAT-tagged ptr.
+                //
+                // Same allocation shape as AllocMutableCell. `bits_instrs` must produce a single
+                // i64 (the IEEE 754 bits) and must not nest a further heap allocation, since
+                // HS_AUX_PTR is reused as the result-pointer scratch (same constraint as Cell).
+                let hs = require_heap_state(helper_state, "AllocFloatBox")?;
+                let pw = hs.pw();
+                let s_float_ptr = hs.scratch.i32_base + HS_AUX_PTR;
+                let s_alloc_size = hs.scratch.i32_base + HS_ALLOC_SIZE;
+                function.instruction(&ptr_const(pw, 8));
+                function.instruction(&Instruction::LocalSet(s_alloc_size));
+                emit_alloc_from_top(function, &hs, s_alloc_size, s_float_ptr);
+                // Store bits at offset 0.
+                function.instruction(&Instruction::LocalGet(s_float_ptr));
+                emit_instrs(
+                    function,
+                    ctx,
+                    bits_instrs,
+                    layout,
+                    named_i64_count,
+                    helper_i64_scratch_count,
+                    i32_base,
+                    static_strings,
+                    static_heap,
+                    options,
+                    function_returns_i64,
+                    self_tail_loop_depth,
+                )?;
+                function.instruction(&Instruction::I64Store(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+                // Push TAG_FLOAT-tagged pointer as result.
+                emit_push_tagged_ptr(function, s_float_ptr, TAG_FLOAT, pw);
+            }
+
             WasmBackendInstr::LoadCellValue => {
                 // Stack top: TAG_CELL-tagged i64 pointer.
                 // Decode to ptr-width pointer, load i64 at offset 0.
@@ -5009,6 +5059,7 @@ fn emit_ref_count_drop_reuse(
         TAG_CLOSURE,
         TAG_CELL,
         TAG_CHUNK,
+        TAG_FLOAT,
     ] {
         function.instruction(&Instruction::LocalGet(tag_local));
         function.instruction(&Instruction::I64Const(tag as i64));
@@ -5837,6 +5888,10 @@ fn emit_goby_dup_function(code: &mut CodeSection, pw: PtrWidth) {
     function.instruction(&Instruction::I64Const(TAG_CHUNK as i64));
     function.instruction(&Instruction::I64Eq);
     function.instruction(&Instruction::I32Or);
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(TAG_FLOAT as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::I32Or);
     function.instruction(&Instruction::I32Eqz);
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
     function.instruction(&Instruction::Return);
@@ -5892,11 +5947,13 @@ fn emit_goby_dup_function(code: &mut CodeSection, pw: PtrWidth) {
 ///  - TAG_CHUNK (0xA): internal chunk ptr — drop all items, push to Chunk free-list.
 ///  - TAG_LIST  (0x4): drop each chunk via recursive TAG_CHUNK call, no free-list (header Large).
 ///  - TAG_TUPLE (0x6): drop each element, no free-list (arity varies).
-///  - TAG_CELL  (0x9): no children, push to Cell free-list.
+///  - TAG_CELL  (0x9): drop the contained tagged value, push to Cell free-list.
+///  - TAG_FLOAT (0xB): no children (raw IEEE 754 bits, not a tagged value),
+///    push to Cell free-list (shares the 8-byte slot).
 ///  - TAG_RECORD (0x7), TAG_CLOSURE (0x8): child-drop deferred (arity not in payload), no free-list.
 ///  - others: no child-drop, no free-list.
 ///
-/// W32-only fallback: refcount decrement + Cell free-list push only; no recursive child-drop.
+/// W32-only fallback: refcount decrement + Cell/Float free-list push only; no recursive child-drop.
 /// Child-drop for List/Tuple is not extended for W32.
 fn emit_goby_drop_function_w32(code: &mut CodeSection) {
     let pw = PtrWidth::W32;
@@ -5993,10 +6050,17 @@ fn emit_goby_drop_function_w32(code: &mut CodeSection) {
         }));
     }
 
-    // TAG_CELL: push to Cell free-list
+    // TAG_CELL or TAG_FLOAT: push to Cell free-list (Float reuses the 8-byte slot;
+    // both have the same allocation shape: 8-byte payload + refcount header.
+    // Float carries a raw IEEE 754 bit pattern so no recursive drop is performed,
+    // which is also true for the W32 Cell path here — neither recurses.)
     function.instruction(&Instruction::LocalGet(tag));
     function.instruction(&Instruction::I64Const(TAG_CELL as i64));
     function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::LocalGet(tag));
+    function.instruction(&Instruction::I64Const(TAG_FLOAT as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::I32Or);
     function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
     {
         use crate::layout::FREE_LIST_SLOT_CELL;
@@ -6100,8 +6164,9 @@ fn emit_goby_drop_function(
     //   inline, so the drop is a no-op.
     // Func=0x5 is a funcref table index, not a heap pointer — also a no-op.
     // All remaining tags (TAG_STRING=0x3, TAG_LIST=0x4, TAG_TUPLE=0x6,
-    // TAG_RECORD=0x7, TAG_CLOSURE=0x8, TAG_CELL=0x9, TAG_CHUNK=0xA) are
-    // heap pointers and fall through to the refcount decrement below.
+    // TAG_RECORD=0x7, TAG_CLOSURE=0x8, TAG_CELL=0x9, TAG_CHUNK=0xA,
+    // TAG_FLOAT=0xB) are heap pointers and fall through to the refcount
+    // decrement below.
     //
     // Note: the `tag <= 2` check covers encode_unit() (tagged_ptr == 0)
     // because its tag bits are 0, but it is a *tag* comparison, not a
@@ -6474,6 +6539,28 @@ fn emit_goby_drop_function(
         // freed_bytes += REFCOUNT_WORD_BYTES + 8
         add_freed_bytes(&mut function, (REFCOUNT_WORD_BYTES + 8) as i64);
         // push to Cell free-list
+        use crate::layout::FREE_LIST_SLOT_CELL;
+        push_to_free_list(&mut function, FREE_LIST_SLOT_CELL);
+    }
+    function.instruction(&Instruction::End);
+
+    // -----------------------------------------------------------------------
+    // TAG_FLOAT (0xB) — heap-boxed `f64` drop.
+    //   layout: [bits: i64]; the bits are a raw IEEE 754 pattern, NOT a tagged
+    //   value, so this branch must NOT recurse into `__goby_drop` on the payload
+    //   (that would corrupt accounting for arbitrary floating-point bit patterns).
+    //   Allocation shape matches Cell (8 bytes + refcount header), so Float
+    //   reuses the Cell free-list slot.
+    // -----------------------------------------------------------------------
+    function.instruction(&Instruction::LocalGet(l_tag));
+    function.instruction(&Instruction::I64Const(TAG_FLOAT as i64));
+    function.instruction(&Instruction::I64Eq);
+    function.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+    {
+        // No child drop: bits are raw IEEE 754, not a tagged value.
+        // freed_bytes += REFCOUNT_WORD_BYTES + 8
+        add_freed_bytes(&mut function, (REFCOUNT_WORD_BYTES + 8) as i64);
+        // push to Cell free-list (8-byte slot is shared with Float).
         use crate::layout::FREE_LIST_SLOT_CELL;
         push_to_free_list(&mut function, FREE_LIST_SLOT_CELL);
     }

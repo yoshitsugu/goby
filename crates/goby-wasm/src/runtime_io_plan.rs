@@ -375,16 +375,6 @@ fn plan_static_output(stmts: &[Stmt]) -> Option<String> {
 }
 
 pub fn runtime_io_execution_kind(module: &Module) -> Result<RuntimeIoExecutionKind, CodegenError> {
-    // Track Float Phase E3 safety net: a `Float` literal anywhere in the
-    // module means we cannot honestly classify the program for runtime
-    // execution until Phase E5 wires the runtime representation.
-    if crate::gen_lower::module_contains_float_for_runtime_guard(module) {
-        return Err(CodegenError {
-            message:
-                "Float values are not yet runnable on the wasm path (Track Float Phase E5)"
-                    .to_string(),
-        });
-    }
     if crate::gen_lower::supports_general_lower_module(module)?.is_none() {
         return Ok(RuntimeIoExecutionKind::GeneralLowered);
     }

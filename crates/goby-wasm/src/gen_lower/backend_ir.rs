@@ -622,6 +622,20 @@ pub(crate) enum WasmBackendInstr {
         cell_ptr_instrs: Vec<WasmBackendInstr>,
         value_instrs: Vec<WasmBackendInstr>,
     },
+
+    /// Allocate an 8-byte Float box, store the IEEE 754 bit pattern, push TAG_FLOAT-tagged pointer.
+    ///
+    /// # Memory layout
+    /// `(bits: i64)` = 8 bytes at offset 0; the i64 holds the IEEE 754 bit pattern of the
+    /// `f64` value (see `gen_lower/value.rs::float_bits_to_i64`).
+    ///
+    /// # Stack discipline
+    /// `bits_instrs` produces the i64 bit pattern (typically a single `I64Const`
+    /// for a literal, or an `i64.reinterpret_f64` of a computed `f64` for a binop result).
+    /// After: one TAG_FLOAT-tagged i64 pointer on the stack.
+    ///
+    /// Same allocation shape as `AllocMutableCell`; reuses the Cell free-list slot.
+    AllocFloatBox { bits_instrs: Vec<WasmBackendInstr> },
 }
 
 #[cfg(test)]

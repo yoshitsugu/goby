@@ -243,6 +243,48 @@ pub(crate) fn i64_to_float_bits(bits: i64) -> f64 {
     f64::from_bits(bits as u64)
 }
 
+/// Format an `f64` for Goby runtime output following Haskell `show` conventions.
+///
+/// Special cases (LANGUAGE_SPEC §3):
+///
+/// - `NaN`        → `"NaN"`     (any NaN bit pattern)
+/// - `+Infinity`  → `"Infinity"`
+/// - `-Infinity`  → `"-Infinity"`
+/// - `-0.0`       → `"-0.0"`    (sign-of-zero must survive)
+/// - `0.0`        → `"0.0"`
+/// - integer-valued finite (e.g. `1.0`, `-3.0`) → trailing `.0` always rendered
+/// - otherwise    → Rust's default `f64` `Display` (which already includes a fractional part)
+///
+/// Both the interpreter fallback (`runtime_value.rs::RuntimeValue::Float`) and the
+/// host-side TAG_FLOAT decoder (`wasm_exec.rs::format_tagged_value`) call into this
+/// helper so the two execution paths produce byte-identical output.
+pub(crate) fn format_float(f: f64) -> String {
+    if f.is_nan() {
+        return "NaN".to_string();
+    }
+    if f == f64::INFINITY {
+        return "Infinity".to_string();
+    }
+    if f == f64::NEG_INFINITY {
+        return "-Infinity".to_string();
+    }
+    if f == 0.0 {
+        // Distinguish -0.0 from +0.0 by sign bit (== treats them as equal).
+        return if f.is_sign_negative() {
+            "-0.0".to_string()
+        } else {
+            "0.0".to_string()
+        };
+    }
+    // Finite, non-zero. Rust's default formatting omits the fractional part for
+    // integer-valued floats (e.g. `1` for `1.0_f64`); Haskell-`show` always keeps
+    // `.0` for integer-valued finite values, so append it explicitly.
+    if f.is_finite() && f.fract() == 0.0 {
+        return format!("{}.0", f);
+    }
+    f.to_string()
+}
+
 // ---------------------------------------------------------------------------
 // Decoding
 // ---------------------------------------------------------------------------
@@ -597,5 +639,50 @@ mod tests {
         let subnormal = f64::from_bits(1);
         let bits = float_bits_to_i64(subnormal);
         assert_bits_eq(i64_to_float_bits(bits), subnormal);
+    }
+
+    #[test]
+    fn format_float_nan() {
+        assert_eq!(format_float(f64::NAN), "NaN");
+    }
+
+    #[test]
+    fn format_float_positive_infinity() {
+        assert_eq!(format_float(f64::INFINITY), "Infinity");
+    }
+
+    #[test]
+    fn format_float_negative_infinity() {
+        assert_eq!(format_float(f64::NEG_INFINITY), "-Infinity");
+    }
+
+    #[test]
+    fn format_float_positive_zero() {
+        assert_eq!(format_float(0.0), "0.0");
+    }
+
+    #[test]
+    fn format_float_negative_zero() {
+        assert_eq!(format_float(-0.0), "-0.0");
+    }
+
+    #[test]
+    fn format_float_integer_valued_one() {
+        assert_eq!(format_float(1.0), "1.0");
+    }
+
+    #[test]
+    fn format_float_integer_valued_negative() {
+        assert_eq!(format_float(-3.0), "-3.0");
+    }
+
+    #[test]
+    fn format_float_fractional() {
+        assert_eq!(format_float(0.5), "0.5");
+    }
+
+    #[test]
+    fn format_float_negative_fractional() {
+        assert_eq!(format_float(-3.25), "-3.25");
     }
 }

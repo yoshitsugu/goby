@@ -83,13 +83,16 @@ syntax/semantics.
       - `NaN` → `NaN`,
       - negative zero → `-0.0`, zero → `0.0`.
   - implementation status (2026-05-08): the literal grammar, type rules,
-    operator overloading, and diagnostics described above are live. Wasm
-    code emission and runtime printing land in Track Float Phase E5
-    (`doc/PLAN.md` §4.4); until then any module containing a `Float`
-    literal is rejected at the `compile_module` boundary with
-    "Float values are not yet runnable on the wasm path", so the
-    runtime-semantics paragraphs above describe the locked target
-    behaviour rather than today's executable behaviour.
+    operator overloading, diagnostics, runtime value representation
+    (heap-boxed `f64` behind `TAG_FLOAT`), and runtime printing through
+    `format_float` (the Haskell-`show` rendering above) are live for
+    `Float` literals: a `Float` value can be created in source, flow
+    through `print` / interpolation, and round-trip the host formatter.
+    `Float, Float -> Float` arithmetic and `Float, Float -> Bool`
+    comparisons (`+`, `-`, `*`, `/`, `==`, `<`, `<=`, `>`, `>=`) are still
+    deferred to Phase E5-B (`doc/PLAN.md` §4.4); programs that compute on
+    `Float` operands surface a Phase-E5-pointed codegen error until that
+    work lands.
 - `List` contract (published M8):
   - `List` is Goby's default ordered collection surface.
   - Runtime representation is intentionally not specified as a linked-list
