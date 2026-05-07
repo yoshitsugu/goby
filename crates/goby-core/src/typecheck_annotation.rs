@@ -120,6 +120,21 @@ pub(crate) fn validate_type_annotation(
         });
     }
 
+    // EP-1c: unwrap any matching outer pairs of parentheses so a callback
+    // segment such as `(Int -> Int can Ghost)` — and even a doubly-wrapped
+    // `((Int -> Int can Ghost))` — is validated identically to a bare
+    // top-level function annotation. Tuples (`(Int, Int)`) keep their
+    // parentheses because the unwrap helper bails on a depth-0 comma that
+    // does not belong to a `can` clause.
+    let mut annotation = annotation.trim();
+    loop {
+        let unwrapped = unwrap_outer_parens(annotation).trim();
+        if unwrapped == annotation {
+            break;
+        }
+        annotation = unwrapped;
+    }
+
     validate_effect_clause(
         decl_name,
         annotation,
@@ -148,14 +163,18 @@ pub(crate) fn validate_type_annotation(
         let mut segments = ft.arguments;
         segments.push(ft.result);
         for segment in &segments {
-            let Some(type_expr) = parse_type_expr(segment) else {
-                return Err(TypecheckError {
-                    declaration: Some(decl_name.to_string()),
-                    span: decl_span,
-                    message: "invalid function type annotation".to_string(),
-                });
-            };
-            validate_handler_type_expr(decl_name, &type_expr, known_effects, decl_span)?;
+            // EP-1c: each function-type segment may itself be a nested
+            // function annotation that carries its own `can` clause (e.g.
+            // a callback `(Int -> Int can Print)`). Recurse so we validate
+            // every nested clause and every nested type expression, instead
+            // of only inspecting the outer-arrow segments.
+            validate_type_annotation(
+                decl_name,
+                segment,
+                known_effects,
+                embedded_default_effects,
+                decl_span,
+            )?;
         }
     } else {
         let Some(type_expr) = parse_type_expr(base) else {
@@ -496,6 +515,54 @@ pub fn fixed_effects_from_can_clause(annotation: &str) -> Vec<String> {
         Ok(Some(clause)) => clause.fixed,
         Ok(None) | Err(_) => Vec::new(),
     }
+}
+
+/// Strip a single matching outer pair of parentheses, when they wrap the
+/// entire string and do not delimit a tuple. Used by the validation pass to
+/// recurse into callback annotations such as `(Int -> Int can Print)`.
+/// Mirrors `typecheck_types::unwrap_outer_parens`; the duplication is small
+/// enough not to warrant a shared helper module today.
+fn unwrap_outer_parens(s: &str) -> &str {
+    if !s.starts_with('(') || !s.ends_with(')') {
+        return s;
+    }
+    let inner = &s[1..s.len() - 1];
+    // Validate that the leading `(` matches the trailing `)` (no early close)
+    // and find the position of any depth-0 `,`. A depth-0 `,` denotes a tuple
+    // unless it appears inside the outer `can` clause (e.g.
+    // `Int -> Int can {e}, {f}`), in which case the comma is part of the
+    // effect list and not a tuple separator.
+    let mut depth: usize = 0;
+    let mut first_top_comma: Option<usize> = None;
+    for (idx, ch) in inner.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                if depth == 0 {
+                    return s;
+                }
+                depth -= 1;
+            }
+            ',' if depth == 0 && first_top_comma.is_none() => {
+                first_top_comma = Some(idx);
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 {
+        return s;
+    }
+    if let Some(comma_idx) = first_top_comma {
+        // Tuple iff the comma appears before any top-level `can` keyword.
+        match find_top_level_can_keyword_index(inner) {
+            Some(can_idx) if can_idx < comma_idx => {
+                // `can ... ,` shape — comma belongs to the effect list, not a
+                // tuple separator. Fall through to unwrap.
+            }
+            _ => return s,
+        }
+    }
+    inner
 }
 
 fn is_row_variable_ident(s: &str) -> bool {

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::ast::{BinOpKind, CasePattern, Expr, ListPatternItem, ListPatternTail, Stmt};
 use crate::typecheck::TypecheckError;
-use crate::typecheck_env::{GlobalBinding, Ty, TypeEnv};
+use crate::typecheck_env::{EffectRow, GlobalBinding, Ty, TypeEnv};
 use crate::typecheck_render::ty_name;
 use crate::typecheck_span::best_available_expr_span;
 use crate::typecheck_unify::ty_contains_type_var;
@@ -159,6 +159,9 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
             Ty::Fun {
                 params: vec![Ty::Unknown],
                 result: Box::new(result),
+                // EP-1c: lambda effect inference is not implemented yet.
+                // EP-1d/EP-2 will infer the residual row from the body.
+                effects: EffectRow::closed_empty(),
             }
         }
         Expr::Handler { clauses } => Ty::Handler {
@@ -356,10 +359,12 @@ pub(crate) fn merge_branch_type(env: &TypeEnv, left: Ty, right: Ty) -> Ty {
             Ty::Fun {
                 params: lps,
                 result: lr,
+                effects: _,
             },
             Ty::Fun {
                 params: rps,
                 result: rr,
+                effects: _,
             },
         ) if lps.len() == rps.len() => {
             let merged_params = lps
@@ -370,6 +375,9 @@ pub(crate) fn merge_branch_type(env: &TypeEnv, left: Ty, right: Ty) -> Ty {
             Ty::Fun {
                 params: merged_params,
                 result: Box::new(merge_branch_type(env, *lr, *rr)),
+                // EP-1c: branch merging picks closed-empty as the conservative
+                // residual; EP-1d will compute the union of branch rows.
+                effects: EffectRow::closed_empty(),
             }
         }
         (Ty::Con { name: ln, args: la }, Ty::Con { name: rn, args: ra })
@@ -405,12 +413,15 @@ pub(crate) fn branch_types_compatible(env: &TypeEnv, left: &Ty, right: &Ty) -> b
             Ty::Fun {
                 params: lps,
                 result: lr,
+                effects: _,
             },
             Ty::Fun {
                 params: rps,
                 result: rr,
+                effects: _,
             },
         ) if lps.len() == rps.len() => {
+            // EP-1c: ignore effects; row compatibility lands in EP-1d.
             lps.iter()
                 .zip(rps.iter())
                 .all(|(l, r)| branch_types_compatible(env, l, r))

@@ -8,7 +8,7 @@ use crate::{
     typecheck::TypecheckError,
     typecheck_annotation::strip_effect_clause,
     typecheck_diag::err_name_ambiguous,
-    typecheck_env::{GlobalBinding, ImportedEffectDecl, RecordTypeInfo, Ty, TypeEnv},
+    typecheck_env::{EffectRow, GlobalBinding, ImportedEffectDecl, RecordTypeInfo, Ty, TypeEnv},
     typecheck_types::{ty_from_annotation, ty_from_type_expr},
     typecheck_validate::{
         collect_imported_effect_declarations, effective_imports, inject_imported_symbols,
@@ -23,16 +23,16 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
     for decl in &module.declarations {
         if let Some(annotation) = decl.type_annotation.as_deref() {
             let base = strip_effect_clause(annotation);
-            if let Some(ft) = crate::types::parse_function_type(base) {
-                let params: Vec<Ty> = ft.arguments.iter().map(|a| ty_from_annotation(a)).collect();
-                let result = ty_from_annotation(&ft.result);
+            if crate::types::parse_function_type(base).is_some() {
+                // EP-1c: route through ty_from_annotation so the full
+                // function type — including its top-level `can` clause —
+                // is lifted into Ty::Fun.effects. Without this, callers
+                // looking up `decl` would observe a closed-empty row even
+                // when the source declares `can Print` etc.
                 insert_global_symbol(
                     &mut globals,
                     decl.name.clone(),
-                    Ty::Fun {
-                        params,
-                        result: Box::new(result),
-                    },
+                    ty_from_annotation(annotation),
                     format!("declaration `{}`", decl.name),
                 );
             } else {
@@ -51,6 +51,7 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
         Ty::Fun {
             params: vec![Ty::Str],
             result: Box::new(Ty::Int),
+            effects: EffectRow::closed_empty(),
         },
         "runtime intrinsic `__goby_string_length`".to_string(),
     );
@@ -60,6 +61,7 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
         Ty::Fun {
             params: vec![Ty::Str],
             result: Box::new(Ty::Str),
+            effects: EffectRow::closed_empty(),
         },
         "runtime intrinsic `__goby_env_fetch_env_var`".to_string(),
     );
@@ -69,6 +71,7 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
         Ty::Fun {
             params: vec![Ty::Str],
             result: Box::new(Ty::Int),
+            effects: EffectRow::closed_empty(),
         },
         "runtime intrinsic `__goby_string_each_grapheme`".to_string(),
     );
@@ -78,6 +81,7 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
         Ty::Fun {
             params: vec![Ty::List(Box::new(Ty::Str)), Ty::Str],
             result: Box::new(Ty::List(Box::new(Ty::Str))),
+            effects: EffectRow::closed_empty(),
         },
         "runtime intrinsic `__goby_list_push_string`".to_string(),
     );
@@ -90,6 +94,7 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
                 Ty::List(Box::new(Ty::Var("a".to_string()))),
             ],
             result: Box::new(Ty::List(Box::new(Ty::Var("a".to_string())))),
+            effects: EffectRow::closed_empty(),
         },
         "runtime intrinsic `__goby_list_concat`".to_string(),
     );
@@ -99,6 +104,7 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
         Ty::Fun {
             params: vec![Ty::List(Box::new(Ty::Str)), Ty::Str],
             result: Box::new(Ty::Str),
+            effects: EffectRow::closed_empty(),
         },
         "runtime intrinsic `__goby_list_join_string`".to_string(),
     );
@@ -108,6 +114,7 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
         Ty::Fun {
             params: vec![Ty::Str],
             result: Box::new(Ty::Unit),
+            effects: EffectRow::closed_empty(),
         },
         "runtime intrinsic `__goby_embeded_effect_stdout_handler`".to_string(),
     );
@@ -258,6 +265,7 @@ fn inject_imported_type_constructors(
                         Ty::Fun {
                             params,
                             result: Box::new(result),
+                            effects: EffectRow::closed_empty(),
                         },
                         format!(
                             "import type `{}` ({}) from `{}`",
@@ -325,6 +333,7 @@ pub(crate) fn inject_type_constructors(
                 let ctor_ty = Ty::Fun {
                     params,
                     result: Box::new(result),
+                    effects: EffectRow::closed_empty(),
                 };
                 insert_global_symbol(
                     globals,

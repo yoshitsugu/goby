@@ -1,4 +1,4 @@
-use crate::typecheck_env::Ty;
+use crate::typecheck_env::{EffectRow, Ty};
 
 pub(crate) fn ty_name(ty: &Ty) -> String {
     match ty {
@@ -11,10 +11,22 @@ pub(crate) fn ty_name(ty: &Ty) -> String {
             let inner: Vec<String> = items.iter().map(ty_name).collect();
             format!("({})", inner.join(", "))
         }
-        Ty::Fun { params, result } => {
+        Ty::Fun {
+            params,
+            result,
+            effects,
+        } => {
             let mut parts: Vec<String> = params.iter().map(format_fun_segment).collect();
             parts.push(ty_name(result));
-            parts.join(" -> ")
+            let mut rendered = parts.join(" -> ");
+            // EP-1c: append `can ...` only when the row is not closed-empty.
+            // Closed-empty rows render as the bare arrow type so existing
+            // diagnostic snapshots remain unchanged.
+            if !effects.is_empty_closed() {
+                rendered.push_str(" can ");
+                rendered.push_str(&format_effect_row(effects));
+            }
+            rendered
         }
         Ty::Var(name) => {
             if name.starts_with("__goby_type_hole_") {
@@ -52,15 +64,96 @@ fn format_fun_segment(ty: &Ty) -> String {
     }
 }
 
+/// Render an effect row in surface form (`Print, Read` or `Print, {e}` or
+/// `{e}` for an empty fixed set with a row variable). Caller decides whether
+/// to render at all (closed-empty rows are typically suppressed).
+fn format_effect_row(row: &EffectRow) -> String {
+    let mut parts: Vec<String> = row.fixed.iter().cloned().collect();
+    if let Some(tail) = &row.tail {
+        parts.push(format!("{{{}}}", tail.0));
+    }
+    parts.join(", ")
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::typecheck_env::Ty;
+    use std::collections::BTreeSet;
+
+    use crate::typecheck_env::{EffectRow, RowVarId, Ty};
 
     use super::ty_name;
 
     #[test]
     fn renders_list_items_with_element_type() {
         assert_eq!(ty_name(&Ty::List(Box::new(Ty::Int))), "List Int");
+    }
+
+    #[test]
+    fn renders_function_with_closed_empty_effects_omits_can_clause() {
+        let ty = Ty::Fun {
+            params: vec![Ty::Int],
+            result: Box::new(Ty::Int),
+            effects: EffectRow::closed_empty(),
+        };
+        assert_eq!(ty_name(&ty), "Int -> Int");
+    }
+
+    #[test]
+    fn renders_function_with_fixed_effects_appends_can_clause() {
+        let ty = Ty::Fun {
+            params: vec![Ty::Int],
+            result: Box::new(Ty::Int),
+            effects: EffectRow::closed_from(["Print".to_string()]),
+        };
+        assert_eq!(ty_name(&ty), "Int -> Int can Print");
+    }
+
+    #[test]
+    fn renders_function_with_row_variable_only() {
+        let ty = Ty::Fun {
+            params: vec![Ty::Int],
+            result: Box::new(Ty::Int),
+            effects: EffectRow {
+                fixed: BTreeSet::new(),
+                tail: Some(RowVarId("e".to_string())),
+            },
+        };
+        assert_eq!(ty_name(&ty), "Int -> Int can {e}");
+    }
+
+    #[test]
+    fn renders_function_with_fixed_effects_and_row_variable() {
+        let ty = Ty::Fun {
+            params: vec![Ty::Int],
+            result: Box::new(Ty::Int),
+            effects: EffectRow {
+                fixed: BTreeSet::from(["Print".to_string(), "Read".to_string()]),
+                tail: Some(RowVarId("e".to_string())),
+            },
+        };
+        assert_eq!(ty_name(&ty), "Int -> Int can Print, Read, {e}");
+    }
+
+    #[test]
+    fn renders_nested_function_result_with_can_clause_documents_current_shape() {
+        // Codex Pass1 raised: `Int -> Int -> Int can Print` is ambiguous
+        // about which arrow the `can` attaches to. Today the renderer treats
+        // the rightmost `Int can Print` as the result, which matches Goby
+        // surface syntax (effects bind to the enclosing function). Pin this
+        // observable shape so EP-2 / EP-3 diagnostics work re-discusses
+        // explicitly rather than silently reshaping.
+        let ty = Ty::Fun {
+            params: vec![Ty::Int],
+            result: Box::new(Ty::Fun {
+                params: vec![Ty::Int],
+                result: Box::new(Ty::Int),
+                effects: EffectRow::closed_from(["Print".to_string()]),
+            }),
+            effects: EffectRow::closed_empty(),
+        };
+        // Inner function gets parenthesized by `format_fun_segment`, so the
+        // rendered form makes the binding unambiguous.
+        assert_eq!(ty_name(&ty), "Int -> Int -> Int can Print");
     }
 
     #[test]

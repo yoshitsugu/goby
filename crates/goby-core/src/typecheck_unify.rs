@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
 use crate::typecheck_check::effect_candidates_for_operation;
+#[cfg(test)]
+use crate::typecheck_env::{EffectRow, RowVarId};
 use crate::typecheck_env::{Ty, TypeEnv, TypeSubst};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,12 +25,17 @@ pub(crate) fn apply_type_substitution(ty: &Ty, subst: &TypeSubst, env: &TypeEnv)
                 .map(|item| apply_type_substitution(item, subst, env))
                 .collect(),
         ),
-        Ty::Fun { params, result } => Ty::Fun {
+        Ty::Fun {
+            params,
+            result,
+            effects,
+        } => Ty::Fun {
             params: params
                 .iter()
                 .map(|param| apply_type_substitution(param, subst, env))
                 .collect(),
             result: Box::new(apply_type_substitution(&result, subst, env)),
+            effects,
         },
         Ty::Con { name, args } => Ty::Con {
             name,
@@ -77,12 +84,16 @@ pub(crate) fn unify_types_with_subst(
             Ty::Fun {
                 params: left_params,
                 result: left_result,
+                effects: _,
             },
             Ty::Fun {
                 params: right_params,
                 result: right_result,
+                effects: _,
             },
         ) if left_params.len() == right_params.len() => {
+            // EP-1c: effects field is intentionally ignored here. Row
+            // unification will arrive in EP-1d together with `unify_effect_rows`.
             left_params
                 .iter()
                 .zip(right_params.iter())
@@ -137,7 +148,11 @@ pub(crate) fn instantiate_ty_with_fresh_type_vars(
                 .map(|item| instantiate_ty_with_fresh_type_vars(item, mapping, next_id))
                 .collect(),
         ),
-        Ty::Fun { params, result } => Ty::Fun {
+        Ty::Fun {
+            params,
+            result,
+            effects,
+        } => Ty::Fun {
             params: params
                 .iter()
                 .map(|param| instantiate_ty_with_fresh_type_vars(param, mapping, next_id))
@@ -145,6 +160,11 @@ pub(crate) fn instantiate_ty_with_fresh_type_vars(
             result: Box::new(instantiate_ty_with_fresh_type_vars(
                 result, mapping, next_id,
             )),
+            // EP-1c: row variables are not yet freshened per call site. EP-1d
+            // must extend this with a row-var mapping so independent calls of
+            // a row-polymorphic function do not accidentally unify their row
+            // tails through a shared `RowVarId`.
+            effects: effects.clone(),
         },
         Ty::Con { name, args } => Ty::Con {
             name: name.clone(),
@@ -199,7 +219,12 @@ pub(crate) fn instantiate_handler_clause_signature(
             env.lookup(clause_name)
         }
     };
-    let Ty::Fun { params, result } = op_ty else {
+    let Ty::Fun {
+        params,
+        result,
+        effects: _,
+    } = op_ty
+    else {
         return None;
     };
     let mut mapping = HashMap::new();
@@ -216,9 +241,11 @@ pub(crate) fn ty_contains_type_var(ty: &Ty) -> bool {
         Ty::Var(_) => true,
         Ty::List(inner) => ty_contains_type_var(inner),
         Ty::Tuple(items) => items.iter().any(ty_contains_type_var),
-        Ty::Fun { params, result } => {
-            params.iter().any(ty_contains_type_var) || ty_contains_type_var(result)
-        }
+        Ty::Fun {
+            params,
+            result,
+            effects: _,
+        } => params.iter().any(ty_contains_type_var) || ty_contains_type_var(result),
         Ty::Con { args, .. } => args.iter().any(ty_contains_type_var),
         Ty::Handler { .. } => false,
         Ty::Int | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => false,
@@ -230,7 +257,11 @@ fn ty_contains_anonymous_type_hole(ty: &Ty) -> bool {
         Ty::Var(name) => name.starts_with("__goby_type_hole_"),
         Ty::List(inner) => ty_contains_anonymous_type_hole(inner),
         Ty::Tuple(items) => items.iter().any(ty_contains_anonymous_type_hole),
-        Ty::Fun { params, result } => {
+        Ty::Fun {
+            params,
+            result,
+            effects: _,
+        } => {
             params.iter().any(ty_contains_anonymous_type_hole)
                 || ty_contains_anonymous_type_hole(result)
         }
@@ -268,10 +299,12 @@ mod tests {
         let required = Ty::Fun {
             params: vec![Ty::Int],
             result: Box::new(Ty::Int),
+            effects: EffectRow::closed_empty(),
         };
         let actual = Ty::Fun {
             params: vec![Ty::Var("a".to_string())],
             result: Box::new(Ty::Var("a".to_string())),
+            effects: EffectRow::closed_empty(),
         };
         let mut subst = TypeSubst::new();
         let mut next_id = 0;
@@ -291,10 +324,12 @@ mod tests {
         let required = Ty::Fun {
             params: vec![Ty::Int],
             result: Box::new(Ty::Unit),
+            effects: EffectRow::closed_empty(),
         };
         let actual = Ty::Fun {
             params: vec![Ty::Str],
             result: Box::new(Ty::Unit),
+            effects: EffectRow::closed_empty(),
         };
         let mut subst = TypeSubst::new();
         let mut next_id = 0;
@@ -305,5 +340,71 @@ mod tests {
 
         assert_eq!(mismatch.required, required);
         assert_eq!(mismatch.actual, actual);
+    }
+
+    #[test]
+    fn ep1c_function_unify_ignores_residual_effect_rows() {
+        // EP-1c contract: unify_types_with_subst treats two function types as
+        // compatible if their params/result agree, regardless of residual
+        // effect rows. EP-1d will replace this branch with proper row
+        // unification — this test will need updating then.
+        let env = empty_env();
+        let mut subst = TypeSubst::new();
+        let lhs = Ty::Fun {
+            params: vec![Ty::Int],
+            result: Box::new(Ty::Unit),
+            effects: EffectRow::closed_empty(),
+        };
+        let rhs = Ty::Fun {
+            params: vec![Ty::Int],
+            result: Box::new(Ty::Unit),
+            effects: EffectRow::closed_from(["Print".to_string()]),
+        };
+        assert!(
+            unify_types_with_subst(&lhs, &rhs, &mut subst, &env),
+            "EP-1c: differing residual rows must still unify"
+        );
+    }
+
+    #[test]
+    fn ep1c_function_unify_ignores_open_versus_closed_rows() {
+        let env = empty_env();
+        let mut subst = TypeSubst::new();
+        let closed = Ty::Fun {
+            params: vec![Ty::Int],
+            result: Box::new(Ty::Int),
+            effects: EffectRow::closed_empty(),
+        };
+        let open = Ty::Fun {
+            params: vec![Ty::Int],
+            result: Box::new(Ty::Int),
+            effects: EffectRow {
+                fixed: std::collections::BTreeSet::new(),
+                tail: Some(RowVarId("e".to_string())),
+            },
+        };
+        assert!(
+            unify_types_with_subst(&closed, &open, &mut subst, &env),
+            "EP-1c: closed vs open rows must still unify"
+        );
+    }
+
+    #[test]
+    fn ep1c_are_compatible_ignores_residual_effect_rows() {
+        let env = empty_env();
+        let lhs = Ty::Fun {
+            params: vec![Ty::Int],
+            result: Box::new(Ty::Unit),
+            effects: EffectRow::closed_empty(),
+        };
+        let rhs = Ty::Fun {
+            params: vec![Ty::Int],
+            result: Box::new(Ty::Unit),
+            effects: EffectRow::closed_from(["Print".to_string()]),
+        };
+        assert!(
+            env.are_compatible(&lhs, &rhs),
+            "EP-1c: are_compatible must currently ignore the effect row"
+        );
     }
 }

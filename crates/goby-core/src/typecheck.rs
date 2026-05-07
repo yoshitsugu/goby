@@ -12,7 +12,7 @@ use crate::{
 #[cfg(test)]
 use crate::{
     ast::Expr,
-    typecheck_env::{ResumeContext, Ty, TypeEnv},
+    typecheck_env::{EffectRow, ResumeContext, Ty, TypeEnv},
     typecheck_resume::infer_binding_ty_with_resume_context,
 };
 #[cfg(test)]
@@ -1648,6 +1648,7 @@ f = fetch_env_var(\"HOME\")
             &Ty::Fun {
                 params: vec![Ty::Str],
                 result: Box::new(Ty::Int),
+                effects: EffectRow::closed_empty(),
             }
         );
     }
@@ -1825,6 +1826,7 @@ main = ()
             &Ty::Fun {
                 params: vec![Ty::Str, Ty::Str],
                 result: Box::new(Ty::List(Box::new(Ty::Str))),
+                effects: EffectRow::closed_empty(),
             }
         );
     }
@@ -1872,6 +1874,7 @@ main =\n  state = GraphemeState(parts: [], seen: False)\n  ()\n";
                         name: "GraphemeState".to_string(),
                         args: Vec::new(),
                     }),
+                    effects: EffectRow::closed_empty(),
                 }
             ),
             other => panic!("expected resolved imported constructor, got {:?}", other),
@@ -3181,6 +3184,72 @@ render =
             "error must mention the multi-row-var rule, got: {}",
             err.message
         );
+    }
+
+    // --- EP-1c: nested callback `can` clause validation ---
+
+    #[test]
+    fn ep1c_rejects_unknown_effect_in_callback_can_clause() {
+        // EP-1b investigation showed this annotation passed typecheck despite
+        // the unknown effect inside the callback. EP-1c's recursive validate
+        // closes the gap together with the Ty::Fun.effects field.
+        let source = "f : (Int -> Int can Ghost) -> Int\nf cb = cb 1\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("nested unknown effect must be rejected");
+        assert!(
+            err.message.contains("Ghost"),
+            "error must mention the unknown effect, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn ep1c_rejects_multiple_row_variables_in_callback_can_clause() {
+        let source = "f : (Int -> Int can {e}, {f}) -> Int\nf cb = cb 1\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("nested multi-row-var must be rejected");
+        assert!(
+            err.message.contains("at most one row variable"),
+            "error must mention multi row var rule, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn ep1c_rejects_uppercase_row_variable_in_callback_can_clause() {
+        let source = "f : (Int -> Int can {Foo}) -> Int\nf cb = cb 1\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err("nested uppercase row var must be rejected");
+        assert!(
+            err.message.contains("lowercase identifier"),
+            "error must mention lowercase rule, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn ep1c_rejects_doubly_parenthesized_callback_can_clause_with_unknown_effect() {
+        // Codex Pass2 raised: `unwrap_outer_parens` was a single-shot strip,
+        // so `((Int -> Int can Ghost)) -> Int` could slip past validation.
+        // The loop in validate_type_annotation now peels arbitrary layers.
+        let source = "f : ((Int -> Int can Ghost)) -> Int\nf cb = cb 1\n";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("doubly-parenthesized unknown effect must be rejected");
+        assert!(
+            err.message.contains("Ghost"),
+            "error must mention the unknown effect, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn ep1c_accepts_callback_can_clause_with_known_effect() {
+        // Sanity check that recursive validation does not over-reject the
+        // EP-0 motivating shape.
+        let source = "effect Log\n  log: String -> Unit\n\nf : (Int -> Int can Log) -> Int can Log\nf cb = cb 1\n";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("known callback effect must validate");
     }
 
     #[test]

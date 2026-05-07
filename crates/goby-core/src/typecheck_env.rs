@@ -3,24 +3,18 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 /// Identifier for an effect-row variable. Surface form is `{e}`; the inner
 /// string keeps the user-written name for diagnostics. Fresh row variables at
 /// instantiation use names of the form `__goby_fresh_row_N`.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct RowVarId(pub(crate) String);
 
 /// An effect row in the type system. Set + optional row tail variable.
 /// `tail = None` denotes a closed row (exact set of effects).
 /// `tail = Some(_)` denotes an open row (additional effects allowed via the var).
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EffectRow {
     pub(crate) fixed: BTreeSet<String>,
     pub(crate) tail: Option<RowVarId>,
 }
 
-// EP-1a introduces these types ahead of EP-1b/EP-1c wiring; the `allow(dead_code)`
-// attributes scattered through this section suppress unused-warning noise on
-// `cargo check` (lib profile) until parser/Ty integration consumes them.
-#[allow(dead_code)]
 impl EffectRow {
     pub(crate) fn closed_empty() -> Self {
         EffectRow {
@@ -29,6 +23,10 @@ impl EffectRow {
         }
     }
 
+    // EP-1c: only consumed from tests so far. EP-1d / EP-2 will use this
+    // constructor when synthesizing rows during unification and for stdlib
+    // HOF row-polymorphic signatures.
+    #[allow(dead_code)]
     pub(crate) fn closed_from<I: IntoIterator<Item = String>>(effects: I) -> Self {
         EffectRow {
             fixed: effects.into_iter().collect(),
@@ -36,6 +34,17 @@ impl EffectRow {
         }
     }
 
+    /// Lift a parsed surface `CanClause` into the internal `EffectRow`
+    /// representation. `explicit_empty` collapses to the closed-empty row;
+    /// the distinction only exists at the surface level for diagnostics.
+    pub(crate) fn from_can_clause(clause: &CanClause) -> EffectRow {
+        EffectRow {
+            fixed: clause.fixed.iter().cloned().collect(),
+            tail: clause.row_var.as_ref().map(|name| RowVarId(name.clone())),
+        }
+    }
+
+    #[allow(dead_code)]
     pub(crate) fn is_closed(&self) -> bool {
         self.tail.is_none()
     }
@@ -80,10 +89,22 @@ pub(crate) enum Ty {
     Unit,
     List(Box<Ty>),
     Tuple(Vec<Ty>),
-    Fun { params: Vec<Ty>, result: Box<Ty> },
+    Fun {
+        params: Vec<Ty>,
+        result: Box<Ty>,
+        /// EP-1c: residual effect row of the function. Defaults to closed-empty
+        /// for synthetic / annotation-less function types. EP-1d will integrate
+        /// this into row unification.
+        effects: EffectRow,
+    },
     Var(String),
-    Con { name: String, args: Vec<Ty> },
-    Handler { covered_ops: HashSet<String> },
+    Con {
+        name: String,
+        args: Vec<Ty>,
+    },
+    Handler {
+        covered_ops: HashSet<String>,
+    },
     Unknown,
 }
 
@@ -203,6 +224,30 @@ impl TypeEnv {
                     .zip(actual_items.iter())
                     .all(|(expected, actual)| self.are_compatible(expected, actual));
             }
+            // EP-1c: function-type compatibility recurses on params/result and
+            // *ignores* the residual effect row. Row compatibility is plumbed
+            // in EP-1d. Without this branch, derive(PartialEq) would compare
+            // the new `effects` field via `expected == actual` below and break
+            // every compatibility check whose row differs (e.g. an annotation
+            // with `can Print` against an inferred closed-empty function).
+            (
+                Ty::Fun {
+                    params: ep,
+                    result: er,
+                    effects: _,
+                },
+                Ty::Fun {
+                    params: ap,
+                    result: ar,
+                    effects: _,
+                },
+            ) if ep.len() == ap.len() => {
+                return ep
+                    .iter()
+                    .zip(ap.iter())
+                    .all(|(e, a)| self.are_compatible(e, a))
+                    && self.are_compatible(er, ar);
+            }
             _ => {}
         }
         if let Ty::Con { name, args } = &expected
@@ -248,12 +293,17 @@ impl TypeEnv {
                     .map(|item| self.resolve_alias(item, depth + 1))
                     .collect(),
             ),
-            Ty::Fun { params, result } => Ty::Fun {
+            Ty::Fun {
+                params,
+                result,
+                effects,
+            } => Ty::Fun {
                 params: params
                     .iter()
                     .map(|param| self.resolve_alias(param, depth + 1))
                     .collect(),
                 result: Box::new(self.resolve_alias(result, depth + 1)),
+                effects: effects.clone(),
             },
             Ty::Con { name, args } => {
                 if args.is_empty()
@@ -367,5 +417,53 @@ mod effect_row_tests {
         );
         let bound = subst.get(&RowVarId("e".to_string())).cloned();
         assert_eq!(bound, Some(EffectRow::closed_from(["Print".to_string()])));
+    }
+
+    #[test]
+    fn from_can_clause_empty_closed_collapses_to_closed_empty() {
+        let clause = CanClause::empty_closed();
+        let row = EffectRow::from_can_clause(&clause);
+        assert_eq!(row, EffectRow::closed_empty());
+    }
+
+    #[test]
+    fn from_can_clause_explicit_empty_collapses_to_closed_empty() {
+        // `can {}` records explicit_empty=true at the surface but folds
+        // to the closed-empty row internally.
+        let clause = CanClause {
+            fixed: Vec::new(),
+            row_var: None,
+            explicit_empty: true,
+        };
+        let row = EffectRow::from_can_clause(&clause);
+        assert_eq!(row, EffectRow::closed_empty());
+    }
+
+    #[test]
+    fn from_can_clause_fixed_only_yields_closed_row() {
+        let clause = CanClause {
+            fixed: vec!["Print".to_string(), "Read".to_string()],
+            row_var: None,
+            explicit_empty: false,
+        };
+        let row = EffectRow::from_can_clause(&clause);
+        assert_eq!(
+            row,
+            EffectRow::closed_from(["Print".to_string(), "Read".to_string()])
+        );
+    }
+
+    #[test]
+    fn from_can_clause_with_row_variable_records_tail() {
+        let clause = CanClause {
+            fixed: vec!["Print".to_string()],
+            row_var: Some("e".to_string()),
+            explicit_empty: false,
+        };
+        let row = EffectRow::from_can_clause(&clause);
+        assert_eq!(row.fixed.len(), 1);
+        assert!(row.fixed.contains("Print"));
+        assert_eq!(row.tail, Some(RowVarId("e".to_string())));
+        assert!(!row.is_closed());
     }
 }

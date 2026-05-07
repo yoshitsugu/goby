@@ -2,7 +2,7 @@ use crate::ast::{Expr, InterpolatedPart, Stmt};
 use crate::typecheck::TypecheckError;
 use crate::typecheck_check::check_expr;
 use crate::typecheck_diag::err_unknown_callable;
-use crate::typecheck_env::{Ty, TypeEnv, TypeSubst};
+use crate::typecheck_env::{EffectRow, Ty, TypeEnv, TypeSubst};
 use crate::typecheck_render::ty_name;
 use crate::typecheck_span::{best_available_expr_span, best_available_name_use_span};
 use crate::typecheck_unify::{
@@ -299,7 +299,12 @@ fn infer_lambda_ty_against_expected(
     };
 
     let required = apply_type_substitution(expected, subst, env);
-    let Ty::Fun { params, result } = env.resolve_alias(&required, 0) else {
+    let Ty::Fun {
+        params,
+        result,
+        effects,
+    } = env.resolve_alias(&required, 0)
+    else {
         return Err(CallbackLambdaMismatch::Arity {
             required,
             provided_param_count: lambda_param_count(expr),
@@ -322,6 +327,10 @@ fn infer_lambda_ty_against_expected(
                 .map(|param| apply_type_substitution(param, subst, env))
                 .collect(),
             result: Box::new(apply_type_substitution(&result, subst, env)),
+            // EP-1c: the rest of a curried callback carries the same residual
+            // row as the original callable. EP-1d will substitute through
+            // `effects` once unify_effect_rows is wired in.
+            effects: effects.clone(),
         }
     };
 
@@ -348,6 +357,7 @@ fn infer_lambda_ty_against_expected(
                         provided: Ty::Fun {
                             params: vec![expected_param_ty.clone()],
                             result: Box::new(provided),
+                            effects: EffectRow::closed_empty(),
                         },
                     });
                 }
@@ -378,6 +388,7 @@ fn infer_lambda_ty_against_expected(
     let provided = Ty::Fun {
         params: vec![expected_param_ty],
         result: Box::new(body_ty.clone()),
+        effects: EffectRow::closed_empty(),
     };
 
     if !unify_types_with_subst(&expected_rest_ty, &body_ty, subst, &child_env) {
@@ -411,8 +422,11 @@ fn resolve_function_value_ty(expr: &Expr, env: &TypeEnv, next_id: &mut usize) ->
         return check_expr(expr, env);
     };
     let target_ty = check_expr(target, env);
-    let Ty::Fun { params, result } =
-        instantiate_ty_with_fresh_type_vars_for_call_site(&target_ty, next_id)
+    let Ty::Fun {
+        params,
+        result,
+        effects,
+    } = instantiate_ty_with_fresh_type_vars_for_call_site(&target_ty, next_id)
     else {
         return target_ty;
     };
@@ -453,6 +467,11 @@ fn resolve_function_value_ty(expr: &Expr, env: &TypeEnv, next_id: &mut usize) ->
         Ty::Fun {
             params: remaining,
             result: Box::new(result),
+            // EP-1c: partial application preserves the original callable's
+            // residual row. Without this, `f : Int -> Int -> Unit can Print`
+            // applied as `f 1` would forget `Print` once EP-1d turns this
+            // field into a checked row. EP-1d will substitute through it.
+            effects: effects.clone(),
         }
     } else {
         apply_type_substitution(&result, &subst, env)

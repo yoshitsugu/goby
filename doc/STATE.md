@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-07 (EP-1b parse_can_clause landed)
+Last updated: 2026-05-07 (EP-1c Ty::Fun.effects landed)
 
 ## Current Focus
 
@@ -30,19 +30,15 @@ Track EP (effect row polymorphism, `doc/PLAN.md` §4.6) is the active line.
     rejects `can {e}, {f}` (multi row var), `can {Foo}` / `can {_}`
     (row var must be lowercase ASCII identifier), and `can {}, X`
     / `can {}, {}` (`{}` cannot be combined or repeated).
-  - Row variables are recorded in `CanClause` but **not** propagated
-    into `Ty::Fun` yet — that is EP-1c's responsibility.
-  - **Known follow-up (EP-1c)**: callback annotations such as
-    `(Int -> Int can Ghost) -> Int` still skip nested-`can`
-    validation (long-standing gap, not introduced by EP-1b). The fix
-    requires `Ty::Fun` to carry per-position effect rows, so it will
-    ride along with the EP-1c structural change.
-- **EP-1c** (next): extend `Ty::Fun` with `effects: EffectRow` (default
-  closed-empty) across all construction/match sites, and validate
-  nested callback `can` clauses recursively at the same time.
-- **EP-1d**: integrate `unify_effect_rows` into `unify_types_with_subst`.
+  - Row variables are recorded in `CanClause`; propagation into
+    `Ty::Fun` lands in EP-1c (below).
+  - The callback nested-`can` validation gap (e.g.
+    `(Int -> Int can Ghost) -> Int` previously slipping past validate)
+    is closed in EP-1c via recursive segment validation.
+- **EP-1d** (next): integrate `unify_effect_rows` and replace the
+  EP-1c "ignore effects" placeholders. See **Next Step** below.
 - **EP-1e**: typecheck regression tests for callback row variables and
-  freshening independence.
+  freshening independence (likely folded into EP-1d).
 - **EP-2**: retrofit stdlib HOFs (`each` / `map` / `fold`) with
   row-polymorphic signatures and add user-facing examples.
 
@@ -70,12 +66,11 @@ tuning, Track PC parser combinator — gated by EP).
 
 Green:
 
-- `cargo test -p goby-core --lib`: 830 tests (EP-1a 9 + EP-1b parser 23
-  + EP-1b typecheck 5 + duplicate-brace 1 over the prior baseline), all
+- `cargo test -p goby-core --lib`: 854 tests (EP-1c added 24:
+  `from_can_clause` 4, render 5, annotation lift 7, callback validate
+  4, unify/are_compatible "ignore" 3, doubly-parenthesized 1) all
   green; `cargo check --workspace` warning-free.
-- `cargo test -p goby-wasm --lib planning::tests`: 16/16 green,
-  including the new `parse_effect_clause_effects_drops_row_variable_and_explicit_empty`
-  guard.
+- `cargo test -p goby-wasm --lib planning::tests`: 16/16 green.
 - All previously-green Perceus, TCO, and List acceptance tests remain
   green.
 
@@ -88,9 +83,11 @@ Red / ignored:
 
 ## Next Step
 
-Implement EP-1c: extend `Ty::Fun` with `effects: EffectRow` (defaulting
-to closed-empty) across the construction and match sites in
-`typecheck_*`, plumb `CanClause -> EffectRow` at annotation conversion,
-and start validating nested callback `can` clauses recursively (the
-EP-1b follow-up Codex pass-1 surfaced). Unification of effect rows
-itself stays deferred to EP-1d.
+Implement EP-1d: introduce `unify_effect_rows` (closed/closed,
+closed/open, open/open with occurs check per LANGUAGE_SPEC §5) and wire
+it into `unify_types_with_subst`'s `Ty::Fun` branch and into
+`TypeEnv::are_compatible`. Replace the EP-1c "effects: _" placeholders
+in the unify code paths and the documenting "ignore effects" tests.
+Extend `instantiate_ty_with_fresh_type_vars` with a row-var mapping so
+independent call sites of a row-polymorphic function get distinct fresh
+row variables (the TODO comment left in EP-1c).
