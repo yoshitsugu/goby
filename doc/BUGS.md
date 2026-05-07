@@ -4,6 +4,20 @@ This document tracks confirmed, reproducible bugs in the current Goby toolchain.
 
 Open bugs:
 
+- **2026-05-07.** `goby_wasm` lib test
+  `tests::fold_m5_string_accumulator` hangs indefinitely (CPU-bound, not
+  blocking on I/O) under both `cargo test -p goby-wasm` and
+  `cargo nextest run -p goby-wasm`. Reproduced on EP-1d baseline (Track EP
+  changes are unrelated; reproduces with the EP-2 stdlib retrofit reverted).
+  Other `fold_m5_*` tests in the same module pass; only the
+  `String -> Int -> String` accumulator shape (interpolated `"${acc}${x},"`
+  carrying the heap-string accumulator across `__goby_list_fold` iterations)
+  hangs. Suspected cause: heap cursor sync or refcount handling for a
+  string-typed fold accumulator, but the exact root cause has not been
+  isolated. Workarounds while triaging: skip this single test
+  (`cargo test -p goby-wasm --lib --skip fold_m5_string_accumulator`) or
+  rely on the focused `planning::tests` module for HOF planning checks.
+
 - **2026-05-01.** A function whose result is a `case` over a list pattern can
   return `Unit` or the empty-list-arm result instead of evaluating the matching
   non-empty list arm on the current `goby run` path.
