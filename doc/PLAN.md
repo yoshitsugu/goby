@@ -759,24 +759,43 @@ Execution phases (revised after Codex Pass1 review):
      capability gate gains a `has_float_in_comp` clause so `Float` programs
      no longer fall into the static-output / native-fallback path that
      cannot render TAG_FLOAT.
-   - **E5-B** (active): real `Float, Float -> Float` and
-     `Float, Float -> Bool` Wasm emission. Replace the deferred
-     `IrBinOp::Float{Add,Sub,Mul,Div,Eq,Lt,Gt,Le,Ge}` codegen errors with
-     `unbox → f64.<op> → rebox` (or `f64.<cmp> → encode_bool`); the
-     re-box reuses the same `AllocFloatBox` variant so allocation shape
-     stays identical between literals and computed results. Stack order
-     for non-commutative ops must be locked via scratch locals to avoid
-     subtle operand swaps. `==` follows IEEE 754 (`f64.eq`) — *not*
-     bit-eq — so `NaN == NaN` is False and `-0.0 == 0.0` is True.
+   - **E5-B** (complete): real `Float, Float -> Float` and
+     `Float, Float -> Bool` Wasm emission. The deferred
+     `IrBinOp::Float{Add,Sub,Mul,Div,Eq,Lt,Gt,Le,Ge}` codegen errors are
+     replaced by `unbox → f64.<op> → rebox` (arithmetic) /
+     `unbox → f64.<cmp> → bool_from_i32` (comparisons). Re-boxing
+     shares the `AllocFloatBox` shape via the new
+     `emit_alloc_float_box_with_bits_local` helper so literal-allocated
+     and computed Float values stay interchangeable on the heap. Stack
+     order for non-commutative ops is locked via two i64 scratch locals
+     (right → scratch0, left → scratch1, matching Mul/Div). `==` uses
+     `f64.eq` so `NaN == NaN` is False and `-0.0 == 0.0` is True.
+     ir_lower's `lower_binop_with_operands` learned to consult a
+     `LowerCtx::float_locals` table populated from each declaration's
+     annotation (via `typecheck_types::ty_from_annotation`) so that
+     var-rooted Float arithmetic such as
+     `my_add a b = a + b : Float -> Float -> Float` correctly dispatches
+     to `IrBinOp::Float*` instead of falling back to the integer ops.
+     Lambda / let / handler-clause params shadow same-named entries in
+     `float_locals` for the duration of their body lowering. **The
+     dispatcher remains decl-param + literal-rooted only** — Float
+     values introduced by `let x = a + b` or by call-return are still
+     not tracked at lowering time and lower to integer ops; a typed
+     resolved IR (E5-D / post-Float work) is the long-term home.
+     The interim `compile_module_rejects_var_rooted_float_arithmetic_until_phase_e5b`
+     test was retired in favour of 16 var-rooted execution tests plus a
+     shadow regression test.
    - **E5-C** (queued): interpreter fallback. Add `RuntimeValue::Float(f64)`
      and `NativeValue::Float(f64)`, route `runtime_value_eq` /
      `format_text` / `runtime_expr` literal+binop / `lower.rs::eval_value`
      / `runtime_apply.rs` / `runtime_decl.rs` / `runtime_resolver.rs` and
      the fallback capability allowlist through `format_float`. Equality
      here also follows IEEE 754, not bit-eq.
-   - **E5-D** (queued): parity acceptance + minimal `examples/float_basics.gb`
-     and removal of the E5-B interim guard test
-     (`compile_tests::compile_module_rejects_var_rooted_float_arithmetic_until_phase_e5b`).
+   - **E5-D** (queued): parity acceptance + minimal `examples/float_basics.gb`.
+     The E5-B interim guard test
+     (`compile_tests::compile_module_rejects_var_rooted_float_arithmetic_until_phase_e5b`)
+     was retired in E5-B itself when var-rooted Float arithmetic became
+     executable, so removal is no longer pending.
 6. **Phase E6: Examples / formatter / LSP / docs sync**.
    - add `examples/float_basics.gb` (or equivalent) and a formatter
      idempotence test,

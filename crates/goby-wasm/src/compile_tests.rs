@@ -106,54 +106,315 @@ fn parse_alloc_stats_field(stderr: &str, field: &str) -> u64 {
         .unwrap_or_else(|e| panic!("invalid {field} field in alloc stats: {e}: {stderr}"))
 }
 
-// ----- Track Float Phase E5 acceptance / interim guard tests -----
+// ----- Float compilation / execution acceptance tests -----
 
 #[test]
-fn compile_module_accepts_float_literal_in_main_after_phase_e5a() {
-    // Phase E5-A: Float literals now compile through the GeneralLowered
-    // path. They are heap-boxed (TAG_FLOAT) and rendered by the host
-    // formatter via `format_float`. The Phase E3 module-level safety net
-    // is gone; printing `1.0` must now succeed end-to-end.
+fn compile_module_accepts_float_literal_in_main() {
+    // Float literals compile through the GeneralLowered path: heap-boxed
+    // (TAG_FLOAT) and rendered by the host formatter via `format_float`.
     let source = "\
 main : Unit -> Unit can Print
 main = print \"${1.0}\"
 ";
     let module = parse_module(source).expect("should parse");
     let wasm = compile_module(&module)
-        .expect("Float literal in main must compile end-to-end after Phase E5-A");
+        .expect("Float literal in main must compile end-to-end");
     assert!(!wasm.is_empty(), "compiled wasm must not be empty");
 }
 
+/// Helper: parse, classify, compile, run with no stdin and return
+/// stdout-equivalent. Asserts that the program flows through the
+/// `GeneralLowered` path so that `IrBinOp::Float*` actually reaches the
+/// Wasm emitter (rather than getting constant-folded by the fallback).
+fn run_general_lowered_float_program(source: &str) -> String {
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::GeneralLowered,
+        "Float arithmetic test must hit the GeneralLowered emit path"
+    );
+    let wasm = compile_module(&module).expect("Float program should compile");
+    assert_valid_wasm_module(&wasm);
+    crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+        .expect("compiled Wasm should execute Float program")
+}
+
+// Float arithmetic / comparison execution tests. Every program uses
+// helper functions over `Float` parameters so the body lowers through
+// `IrBinOp::Float*` and reaches the `gen_lower/emit.rs` Float arithmetic
+// / comparison emission. Pure literal expressions like `${0.0 / 0.0}`
+// would otherwise be evaluated by the static-output fallback and skip
+// the Wasm path entirely.
+
 #[test]
-#[ignore = "Track Float Phase E5-B: var-rooted Float arithmetic is still deferred to the binop emit work; the Phase E3 module-level safety net was removed in E5-A so this program now reaches a different rejection path. Re-enable once E5-B wires `f64.add` / ..."]
-fn compile_module_rejects_var_rooted_float_arithmetic_until_phase_e5b() {
-    // Phase E5-A removed the module-level Float safety net introduced in
-    // E3, so a helper that adds two `Float` parameters via `a + b` no
-    // longer surfaces the "Float values are not yet runnable" diagnostic.
-    // The program still cannot run because `IrBinOp::FloatAdd` is not
-    // wired in `gen_lower/emit.rs`; this test pins the contract that
-    // Phase E5-B will surface a Float-pointed codegen error instead of a
-    // generic effect-boundary handoff message.
+fn float_arithmetic_var_rooted_addition_executes() {
+    // `a + b` over Float parameters must compile and execute end-to-end.
+    // The result is bound to a local before interpolation because
+    // GeneralLowered does not support call expressions inside
+    // interpolated strings.
     let source = "\
 my_add : Float -> Float -> Float
 my_add a b = a + b
 
 main : Unit -> Unit can Print
-main = print \"${my_add 1.0 2.0}\"
+main =
+  result = my_add 1.0 2.0
+  print \"${result}\"
 ";
-    let module = parse_module(source).expect("should parse");
-    let err = compile_module(&module)
-        .expect_err("Float arithmetic must still be rejected at codegen until Phase E5-B");
-    assert!(
-        err.message.contains("Float"),
-        "diagnostic should mention Float, got: {}",
-        err.message
-    );
-    assert!(
-        err.message.contains("Phase E5"),
-        "diagnostic should point at the deferred Phase E5 work, got: {}",
-        err.message
-    );
+    assert_eq!(run_general_lowered_float_program(source), "3.0");
+}
+
+#[test]
+fn float_arithmetic_subtraction_preserves_left_right_order() {
+    let source = "\
+my_sub : Float -> Float -> Float
+my_sub a b = a - b
+
+main : Unit -> Unit can Print
+main =
+  result = my_sub 5.0 2.0
+  print \"${result}\"
+";
+    assert_eq!(run_general_lowered_float_program(source), "3.0");
+}
+
+#[test]
+fn float_arithmetic_multiplication_executes() {
+    let source = "\
+my_mul : Float -> Float -> Float
+my_mul a b = a * b
+
+main : Unit -> Unit can Print
+main =
+  result = my_mul 2.5 4.0
+  print \"${result}\"
+";
+    assert_eq!(run_general_lowered_float_program(source), "10.0");
+}
+
+#[test]
+fn float_arithmetic_division_returns_real_quotient() {
+    let source = "\
+my_div : Float -> Float -> Float
+my_div a b = a / b
+
+main : Unit -> Unit can Print
+main =
+  result = my_div 5.0 2.0
+  print \"${result}\"
+";
+    assert_eq!(run_general_lowered_float_program(source), "2.5");
+}
+
+#[test]
+fn float_arithmetic_division_by_zero_yields_positive_infinity() {
+    let source = "\
+my_div : Float -> Float -> Float
+my_div a b = a / b
+
+main : Unit -> Unit can Print
+main =
+  result = my_div 1.0 0.0
+  print \"${result}\"
+";
+    assert_eq!(run_general_lowered_float_program(source), "Infinity");
+}
+
+#[test]
+fn float_arithmetic_negative_division_by_zero_yields_negative_infinity() {
+    let source = "\
+my_div : Float -> Float -> Float
+my_div a b = a / b
+
+main : Unit -> Unit can Print
+main =
+  numer = -1.0
+  result = my_div numer 0.0
+  print \"${result}\"
+";
+    assert_eq!(run_general_lowered_float_program(source), "-Infinity");
+}
+
+#[test]
+fn float_arithmetic_zero_over_zero_yields_nan() {
+    let source = "\
+my_div : Float -> Float -> Float
+my_div a b = a / b
+
+main : Unit -> Unit can Print
+main =
+  result = my_div 0.0 0.0
+  print \"${result}\"
+";
+    assert_eq!(run_general_lowered_float_program(source), "NaN");
+}
+
+#[test]
+fn float_comparison_equality_holds_for_equal_finite_values() {
+    let source = "\
+my_eq : Float -> Float -> Bool
+my_eq a b = a == b
+
+main : Unit -> Unit can Print
+main =
+  result = my_eq 1.0 1.0
+  print \"${result}\"
+";
+    assert_eq!(run_general_lowered_float_program(source), "True");
+}
+
+#[test]
+fn float_comparison_positive_zero_equals_negative_zero() {
+    // IEEE 754 §5.11: +0.0 == -0.0 (signs ignored for equality on zero).
+    let source = "\
+my_eq : Float -> Float -> Bool
+my_eq a b = a == b
+
+my_mul : Float -> Float -> Float
+my_mul a b = a * b
+
+main : Unit -> Unit can Print
+main =
+  neg_zero = my_mul -1.0 0.0
+  result = my_eq 0.0 neg_zero
+  print \"${result}\"
+";
+    assert_eq!(run_general_lowered_float_program(source), "True");
+}
+
+#[test]
+fn float_comparison_nan_is_not_equal_to_itself() {
+    // IEEE 754: any comparison with NaN (including ==) yields false.
+    let source = "\
+my_eq : Float -> Float -> Bool
+my_eq a b = a == b
+
+my_div : Float -> Float -> Float
+my_div a b = a / b
+
+main : Unit -> Unit can Print
+main =
+  nan1 = my_div 0.0 0.0
+  nan2 = my_div 0.0 0.0
+  result = my_eq nan1 nan2
+  print \"${result}\"
+";
+    assert_eq!(run_general_lowered_float_program(source), "False");
+}
+
+#[test]
+fn float_comparison_lt_orders_finite_values() {
+    let source = "\
+my_lt : Float -> Float -> Bool
+my_lt a b = a < b
+
+main : Unit -> Unit can Print
+main =
+  result = my_lt 2.0 5.0
+  print \"${result}\"
+";
+    assert_eq!(run_general_lowered_float_program(source), "True");
+}
+
+#[test]
+fn float_comparison_lt_returns_false_when_left_greater() {
+    let source = "\
+my_lt : Float -> Float -> Bool
+my_lt a b = a < b
+
+main : Unit -> Unit can Print
+main =
+  result = my_lt 5.0 2.0
+  print \"${result}\"
+";
+    assert_eq!(run_general_lowered_float_program(source), "False");
+}
+
+#[test]
+fn float_comparison_lt_with_nan_is_false() {
+    let source = "\
+my_lt : Float -> Float -> Bool
+my_lt a b = a < b
+
+my_div : Float -> Float -> Float
+my_div a b = a / b
+
+main : Unit -> Unit can Print
+main =
+  nan = my_div 0.0 0.0
+  result = my_lt nan 1.0
+  print \"${result}\"
+";
+    assert_eq!(run_general_lowered_float_program(source), "False");
+}
+
+#[test]
+fn float_comparison_le_holds_for_signed_zeros() {
+    // 0.0 <= -0.0 is true (IEEE 754 §5.11 reflexive on zero).
+    let source = "\
+my_le : Float -> Float -> Bool
+my_le a b = a <= b
+
+my_mul : Float -> Float -> Float
+my_mul a b = a * b
+
+main : Unit -> Unit can Print
+main =
+  neg_zero = my_mul -1.0 0.0
+  result = my_le 0.0 neg_zero
+  print \"${result}\"
+";
+    assert_eq!(run_general_lowered_float_program(source), "True");
+}
+
+#[test]
+fn float_comparison_gt_orders_finite_values() {
+    let source = "\
+my_gt : Float -> Float -> Bool
+my_gt a b = a > b
+
+main : Unit -> Unit can Print
+main =
+  result = my_gt 5.0 2.0
+  print \"${result}\"
+";
+    assert_eq!(run_general_lowered_float_program(source), "True");
+}
+
+#[test]
+fn float_arithmetic_local_let_shadowing_outer_float_param_falls_to_int_add() {
+    // Regression guard: a Float-typed parameter `a` is shadowed inside
+    // the same body by a `let a = 3` of unknown type. The trailing
+    // `a + a` must not be misclassified as FloatAdd just because the
+    // outer parameter declaration mentions `Float`. Today the inner
+    // binding's type is not inferred at lowering time, so the dispatcher
+    // intentionally falls back to integer Add.
+    let source = "\
+shadow_helper : Float -> Float -> Int
+shadow_helper a b =
+  a = 3
+  a + a
+
+main : Unit -> Unit can Print
+main =
+  result = shadow_helper 1.0 2.0
+  print \"${result}\"
+";
+    assert_eq!(run_general_lowered_float_program(source), "6");
+}
+
+#[test]
+fn float_comparison_ge_holds_for_equal_values() {
+    let source = "\
+my_ge : Float -> Float -> Bool
+my_ge a b = a >= b
+
+main : Unit -> Unit can Print
+main =
+  result = my_ge 3.0 3.0
+  print \"${result}\"
+";
+    assert_eq!(run_general_lowered_float_program(source), "True");
 }
 
 #[test]

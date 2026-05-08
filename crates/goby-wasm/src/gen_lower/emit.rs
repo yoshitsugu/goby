@@ -5050,6 +5050,37 @@ fn emit_push_tagged_ptr(function: &mut Function, ptr_local: u32, tag: u8, pw: Pt
     function.instruction(&Instruction::I64Or);
 }
 
+/// Allocate an 8-byte TAG_FLOAT box, store the IEEE 754 bit pattern from
+/// `bits_local` (i64 scratch) at offset 0, and push the TAG_FLOAT-tagged
+/// pointer onto the stack.
+///
+/// The shape (8B alloc + I64Store offset=0 + tagged-ptr push) must stay in
+/// lockstep with `WasmBackendInstr::AllocFloatBox` so that literal-allocated
+/// and computed Float values are interchangeable on the heap. This helper
+/// is the form Float arithmetic uses after `i64.reinterpret_f64` stages the
+/// result bits into a scratch local; the literal path uses the
+/// bits-as-instructions form inline.
+fn emit_alloc_float_box_with_bits_local(
+    function: &mut Function,
+    hs: &HeapEmitState,
+    bits_local: u32,
+) {
+    let pw = hs.pw();
+    let s_float_ptr = hs.scratch.i32_base + HS_AUX_PTR;
+    let s_alloc_size = hs.scratch.i32_base + HS_ALLOC_SIZE;
+    function.instruction(&ptr_const(pw, 8));
+    function.instruction(&Instruction::LocalSet(s_alloc_size));
+    emit_alloc_from_top(function, hs, s_alloc_size, s_float_ptr);
+    function.instruction(&Instruction::LocalGet(s_float_ptr));
+    function.instruction(&Instruction::LocalGet(bits_local));
+    function.instruction(&Instruction::I64Store(MemArg {
+        offset: 0,
+        align: 3,
+        memory_index: 0,
+    }));
+    emit_push_tagged_ptr(function, s_float_ptr, TAG_FLOAT, pw);
+}
+
 fn emit_store_i64_payload_to_ptr_local(
     function: &mut Function,
     payload_local: u32,
@@ -9110,10 +9141,10 @@ fn emit_bin_op(
     heap_state: Option<HeapEmitState>,
     pw: PtrWidth,
 ) -> Result<(), CodegenError> {
-    let _ = heap_state; // E5-B Step 1: heap_state will be consumed by Float arithmetic in Step 2.
     const PAYLOAD_MASK: i64 = (1i64 << 60) - 1;
     const TAG_INT_SHIFT: i64 = (TAG_INT as i64) << 60;
     const TAG_BOOL_SHIFT: i64 = (TAG_BOOL as i64) << 60;
+    const FLOAT_PAYLOAD_MASK: i64 = 0xFFFF_FFFFi64;
 
     // Helper: retag an i64 arithmetic result as Int (mask + tag).
     macro_rules! retag_int {
@@ -9360,11 +9391,26 @@ fn emit_bin_op(
             function.instruction(&Instruction::I64And);
             Ok(())
         }
-        // Track Float Phase E3 stub: Float operator emission lands in
-        // Phase E5 once the Wasm value representation (E4 — heap-boxed
-        // f64) is locked. Until then, programs that reach these IR
-        // variants are reported as unsupported codegen forms rather than
-        // panicking.
+        // Float arithmetic / comparison.
+        //
+        // Both operands enter on the stack as TAG_FLOAT-tagged i64 pointers
+        // (`TAG_FLOAT<<60 | ptr`). The shared prologue stashes them into
+        // i64 scratch locals (scratch0 = right, scratch1 = left, matching
+        // the existing Mul/Div convention), unboxes each via
+        // `& 0xFFFF_FFFF` + ptr-width wrap + `i64.load offset=0` +
+        // `f64.reinterpret_i64`, and pushes the f64s back in left-then-right
+        // order — required for non-commutative ops like `f64.sub` /
+        // `f64.div` / `f64.lt` etc.
+        //
+        // Arithmetic (Add/Sub/Mul/Div) reboxes the f64 result into a fresh
+        // TAG_FLOAT box via `i64.reinterpret_f64` → `LocalSet(scratch0)` →
+        // `emit_alloc_float_box_with_bits_local` (shape locked to
+        // `WasmBackendInstr::AllocFloatBox`).
+        //
+        // Comparisons (Eq/Lt/Gt/Le/Ge) follow IEEE 754 (`f64.eq` etc.) so
+        // `NaN == NaN` is false, `-0.0 == 0.0` is true, and any comparison
+        // with NaN orders to false. The i32 result is reboxed into a
+        // TAG_BOOL i64 via `bool_from_i32!`.
         IrBinOp::FloatAdd
         | IrBinOp::FloatSub
         | IrBinOp::FloatMul
@@ -9373,11 +9419,69 @@ fn emit_bin_op(
         | IrBinOp::FloatLt
         | IrBinOp::FloatGt
         | IrBinOp::FloatLe
-        | IrBinOp::FloatGe => Err(CodegenError {
-            message:
-                "Float arithmetic and comparisons are not yet supported by the Wasm backend (Track Float Phase E5)"
-                    .to_string(),
-        }),
+        | IrBinOp::FloatGe => {
+            let (scratch0, scratch1) = require_scratch!(i64_scratch_base, "Float");
+            // Stash right (top of stack) → scratch0, left → scratch1.
+            function.instruction(&Instruction::LocalSet(scratch0));
+            function.instruction(&Instruction::LocalSet(scratch1));
+            // Unbox left: scratch1 & PAYLOAD_MASK → ptr → load i64 → f64.
+            function.instruction(&Instruction::LocalGet(scratch1));
+            function.instruction(&Instruction::I64Const(FLOAT_PAYLOAD_MASK));
+            function.instruction(&Instruction::I64And);
+            if let Some(wrap) = ptr_wrap_from_i64(pw) {
+                function.instruction(&wrap);
+            }
+            function.instruction(&Instruction::I64Load(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+            function.instruction(&Instruction::F64ReinterpretI64);
+            // Unbox right (same shape).
+            function.instruction(&Instruction::LocalGet(scratch0));
+            function.instruction(&Instruction::I64Const(FLOAT_PAYLOAD_MASK));
+            function.instruction(&Instruction::I64And);
+            if let Some(wrap) = ptr_wrap_from_i64(pw) {
+                function.instruction(&wrap);
+            }
+            function.instruction(&Instruction::I64Load(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+            function.instruction(&Instruction::F64ReinterpretI64);
+            // Operate.
+            match op {
+                IrBinOp::FloatAdd => function.instruction(&Instruction::F64Add),
+                IrBinOp::FloatSub => function.instruction(&Instruction::F64Sub),
+                IrBinOp::FloatMul => function.instruction(&Instruction::F64Mul),
+                IrBinOp::FloatDiv => function.instruction(&Instruction::F64Div),
+                IrBinOp::FloatEq => function.instruction(&Instruction::F64Eq),
+                IrBinOp::FloatLt => function.instruction(&Instruction::F64Lt),
+                IrBinOp::FloatGt => function.instruction(&Instruction::F64Gt),
+                IrBinOp::FloatLe => function.instruction(&Instruction::F64Le),
+                IrBinOp::FloatGe => function.instruction(&Instruction::F64Ge),
+                _ => unreachable!(),
+            };
+            // Convert the wasm result into a Goby tagged i64.
+            match op {
+                IrBinOp::FloatAdd
+                | IrBinOp::FloatSub
+                | IrBinOp::FloatMul
+                | IrBinOp::FloatDiv => {
+                    // Rebox: f64 → bits → scratch0 → AllocFloatBox shape.
+                    let hs = require_heap_state(heap_state, "BinOp::Float<arithmetic>")?;
+                    function.instruction(&Instruction::I64ReinterpretF64);
+                    function.instruction(&Instruction::LocalSet(scratch0));
+                    emit_alloc_float_box_with_bits_local(function, &hs, scratch0);
+                }
+                _ => {
+                    // i32 (0/1) comparison result → TAG_BOOL i64.
+                    bool_from_i32!(function);
+                }
+            }
+            Ok(())
+        }
     }
 }
 

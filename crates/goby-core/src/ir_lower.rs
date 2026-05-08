@@ -37,6 +37,13 @@ fn err(msg: impl Into<String>) -> LowerError {
 #[derive(Default)]
 struct LowerCtx {
     next_tmp: usize,
+    /// Locals known to be `Float` at lowering time. Populated from the
+    /// enclosing declaration's `type_annotation`; consulted by
+    /// `lower_binop_with_operands` so that `+ - * / == < <= > >=` over
+    /// `Float`-typed parameters dispatches to the `IrBinOp::Float*`
+    /// variants. Until a typed resolved IR exists, ir_lower is the lowest
+    /// layer that knows enough to specialize var-rooted Float arithmetic.
+    float_locals: std::collections::HashSet<String>,
 }
 
 impl LowerCtx {
@@ -71,6 +78,7 @@ pub fn lower_resolved_module(module: &ResolvedModule) -> Result<IrModule, LowerE
 /// Lower a single resolved declaration to shared IR.
 pub fn lower_resolved_declaration(decl: &ResolvedDeclaration) -> Result<IrDecl, LowerError> {
     let mut ctx = LowerCtx::default();
+    register_float_param_locals(&mut ctx, decl);
     let body = lower_stmts(&mut ctx, &decl.body)?;
 
     let params: Vec<(String, IrType)> = decl
@@ -101,6 +109,30 @@ fn extract_residual_effects(annotation: Option<&str>) -> Vec<String> {
     crate::fixed_effects_from_can_clause(ann)
 }
 
+/// When the declaration carries a function annotation such as
+/// `Float -> Float -> Float`, drop the `Float`-typed parameter names into
+/// `ctx.float_locals` so the operator dispatcher can see that var-rooted
+/// `a + b` is a `Float` op rather than an integer one.
+///
+/// Annotation parsing reuses `typecheck_types::ty_from_annotation` so the
+/// fragile cases (function arrows, qualified names, parens) keep behaving
+/// the same as the typechecker. Annotations missing or unparseable yield
+/// no registrations — the typechecker is still authoritative for diagnostics.
+fn register_float_param_locals(ctx: &mut LowerCtx, decl: &ResolvedDeclaration) {
+    let Some(annotation) = decl.type_annotation.as_deref() else {
+        return;
+    };
+    let ty = crate::typecheck_types::ty_from_annotation(annotation);
+    let crate::typecheck_env::Ty::Fun { params, .. } = ty else {
+        return;
+    };
+    for (param_name, param_ty) in decl.params.iter().zip(params.iter()) {
+        if matches!(param_ty, crate::typecheck_env::Ty::Float) {
+            ctx.float_locals.insert(param_name.clone());
+        }
+    }
+}
+
 fn lower_stmts(ctx: &mut LowerCtx, stmts: &[ResolvedStmt]) -> Result<CompExpr, LowerError> {
     if stmts.is_empty() {
         return Ok(CompExpr::Value(ValueExpr::Unit));
@@ -114,6 +146,11 @@ fn lower_stmts_slice(ctx: &mut LowerCtx, stmts: &[ResolvedStmt]) -> Result<CompE
         [ResolvedStmt::Expr(expr, _)] => lower_expr_as_comp(ctx, expr),
         [ResolvedStmt::Binding { name, value, .. }] => {
             let val_comp = lower_expr_as_comp(ctx, value)?;
+            // Trailing single binding has no follow-up statements that
+            // would observe the shadow, so the float_locals scope does
+            // not need to be juggled here — but if a Float-typed param
+            // was registered under this name, the trailing `Var(name)`
+            // body still benefits from keeping the entry in place.
             Ok(CompExpr::Let {
                 name: name.clone(),
                 ty: infer_type_from_expr(value),
@@ -143,12 +180,23 @@ fn lower_stmts_slice(ctx: &mut LowerCtx, stmts: &[ResolvedStmt]) -> Result<CompE
         [head, rest @ ..] => match head {
             ResolvedStmt::Binding { name, value, .. } => {
                 let val_comp = lower_expr_as_comp(ctx, value)?;
-                let body = lower_stmts_slice(ctx, rest)?;
+                // The bound name shadows any outer registration in
+                // float_locals (e.g. a Float-typed parameter of the
+                // enclosing declaration) for the duration of `rest`,
+                // because the binding's own type is unknown at lowering
+                // time. Drop the entry while lowering `rest`, then
+                // restore it afterwards so siblings of this binding
+                // (none in `rest`, but the post-statement env reverts).
+                let restore_float = ctx.float_locals.remove(name);
+                let body = lower_stmts_slice(ctx, rest);
+                if restore_float {
+                    ctx.float_locals.insert(name.clone());
+                }
                 Ok(CompExpr::Let {
                     name: name.clone(),
                     ty: infer_type_from_expr(value),
                     value: Box::new(val_comp),
-                    body: Box::new(body),
+                    body: Box::new(body?),
                 })
             }
             ResolvedStmt::Expr(expr, _) => {
@@ -175,12 +223,16 @@ fn lower_stmts_slice(ctx: &mut LowerCtx, stmts: &[ResolvedStmt]) -> Result<CompE
             }
             ResolvedStmt::MutBinding { name, value, .. } => {
                 let val_comp = lower_expr_as_comp(ctx, value)?;
-                let body = lower_stmts_slice(ctx, rest)?;
+                let restore_float = ctx.float_locals.remove(name);
+                let body = lower_stmts_slice(ctx, rest);
+                if restore_float {
+                    ctx.float_locals.insert(name.clone());
+                }
                 Ok(CompExpr::LetMut {
                     name: name.clone(),
                     ty: infer_type_from_expr(value),
                     value: Box::new(val_comp),
-                    body: Box::new(body),
+                    body: Box::new(body?),
                 })
             }
             ResolvedStmt::Assign { target, value, .. } => {
@@ -254,10 +306,17 @@ fn lower_expr_as_comp_non_value(
 
             lower_ordinary_call(ctx, callee_expr, &args_exprs)
         }
-        ResolvedExpr::Lambda { param, body } => Ok(CompExpr::Value(ValueExpr::Lambda {
-            param: param.clone(),
-            body: Box::new(lower_expr_as_comp(ctx, body)?),
-        })),
+        ResolvedExpr::Lambda { param, body } => {
+            let restore_float = ctx.float_locals.remove(param);
+            let lowered_body = lower_expr_as_comp(ctx, body);
+            if restore_float {
+                ctx.float_locals.insert(param.clone());
+            }
+            Ok(CompExpr::Value(ValueExpr::Lambda {
+                param: param.clone(),
+                body: Box::new(lowered_body?),
+            }))
+        }
         ResolvedExpr::Handler { clauses } => lower_handler_expr(ctx, clauses),
         ResolvedExpr::With { handler, body } => {
             let ir_handler = lower_expr_as_comp(ctx, handler)?;
@@ -274,7 +333,7 @@ fn lower_expr_as_comp_non_value(
             })
         }
         ResolvedExpr::BinOp { op, left, right } => {
-            let ir_op = lower_binop_with_operands(op, left, right);
+            let ir_op = lower_binop_with_operands(ctx, op, left, right);
             lower_binop_anf(ctx, ir_op, left, right)
         }
         ResolvedExpr::MethodCall {
@@ -313,10 +372,17 @@ fn try_lower_value(
         ResolvedExpr::BoolLit(b) => Ok(Some(ValueExpr::BoolLit(*b))),
         ResolvedExpr::StringLit(s) => Ok(Some(ValueExpr::StrLit(s.clone()))),
         ResolvedExpr::TupleLit(items) if items.is_empty() => Ok(Some(ValueExpr::Unit)),
-        ResolvedExpr::Lambda { param, body } => Ok(Some(ValueExpr::Lambda {
-            param: param.clone(),
-            body: Box::new(lower_expr_as_comp(ctx, body)?),
-        })),
+        ResolvedExpr::Lambda { param, body } => {
+            let restore_float = ctx.float_locals.remove(param);
+            let lowered_body = lower_expr_as_comp(ctx, body);
+            if restore_float {
+                ctx.float_locals.insert(param.clone());
+            }
+            Ok(Some(ValueExpr::Lambda {
+                param: param.clone(),
+                body: Box::new(lowered_body?),
+            }))
+        }
         ResolvedExpr::ListLit { elements, spread } => {
             let mut ir_elements = Vec::with_capacity(elements.len());
             for element in elements {
@@ -385,7 +451,7 @@ fn try_lower_value(
                 return Ok(None);
             };
             Ok(Some(ValueExpr::BinOp {
-                op: lower_binop_with_operands(op, left, right),
+                op: lower_binop_with_operands(ctx, op, left, right),
                 left: Box::new(l),
                 right: Box::new(r),
             }))
@@ -736,7 +802,22 @@ fn lower_handler_expr(
     }
     let mut ir_clauses = Vec::with_capacity(clauses.len());
     for clause in clauses {
-        let body = lower_stmts(ctx, &clause.body)?;
+        // Clause params shadow any same-named entries in the surrounding
+        // float_locals (the clause's own param types are not known at
+        // ir_lower time), so drop them while lowering the clause body
+        // and restore after — a clause does not see a sibling clause's
+        // params, so per-clause restore is sufficient.
+        let restored: Vec<String> = clause
+            .params
+            .iter()
+            .filter(|p| ctx.float_locals.remove(p.as_str()))
+            .cloned()
+            .collect();
+        let body_result = lower_stmts(ctx, &clause.body);
+        for name in restored {
+            ctx.float_locals.insert(name);
+        }
+        let body = body_result?;
         ir_clauses.push(IrHandlerClause {
             op_name: clause.op_name(),
             op_id: clause
@@ -887,19 +968,21 @@ fn lower_binop(op: &BinOpKind) -> IrBinOp {
     }
 }
 
-/// Track Float Phase E3: choose between integer and Float IR variants
-/// based on the operands' surface shape.
+/// Choose between integer and Float IR variants based on the operands'
+/// surface shape and the surrounding `LowerCtx::float_locals` table.
 ///
 /// The shared IR does not yet thread per-operand types through every node,
 /// so this helper does a shallow inspection of the resolved operands: if
-/// either side is recognisably `Float` (literal or a binary op already
-/// producing a Float), the Float variant is selected. This is sufficient
-/// because the typechecker rejects mixed `Int` / `Float` operands, so a
-/// well-typed program will see a consistent classification on both sides.
-/// `Var`-rooted operands fall back to the integer variant for now; a more
-/// precise type-aware lowering pass arrives with Phase E5 alongside the
-/// Float runtime representation.
+/// either side is recognisably `Float` (literal, a binary op already
+/// producing a Float, or a `Local` reference whose binding was registered
+/// as `Float` from the enclosing declaration's annotation), the Float
+/// variant is selected. The typechecker rejects mixed `Int`/`Float`
+/// operands, so a well-typed program sees a consistent classification on
+/// both sides. Bindings introduced by `let x = a + b` are not yet typed
+/// at lowering time; a fully typed lowering pass is the eventual long-term
+/// home for this dispatch.
 fn lower_binop_with_operands(
+    ctx: &LowerCtx,
     op: &BinOpKind,
     left: &ResolvedExpr,
     right: &ResolvedExpr,
@@ -918,7 +1001,7 @@ fn lower_binop_with_operands(
     ) {
         return lower_binop(op);
     }
-    if !(resolved_expr_is_float(left) || resolved_expr_is_float(right)) {
+    if !(resolved_expr_is_float(ctx, left) || resolved_expr_is_float(ctx, right)) {
         return lower_binop(op);
     }
     match op {
@@ -936,7 +1019,10 @@ fn lower_binop_with_operands(
 }
 
 /// Shallow Float-shape detector for the IR-lowering operator dispatcher.
-fn resolved_expr_is_float(expr: &ResolvedExpr) -> bool {
+/// Recognises Float literals, Float-producing binary ops (`+ - * /`), and
+/// `Local` references registered in `ctx.float_locals` from the enclosing
+/// declaration's annotated parameter list.
+fn resolved_expr_is_float(ctx: &LowerCtx, expr: &ResolvedExpr) -> bool {
     match expr {
         ResolvedExpr::FloatLit(_) => true,
         ResolvedExpr::BinOp { op, left, right } => match op {
@@ -944,10 +1030,13 @@ fn resolved_expr_is_float(expr: &ResolvedExpr) -> bool {
             | BinOpKind::Sub
             | BinOpKind::Mul
             | BinOpKind::Div => {
-                resolved_expr_is_float(left) || resolved_expr_is_float(right)
+                resolved_expr_is_float(ctx, left) || resolved_expr_is_float(ctx, right)
             }
             _ => false,
         },
+        ResolvedExpr::Ref(crate::resolved::ResolvedRef::Local(name)) => {
+            ctx.float_locals.contains(name)
+        }
         _ => false,
     }
 }

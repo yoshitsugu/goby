@@ -1,9 +1,8 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-08 (Track Float E1–E4 + E5-A landed; E5-B —
-`Float, Float -> Float` / `Float, Float -> Bool` Wasm emission — is
-the next active line. Track PC remains queued behind user design
-review.)
+Last updated: 2026-05-08 (Track Float E1–E4 + E5-A and E5-B landed;
+E5-C — interpreter fallback for Float — is the next active line.
+Track PC remains queued behind user design review.)
 
 ## Current Focus
 
@@ -58,16 +57,40 @@ Phase progress:
     GeneralLowered capability gate gains a `has_float_in_comp` clause
     so `Float` programs no longer fall into the static-output /
     native-fallback path that cannot render TAG_FLOAT.
-  - **E5-B** active: replace the deferred `IrBinOp::Float*` codegen
-    errors with real `unbox → f64.<op> → rebox` Wasm emission. Stack
-    order for non-commutative ops must be locked via scratch locals,
-    and `==` follows IEEE 754 (`f64.eq`) — not bit-eq.
+  - **E5-B** complete: `IrBinOp::Float{Add,Sub,Mul,Div,Eq,Lt,Gt,Le,Ge}`
+    now emit real `unbox → f64.<op> → rebox` Wasm. Stack order for
+    non-commutative ops is locked via two i64 scratch locals
+    (`scratch0 = right`, `scratch1 = left`, matching the existing
+    Mul/Div convention). Arithmetic shares the `AllocFloatBox` shape
+    via the new `emit_alloc_float_box_with_bits_local` helper so
+    literal-allocated and computed Float values stay interchangeable
+    on the heap. `==` follows IEEE 754 (`f64.eq`), not bit-eq, so
+    `NaN == NaN` is False and `-0.0 == 0.0` is True. Var-rooted Float
+    arithmetic (`my_add a b = a + b` over `Float -> Float -> Float`)
+    needed an ir_lower-level dispatcher fix: `LowerCtx` now carries a
+    `float_locals` set populated from the declaration's annotation
+    (`typecheck_types::ty_from_annotation` reused) so that
+    `ResolvedExpr::Ref(ResolvedRef::Local(name))` can resolve back to
+    `Float` and select the `IrBinOp::Float*` variant. Lambda / let /
+    handler-clause params shadow same-named entries in `float_locals`
+    for the duration of their body lowering and restore on exit.
+    **Limitation (intentional, scope of E5-D parity slice):** only
+    decl-rooted parameters and literal / Float-binop trees are tracked.
+    Float values introduced by `let x = a + b` or by call-return such
+    as `(my_add 1.0 2.0) + 3.0` still lower to integer `Add` because
+    the binding's type is unknown at lowering time. A typed resolved
+    IR is the eventual long-term home for this dispatch. The old
+    interim reject test was retired in favour of var-rooted
+    arithmetic / comparison execution tests (`compile_tests`) covering
+    Add/Sub/Mul/Div, ÷0 → Infinity / -Infinity / NaN, ±0 equality,
+    NaN-self-inequality, Lt/Gt/Le/Ge ordering, NaN ordering, and a
+    shadow regression test pinning the local-let → Int dispatch.
   - **E5-C** queued: interpreter fallback (`RuntimeValue::Float`,
     `NativeValue::Float`, runtime equality and printing through
     `format_float`).
   - **E5-D** queued: parity acceptance + minimal
-    `examples/float_basics.gb` and removal of the E5-B interim guard
-    test.
+    `examples/float_basics.gb`. The E5-B interim reject test has
+    already been retired so removal is no longer pending.
 - **E6** queued: examples / formatter idempotence / LSP hover / final
   PLAN + STATE sync.
 
@@ -95,32 +118,24 @@ Red / ignored:
 
 ## Next Step
 
-**Primary (Track Float E5-B):**
+**Primary (Track Float E5-C):**
 
-Replace the deferred `IrBinOp::Float{Add,Sub,Mul,Div,Eq,Lt,Gt,Le,Ge}`
-codegen errors in `gen_lower/emit.rs` with real Wasm emission:
+Add an interpreter fallback for `Float`. Today the GeneralLowered Wasm
+path is the only one that can run programs containing Float values; the
+fallback runtime (`runtime_apply` / `runtime_decl` / `runtime_resolver`
+/ `lower.rs::eval_value`) lacks `RuntimeValue::Float(f64)` and
+`NativeValue::Float(f64)`, and the capability allowlist still rejects
+Float-typed bindings outside the GeneralLowered gate. E5-C work:
 
-1. For each Float operand on the stack (TAG_FLOAT-tagged i64),
-   `& 0xFFFF_FFFF` to obtain the box pointer, `i64.load offset=0`
-   to read the IEEE 754 bits, `f64.reinterpret_i64` to materialise
-   the `f64`. Store left/right into scratch locals first so the
-   `f64`s end up on the stack in the original `left, right` order
-   for non-commutative ops (`f64.sub`, `f64.div`, `f64.lt`, ...).
-2. Arithmetic (`Add`/`Sub`/`Mul`/`Div`): emit `f64.<op>`, then
-   `i64.reinterpret_f64`, then a fresh `WasmBackendInstr::AllocFloatBox`
-   with `bits_instrs = [the reinterpreted i64 already on the stack]`.
-   Reusing the same `AllocFloatBox` variant keeps allocation shape
-   identical between literals and computed results.
-3. Comparisons (`Eq`/`Lt`/`Gt`/`Le`/`Ge`): emit `f64.<cmp>` to get
-   an i32, then `bool_from_i32!` to a TAG_BOOL i64. `==` follows
-   IEEE 754 (`f64.eq`); do **not** use bit-eq, otherwise
-   `NaN == NaN` would surface as True and `-0.0 == 0.0` would
-   surface as False, both contradicting `LANGUAGE_SPEC §3`.
-4. Re-enable `compile_tests::compile_module_rejects_var_rooted_float_arithmetic_until_phase_e5b`
-   (currently `#[ignore]`) — the helper `my_add a b = a + b` plus
-   `print "${my_add 1.0 2.0}"` should now succeed end-to-end and
-   render `3.0`. Replace its rejection assertion with an execution
-   parity assertion, or fold it into the E5-D parity acceptance.
+1. Add `RuntimeValue::Float(f64)` and `NativeValue::Float(f64)`,
+   plumb them through `runtime_value_eq`, `format_text`, and the
+   resolver / apply / decl entry points.
+2. Route equality and printing through the shared
+   `gen_lower/value::format_float` so the fallback and the Wasm host
+   formatter agree on `1.0`, `Infinity`, `-Infinity`, `NaN`, `-0.0`,
+   `0.0`. Equality follows IEEE 754, not bit-eq.
+3. Lift the GeneralLowered-only restriction in the capability
+   allowlist for Float once parity is demonstrable.
 
 **Parallel (queued, parallelizable):**
 
