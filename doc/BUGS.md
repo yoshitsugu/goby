@@ -118,6 +118,42 @@ Open bugs:
     current failure appears to involve list-pattern `case` inside a called
     function returning a value.
 
+- **2026-05-08.** `WasmBackendInstr::AllocFloatBox` and
+  `WasmBackendInstr::AllocMutableCell` share two limitations that should
+  be addressed together as a follow-up cell-allocation refactor (raised
+  by CodeRabbit during the Track Float review):
+
+  1. Both lower to `emit_alloc_from_top` only, so freed Cell / TAG_FLOAT
+     boxes returned to the size-class free list by `__goby_drop` are not
+     reused — every alloc grows the heap top. `__goby_dup` /
+     `__goby_drop` already learn TAG_FLOAT and reuse the Cell free-list
+     slot for accounting (`gen_lower/value.rs`), but the allocation
+     side never consumes it.
+  2. Both reuse `HS_AUX_PTR` as the result-pointer scratch and
+     explicitly require the `init_instrs` / `bits_instrs` to **not**
+     contain a nested heap allocation (would clobber the freshly
+     allocated payload pointer). The constraint is documented inline
+     and currently respected by every caller (`init_instrs` is a
+     single `I64Const` / `LoadLocal`; `bits_instrs` ditto), but a
+     future caller that needs a nested allocation would break it.
+
+  Why this is a single follow-up rather than two Float-only fixes:
+  the two opcodes share the same 8-byte payload shape and the same
+  scratch-slot pattern. Fixing only `AllocFloatBox` would create a
+  divergence between Cell and Float allocation that is hard to
+  justify mechanically. The right shape is a single emit helper that
+  (a) checks the size-class free list before falling back to top
+  allocation, and (b) spills the payload pointer to a reserved spill
+  slot so nested-allocating `*_instrs` are safe — then both
+  `AllocMutableCell` and `AllocFloatBox` route through it.
+
+  Code pointers:
+  - `crates/goby-wasm/src/gen_lower/emit.rs` (`AllocMutableCell` ~L3662,
+    `AllocFloatBox` ~L3701, helper `emit_alloc_float_box_with_bits_local`
+    ~L5063, scratch slot constant `HS_AUX_PTR` L102).
+  - `crates/goby-wasm/src/gen_lower/value.rs` (TAG_FLOAT free-list
+    accounting in `__goby_drop`).
+
 Resolved bugs:
 
 - **2026-05-07.** `goby-wasm` lib test `tests::fold_m5_string_accumulator`

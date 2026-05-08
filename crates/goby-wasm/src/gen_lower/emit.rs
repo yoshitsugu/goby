@@ -3704,6 +3704,13 @@ fn emit_instrs_with_heap_depth(
                 // Same allocation shape as AllocMutableCell. `bits_instrs` must produce a single
                 // i64 (the IEEE 754 bits) and must not nest a further heap allocation, since
                 // HS_AUX_PTR is reused as the result-pointer scratch (same constraint as Cell).
+                //
+                // Two known limitations are tracked together with the matching
+                // AllocMutableCell limitations under the 2026-05-08 entry in
+                // `doc/BUGS.md` (no free-list reuse and no nested-alloc spill).
+                // Follow-up should refactor both opcodes onto a shared cell-alloc
+                // helper that consumes the size-class free list and spills the
+                // result pointer.
                 let hs = require_heap_state(helper_state, "AllocFloatBox")?;
                 let pw = hs.pw();
                 let s_float_ptr = hs.scratch.i32_base + HS_AUX_PTR;
