@@ -346,8 +346,10 @@ Prerequisite: WB-2A complete. Independent of effect handler design.
 `IntLit`, `StringLit`, `BoolLit`, `EmptyList`, `ListPattern { items, tail }`, `Wildcard`.
 
 **Out of scope (no record/constructor patterns in current IR):** record and constructor
-patterns do not exist in the current language spec or `IrCasePattern`. They are a future
-language-expansion item, not a backend-convergence item. Do not add them here.
+patterns are not yet handled by the current `IrCasePattern` or this backend plan.
+Constructor patterns are specified in `doc/LANGUAGE_SPEC.md` as part of the Track GU
+work (see `doc/PLAN_GU.md`); they are a future backend-expansion item, not a
+backend-convergence item. Do not add them here.
 
 **Scope:**
 

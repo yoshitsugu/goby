@@ -1,7 +1,7 @@
 # Goby Language Specification (Current)
 
 Status: active
-Last updated: 2026-04-14
+Last updated: 2026-05-08
 
 This file is the current language-spec source of truth for user-visible Goby
 syntax/semantics.
@@ -37,8 +37,30 @@ syntax/semantics.
       `True`, `False`
 - Type declarations:
   - alias: `type Name = Target`
-  - union: `type Name = A | B`
-  - record: `type Name = Ctor(field: Type, ...)`
+  - type-declaration grammar (unions and records):
+    ```
+    type Name = Ctor | Ctor | ...                    # nullary union
+    type Name a b ... = Ctor(t, t, ...) | Ctor | ... # generic / non-nullary union
+    type Name = Ctor(field: t, ...)                  # record (current form, still valid)
+    type Name a b ... = Ctor(field: t, ...)          # generic record
+    ```
+    - Type parameters are zero-or-more lowercase-start identifiers, separated
+      by spaces, between the type name and `=`. Both unions and records may
+      carry them.
+    - For unions: each variant is either a bare `CamelCase` constructor name
+      (nullary) or `CamelCase(t1, t2, …)` with positional type arguments.
+    - For records: a single `CamelCase(field: t, …)` constructor declares
+      named fields.
+    - Inside variant or field type annotations, the surrounding declaration's
+      type parameters are in scope; other capitalised names refer to imported
+      or locally declared types.
+    - Constructors are applied like ordinary functions: `Just 42`,
+      `Node 1 Leaf Leaf`, `Parser run_fn`, `Pair(fst: 1, snd: 2)`. The
+      type-qualified form `Maybe.Just 42` is also accepted and equivalent
+      to `Just 42`.
+    - Field access on a generic record uses the existing `value.field`
+      syntax; the field's type is determined by instantiating the record's
+      type parameters with the value's actual type arguments.
 - Effect declaration:
   - `effect EffectName`
   - `effect EffectName a b ...` (optional effect type parameters)
@@ -181,6 +203,24 @@ syntax/semantics.
     - tail ignore form: `[..]` is not supported; use at least one head item (e.g. `[x, ..]`)
     - list item literals currently supported in patterns: `Int`, `String` (not `Bool`)
   - `_` is always a wildcard (non-binding), including in list item positions.
+  - constructor patterns:
+    - a constructor pattern matches a value of the corresponding union type:
+      ```
+      case m
+        Just x  -> ...
+        Nothing -> ...
+      ```
+    - each binder position is either a lowercase-start identifier (binds the
+      value) or `_` (ignores the value). Nested constructor patterns are not
+      supported.
+    - constructor patterns also accept the type-qualified form, e.g.
+      `Maybe.Just x -> ...` / `Maybe.Nothing -> ...`. The qualified and bare
+      forms are equivalent; the qualified form exists so that the
+      "use the qualified form `TypeName.Ctor`" diagnostic guidance is
+      actually writable in patterns. This mirrors the existing precedent
+      in handler-clause heads, where unqualified clause names are accepted
+      only when unambiguous and the qualified `EffectName.operation` form
+      (e.g. `Iterator.yield`) is otherwise required.
 - Mutable locals:
   - declaration: `mut x = expr`
   - variable assignment: `x := expr`
