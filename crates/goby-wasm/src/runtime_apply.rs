@@ -546,28 +546,187 @@ impl<'m> RuntimeOutputResolver<'m> {
         lv: RuntimeValue,
         rv: RuntimeValue,
     ) -> Option<RuntimeValue> {
-        if matches!(op, goby_core::BinOpKind::Eq) {
-            return Some(RuntimeValue::Bool(runtime_value_eq(&lv, &rv)));
-        }
-        match (lv, rv) {
-            (RuntimeValue::Bool(l), RuntimeValue::Bool(r)) => match op {
-                goby_core::BinOpKind::Or => Some(RuntimeValue::Bool(l || r)),
-                goby_core::BinOpKind::And => Some(RuntimeValue::Bool(l && r)),
-                _ => None,
-            },
-            (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
-                goby_core::BinOpKind::Add => l.checked_add(r).map(RuntimeValue::Int),
-                goby_core::BinOpKind::Sub => l.checked_sub(r).map(RuntimeValue::Int),
-                goby_core::BinOpKind::Mul => l.checked_mul(r).map(RuntimeValue::Int),
-                goby_core::BinOpKind::Div => (r != 0).then_some(RuntimeValue::Int(l / r)),
-                goby_core::BinOpKind::Mod => (r != 0).then_some(RuntimeValue::Int(l % r)),
-                goby_core::BinOpKind::Lt => Some(RuntimeValue::Bool(l < r)),
-                goby_core::BinOpKind::Gt => Some(RuntimeValue::Bool(l > r)),
-                goby_core::BinOpKind::Le => Some(RuntimeValue::Bool(l <= r)),
-                goby_core::BinOpKind::Ge => Some(RuntimeValue::Bool(l >= r)),
-                _ => None,
-            },
+        apply_binop_runtime_value_pure(op, lv, rv)
+    }
+}
+
+/// Pure dispatch table for binary operators on `RuntimeValue`. Lives as a
+/// free function so the table is independently testable without
+/// constructing a full `RuntimeOutputResolver` (which has a heavy
+/// `&Module` borrow + many runtime fields). Module-private — production
+/// callers go through the `apply_binop_runtime_value` impl method.
+fn apply_binop_runtime_value_pure(
+    op: goby_core::BinOpKind,
+    lv: RuntimeValue,
+    rv: RuntimeValue,
+) -> Option<RuntimeValue> {
+    if matches!(op, goby_core::BinOpKind::Eq) {
+        // runtime_value_eq already implements IEEE 754 for Float, so the
+        // Eq short-circuit handles Float correctly without a special-case
+        // branch here.
+        return Some(RuntimeValue::Bool(runtime_value_eq(&lv, &rv)));
+    }
+    match (lv, rv) {
+        (RuntimeValue::Bool(l), RuntimeValue::Bool(r)) => match op {
+            goby_core::BinOpKind::Or => Some(RuntimeValue::Bool(l || r)),
+            goby_core::BinOpKind::And => Some(RuntimeValue::Bool(l && r)),
             _ => None,
+        },
+        (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
+            goby_core::BinOpKind::Add => l.checked_add(r).map(RuntimeValue::Int),
+            goby_core::BinOpKind::Sub => l.checked_sub(r).map(RuntimeValue::Int),
+            goby_core::BinOpKind::Mul => l.checked_mul(r).map(RuntimeValue::Int),
+            goby_core::BinOpKind::Div => (r != 0).then_some(RuntimeValue::Int(l / r)),
+            goby_core::BinOpKind::Mod => (r != 0).then_some(RuntimeValue::Int(l % r)),
+            goby_core::BinOpKind::Lt => Some(RuntimeValue::Bool(l < r)),
+            goby_core::BinOpKind::Gt => Some(RuntimeValue::Bool(l > r)),
+            goby_core::BinOpKind::Le => Some(RuntimeValue::Bool(l <= r)),
+            goby_core::BinOpKind::Ge => Some(RuntimeValue::Bool(l >= r)),
+            _ => None,
+        },
+        (RuntimeValue::Float(l), RuntimeValue::Float(r)) => match op {
+            // IEEE 754: ÷0 produces ±Infinity / NaN naturally; do not
+            // short-circuit on r == 0.0.
+            goby_core::BinOpKind::Add => Some(RuntimeValue::Float(l + r)),
+            goby_core::BinOpKind::Sub => Some(RuntimeValue::Float(l - r)),
+            goby_core::BinOpKind::Mul => Some(RuntimeValue::Float(l * r)),
+            goby_core::BinOpKind::Div => Some(RuntimeValue::Float(l / r)),
+            // f64 ordering already returns false for any NaN comparand.
+            goby_core::BinOpKind::Lt => Some(RuntimeValue::Bool(l < r)),
+            goby_core::BinOpKind::Gt => Some(RuntimeValue::Bool(l > r)),
+            goby_core::BinOpKind::Le => Some(RuntimeValue::Bool(l <= r)),
+            goby_core::BinOpKind::Ge => Some(RuntimeValue::Bool(l >= r)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_binop_runtime_value_pure as apply;
+    use crate::runtime_value::RuntimeValue;
+    use goby_core::BinOpKind;
+
+    fn float(v: f64) -> RuntimeValue {
+        RuntimeValue::Float(v)
+    }
+
+    fn expect_float(value: Option<RuntimeValue>) -> f64 {
+        match value {
+            Some(RuntimeValue::Float(v)) => v,
+            Some(_) => panic!("expected RuntimeValue::Float, got non-Float"),
+            None => panic!("expected RuntimeValue::Float, got None"),
         }
+    }
+
+    fn expect_bool(value: Option<RuntimeValue>) -> bool {
+        match value {
+            Some(RuntimeValue::Bool(b)) => b,
+            Some(_) => panic!("expected RuntimeValue::Bool, got non-Bool"),
+            None => panic!("expected RuntimeValue::Bool, got None"),
+        }
+    }
+
+    #[test]
+    fn float_arithmetic_basic() {
+        assert_eq!(
+            expect_float(apply(BinOpKind::Add, float(1.5), float(2.5))),
+            4.0
+        );
+        assert_eq!(
+            expect_float(apply(BinOpKind::Sub, float(1.0), float(2.5))),
+            -1.5
+        );
+        assert_eq!(
+            expect_float(apply(BinOpKind::Mul, float(2.0), float(3.5))),
+            7.0
+        );
+        assert_eq!(
+            expect_float(apply(BinOpKind::Div, float(7.0), float(2.0))),
+            3.5
+        );
+    }
+
+    #[test]
+    fn float_division_by_zero_follows_ieee_754() {
+        assert_eq!(
+            expect_float(apply(BinOpKind::Div, float(1.0), float(0.0))),
+            f64::INFINITY
+        );
+        assert_eq!(
+            expect_float(apply(BinOpKind::Div, float(-1.0), float(0.0))),
+            f64::NEG_INFINITY
+        );
+        assert!(expect_float(apply(BinOpKind::Div, float(0.0), float(0.0))).is_nan());
+    }
+
+    #[test]
+    fn float_eq_uses_ieee_754_via_runtime_value_eq() {
+        // NaN != NaN
+        assert!(!expect_bool(apply(
+            BinOpKind::Eq,
+            float(f64::NAN),
+            float(f64::NAN)
+        )));
+        // -0.0 == 0.0
+        assert!(expect_bool(apply(BinOpKind::Eq, float(-0.0), float(0.0))));
+        // 1.5 == 1.5
+        assert!(expect_bool(apply(BinOpKind::Eq, float(1.5), float(1.5))));
+    }
+
+    #[test]
+    fn float_ordering_returns_false_for_any_nan_operand() {
+        for op in [BinOpKind::Lt, BinOpKind::Gt, BinOpKind::Le, BinOpKind::Ge] {
+            assert!(
+                !expect_bool(apply(op.clone(), float(f64::NAN), float(1.0))),
+                "NaN {op:?} 1.0 should be False",
+            );
+            assert!(
+                !expect_bool(apply(op.clone(), float(1.0), float(f64::NAN))),
+                "1.0 {op:?} NaN should be False",
+            );
+            assert!(
+                !expect_bool(apply(op.clone(), float(f64::NAN), float(f64::NAN))),
+                "NaN {op:?} NaN should be False",
+            );
+        }
+    }
+
+    #[test]
+    fn float_ordering_basic() {
+        assert!(expect_bool(apply(BinOpKind::Lt, float(1.0), float(2.0))));
+        assert!(expect_bool(apply(BinOpKind::Le, float(2.0), float(2.0))));
+        assert!(expect_bool(apply(BinOpKind::Gt, float(2.0), float(1.0))));
+        assert!(expect_bool(apply(BinOpKind::Ge, float(2.0), float(2.0))));
+    }
+
+    #[test]
+    fn float_int_mixed_dispatch_returns_none() {
+        // Type checker rejects mixed Float/Int operands; the fallback
+        // mirrors that by failing the dispatch instead of coercing.
+        assert!(apply(BinOpKind::Add, float(1.0), RuntimeValue::Int(2)).is_none());
+        assert!(apply(BinOpKind::Add, RuntimeValue::Int(2), float(1.0)).is_none());
+    }
+
+    #[test]
+    fn float_unsupported_ops_return_none() {
+        // Spec §3 doesn't list `%` / bit ops / boolean ops for Float.
+        assert!(apply(BinOpKind::Mod, float(1.0), float(2.0)).is_none());
+        assert!(apply(BinOpKind::BitXor, float(1.0), float(2.0)).is_none());
+        assert!(apply(BinOpKind::Or, float(1.0), float(2.0)).is_none());
+        assert!(apply(BinOpKind::And, float(1.0), float(2.0)).is_none());
+    }
+
+    #[test]
+    fn float_int_eq_is_false_via_runtime_value_eq() {
+        // runtime_value_eq's catch-all returns false for cross-type pairs,
+        // so `1.0 == 1` is False — locks the spec contract that Float and
+        // Int are distinct primitives.
+        assert!(!expect_bool(apply(
+            BinOpKind::Eq,
+            float(1.0),
+            RuntimeValue::Int(1)
+        )));
     }
 }
