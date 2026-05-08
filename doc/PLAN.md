@@ -825,19 +825,46 @@ Execution phases (revised after Codex Pass1 review):
      capability triggers. New regression test
      `gen_lower::tests::supports_general_lower_module_returns_reason_for_pure_float_arithmetic_main`
      locks the lifted gate boundary.
-   - **E5-D** (queued): parity acceptance + minimal `examples/float_basics.gb`.
-     The E5-B interim guard test
+   - **E5-D** (complete): parity acceptance + user-facing example.
+     `examples/float_basics.gb` ships the documented Float surface
+     (literal, `+ - * /`, `== < <= > >=`, ÷0 → ±Infinity / NaN, ±0
+     equality, NaN-self-inequality) as 15 println lines using only
+     values pinned by `format_float`, and is wired into:
+       - the `typecheck::tests::typechecks_examples` catalog
+         (parses + typechecks),
+       - `formatter::tests::idempotent_float_basics`
+         (`fmt(fmt(src)) == fmt(src)`),
+       - `compile_tests::float_basics_example_executes_with_expected_output`
+         (compiles, runs via the Wasm runtime, asserts the example
+         classifies as `NotRuntimeIo` and the native fallback emitter
+         produces the exact 15-line stdout).
+     Five GL/native parity table tests in `compile_tests` cover the
+     distinct `format_float` branches and operator surfaces (finite
+     arithmetic, ÷0 → +Infinity, NaN, sign-bit-preserving
+     `-1.0 * 0.0` → "-0.0", and signed-zero equality), driving each
+     scenario through the GL route (non-main helper + result bound
+     to a local before interpolation, since GL doesn't accept call
+     expressions inside `${expr}`) and through the native fallback
+     route (pure-print main) and asserting byte-identical output.
+     The `assert_float_parity` helper fires a direct GL-vs-native
+     `assert_eq!` *before* the expected-text check so a parity
+     drift surfaces with a clearer message than an expected-text
+     mismatch alone. The E5-B interim guard test
      (`compile_tests::compile_module_rejects_var_rooted_float_arithmetic_until_phase_e5b`)
-     was retired in E5-B itself when var-rooted Float arithmetic became
-     executable, so removal is no longer pending.
-6. **Phase E6: Formatter idempotence + LSP hover + final docs sync**.
-   - add a formatter idempotence test for Float literals,
+     was retired in E5-B itself when var-rooted Float arithmetic
+     became executable, so removal is no longer pending.
+6. **Phase E6: roadmap-label hygiene + LSP hover + final docs sync**.
+   - rewrite the `Track Float` / `E5-*` mentions left in code
+     comments and test docstrings during E5-A through E5-D so they
+     describe the technical purpose directly instead of referencing
+     transient milestone IDs, per the locked-in policy in §2 of this
+     document,
    - confirm LSP hover renders `Float` annotations / inferred types,
-   - finalize `doc/STATE.md` Track Float status; spec was already locked
-     in E1 and the implementation-status paragraph is kept current as
-     E5-* slices land,
-   - any additional Float examples beyond the minimal
-     `examples/float_basics.gb` that E5-D ships,
+   - broaden formatter idempotence coverage if other Float-shaped
+     formatter cases beyond `examples/float_basics.gb` need pinning,
+   - finalize `doc/STATE.md` Track Float status; spec was already
+     locked in E1 and the implementation-status paragraph is kept
+     current as E5-* slices land,
    - run `goby-invariants` before commit.
 
 Acceptance criteria (track-level):

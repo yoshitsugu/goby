@@ -1,9 +1,10 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-08 (Track Float E1–E4 + E5-A, E5-B, and E5-C
-landed; E5-D — parity acceptance + `examples/float_basics.gb` — is
-the next active line. Track PC remains queued behind user design
-review.)
+Last updated: 2026-05-08 (Track Float E1–E5 implementation complete
+incl. E5-D parity acceptance + `examples/float_basics.gb`; only the
+E6 follow-up sweep — roadmap-label hygiene cleanup, LSP hover,
+formatter coverage broadening, final docs sync — remains. Track PC
+remains queued behind user design review.)
 
 ## Current Focus
 
@@ -40,11 +41,12 @@ Phase progress:
   values must live behind a heap pointer alongside `List` / `Tuple` /
   `Cell` payloads. `gen_lower/value.rs` now exposes `encode_float_ptr` /
   `decode_float_ptr` (Cell-shaped tagged pointer) and the pure bit
-  helpers `float_bits_to_i64` / `i64_to_float_bits`. Heap allocation
-  itself, `f64.const` / `f64.add` / ... emission, and the interpreter
-  fallback are deferred to E5; the E3 wasm safety net (rejection of
-  modules containing Float literals) is intentionally still in place.
-- **E5** in progress (split into E5-A → E5-D in `doc/PLAN.md` §4.4):
+  helpers `float_bits_to_i64` / `i64_to_float_bits`. At E4 the heap
+  allocation itself, `f64.const` / `f64.add` / ... emission, and the
+  interpreter fallback remained deferred to E5; the E3 wasm safety
+  net (rejection of modules containing Float literals) was kept in
+  place at this point and was later removed across E5-A / E5-B / E5-C.
+- **E5** complete (split into E5-A → E5-D in `doc/PLAN.md` §4.4):
   - **E5-A** complete (`37d8da6`): Float literal end-to-end on the Wasm path.
     `WasmBackendInstr::AllocFloatBox { bits_instrs }` allocates the
     8-byte `(bits: i64)` box and emits a TAG_FLOAT-tagged pointer.
@@ -86,7 +88,8 @@ Phase progress:
     Add/Sub/Mul/Div, ÷0 → Infinity / -Infinity / NaN, ±0 equality,
     NaN-self-inequality, Lt/Gt/Le/Ge ordering, NaN ordering, and a
     shadow regression test pinning the local-let → Int dispatch.
-  - **E5-C** complete (commits backfill in next slice): interpreter
+  - **E5-C** complete (`e1075d0`, `6eb5baa`, `321396d`, `4f71945`,
+    `1c0f534`): interpreter
     fallback for Float. `RuntimeValue::Float(f64)` and
     `NativeValue::Float(f64)` plumb through every fallback path
     (`runtime_value` / `runtime_resolver` / `runtime_expr` /
@@ -127,11 +130,22 @@ Phase progress:
     `gen_lower::tests::supports_general_lower_module_returns_reason_for_pure_float_arithmetic_main`
     (locks the lifted gate boundary). `cargo nextest run -p goby-wasm`:
     848 passed, 12 skipped.
-  - **E5-D** queued: parity acceptance + minimal
-    `examples/float_basics.gb`. The E5-B interim reject test has
-    already been retired so removal is no longer pending.
-- **E6** queued: examples / formatter idempotence / LSP hover / final
-  PLAN + STATE sync.
+  - **E5-D** complete (`7823bdd`, `2fbdfab`): parity acceptance +
+    user-facing example. `examples/float_basics.gb` ships the
+    documented Float surface (literal / `+ - * /` / comparisons /
+    ±Infinity / NaN / ±0) wired into the `typechecks_examples`,
+    `idempotent_float_basics`, and a `float_basics_example_executes`
+    end-to-end test that pins the exact stdout. Five GL/native
+    parity table tests cover the distinct `format_float` branches
+    (finite arithmetic, +Infinity, NaN, sign-bit-preserving "-0.0",
+    signed-zero equality). See `doc/PLAN.md` §4.4 for the parity
+    test design and helper mechanics. `cargo nextest run -p goby-wasm`:
+    854 passed, 12 skipped.
+- **E6** queued: roadmap-label hygiene cleanup for E5-A/B/C/D code
+  comments and test docstrings (locked-in policy in `doc/PLAN.md`
+  §2), LSP hover for `Float` annotations / inferred types, formatter
+  idempotence broadening if other Float-shaped cases need pinning,
+  final PLAN + STATE sync.
 
 **Track PC** (`doc/PLAN.md` §4.6) remains queued — design exploration is
 in progress in `tmp/pc.md` (`Parser` shape, effect protocol,
@@ -142,10 +156,10 @@ branch-local state.
 
 Green:
 
-- `cargo test -p goby-core --lib`: 916 passed / 2 ignored.
+- `cargo test -p goby-core --lib`: 917 passed / 2 ignored.
 - `cargo check --workspace`: warning-free.
 - `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`:
-  the regular wasm suite passes.
+  the regular wasm suite passes (854 / 12 skipped).
 
 Red / ignored:
 
@@ -157,24 +171,26 @@ Red / ignored:
 
 ## Next Step
 
-**Primary (Track Float E5-D):**
+**Primary (Track Float E6 — final follow-up sweep):**
 
-Land the parity acceptance slice. The Wasm path (E5-A literal,
-E5-B arithmetic / comparison) and the fallback paths (E5-C) now both
-render Float through `gen_lower::value::format_float`, so output is
-byte-identical regardless of which lowering route a program takes.
-E5-D work:
+E5-A through E5-D shipped the full Float implementation surface
+(GeneralLowered Wasm path, fallback runtime, gate-lift, parity
+acceptance, user-facing example). E6 is a non-implementation sweep
+that polishes what E5-* left behind:
 
-1. Add a minimal `examples/float_basics.gb` exercising the Float
-   surface (literal printing, arithmetic, comparison, ±Infinity / NaN
-   from ÷0).
-2. Drive that example (and existing var-rooted Float arithmetic
-   sources) through both lowering routes — the GL helper
-   `run_general_lowered_float_program` for the Wasm path, plus the
-   native-fallback path — and assert byte-identical output.
-3. Confirm that the existing E5-B interim reject test
-   (`compile_module_rejects_var_rooted_float_arithmetic_until_phase_e5b`)
-   stays retired; removal already shipped in E5-B.
+1. Roadmap-label hygiene cleanup: prior E5-A/B/C/D commits left
+   `Track Float` / `E5-*` mentions in code comments and test
+   docstrings, in violation of the `doc/PLAN.md` §2 policy locked
+   2026-03-25. Rewrite to technical descriptions ("after Float
+   support landed in the native fallback...", etc.).
+2. Add an LSP hover smoke test (or equivalent) confirming `Float`
+   annotations and inferred Float types render correctly in the
+   editor surface.
+3. Broaden formatter idempotence coverage if other Float-shaped
+   inputs exist beyond `examples/float_basics.gb` (the example
+   itself is already covered by `formatter::tests::idempotent_float_basics`).
+4. Final `doc/STATE.md` / `doc/PLAN.md` sync once the cleanup
+   lands.
 
 **Parallel (queued, parallelizable):**
 
