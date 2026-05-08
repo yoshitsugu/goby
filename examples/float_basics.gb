@@ -1,0 +1,27 @@
+# Example: Float literals, arithmetic, and IEEE 754 semantics.
+#
+# Float and Int are distinct primitives — there is no implicit
+# coercion between them. `+ - * /` on Float follow IEEE 754 (so
+# division by zero produces ±Infinity / NaN instead of trapping)
+# and `==` on Float is IEEE numeric equality (NaN != NaN,
+# -0.0 == 0.0).
+main : Unit -> Unit can Print
+main =
+  println "${1.0}"
+  println "${1.5 + 2.5}"
+  println "${5.0 - 2.5}"
+  println "${2.0 * 3.0}"
+  println "${5.0 / 2.0}"
+
+  println "${1.0 / 0.0}"
+  println "${-1.0 / 0.0}"
+  println "${0.0 / 0.0}"
+
+  println "${1.0 == 1.0}"
+  println "${-0.0 == 0.0}"
+  println "${0.0 / 0.0 == 0.0 / 0.0}"
+
+  println "${1.0 < 2.0}"
+  println "${2.0 <= 2.0}"
+  println "${3.0 > 2.0}"
+  println "${3.0 >= 3.0}"

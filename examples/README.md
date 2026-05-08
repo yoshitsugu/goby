@@ -14,6 +14,8 @@ Small Goby programs intended for users to read and run.
 ## Language Features
 
 - `basic_types.gb`: integers, strings, tuples, and interpolation.
+- `float_basics.gb`: `Float` literals, arithmetic, IEEE 754 specials
+  (`Infinity`, `-Infinity`, `NaN`), and IEEE 754 equality.
 - `generic_types.gb`: generic functions and nested generic types.
 - `operators.gb`: arithmetic, comparison, equality, and boolean operators.
 - `case_arm_block.gb`: indented `case` arm block bodies.

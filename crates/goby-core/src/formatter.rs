@@ -1336,6 +1336,14 @@ mod tests {
     }
 
     #[test]
+    fn idempotent_float_basics() {
+        assert_idempotent(
+            "float_basics",
+            include_str!("../../../examples/float_basics.gb"),
+        );
+    }
+
+    #[test]
     fn idempotent_list_index() {
         assert_idempotent(
             "list_index",

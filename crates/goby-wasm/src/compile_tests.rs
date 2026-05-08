@@ -420,6 +420,47 @@ main =
 }
 
 #[test]
+fn float_basics_example_executes_with_expected_output() {
+    // examples/float_basics.gb compiles and runs end-to-end,
+    // byte-matching the documented Float surface output. The example
+    // is a pure-print main with no helpers / handlers / lambdas, so it
+    // classifies as NotRuntimeIo and the native fallback emitter
+    // renders Float via `format_float`. A regression in `format_float`
+    // rendering or in the native fallback Float path would surface
+    // here.
+    let source = read_example("float_basics.gb");
+    let module = parse_module(&source).expect("float_basics.gb should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::NotRuntimeIo,
+        "pure-print Float-arithmetic main must classify as NotRuntimeIo \
+         (the native fallback emitter produces the wasm bytes)"
+    );
+    let wasm = compile_module(&module).expect("float_basics.gb should compile");
+    assert_valid_wasm_module(&wasm);
+    let actual = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+        .expect("float_basics.gb should execute");
+    let expected = "\
+1.0
+4.0
+2.5
+6.0
+2.5
+Infinity
+-Infinity
+NaN
+True
+True
+False
+True
+True
+True
+True
+";
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn compile_module_self_tail_decl_member_uses_shared_dispatcher_without_wrapper_recursion() {
     let source = r#"
 import goby/stdio
