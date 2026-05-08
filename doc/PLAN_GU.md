@@ -112,13 +112,23 @@ last committed point without re-reading the conversation history.
 
 - Type aliases with parameters (`type StrMap a = List (String, a)`).
 - Nested constructor patterns (`Just (Cons head tail) -> ...`).
-- Exhaustiveness checking for `case`.
-- Named record fields inside union variants (`Just { value: a }`).
+- **Exhaustiveness checking for `case`** — handled in **Track EX**
+  (`doc/PLAN.md` §4.5c), which is a hard prerequisite for Track PC.
+  During the GU window, non-exhaustive `case` is an interim runtime
+  trap (see GU-S4); Track EX lifts it to a compile-time error before
+  PC starts.
+- Named record fields inside union variants (`Just { value: a }`) —
+  per user direction (Goby keeps positional union variants for
+  simplicity).
+- Named positional arguments on union variants (`Just(value: 42)`) —
+  per user direction. Record construction continues to use the
+  existing named-field form (`User(id: ..., name: ...)`).
 - GADTs / existentials / higher-kinded types.
 - Singleton sharing for nullary union variants (heap-layout
   optimisation).
 
-These are bounded follow-ups; none are load-bearing for Track PC.
+Other than Track EX (a hard PC prerequisite), these are bounded
+follow-ups; none are load-bearing for Track PC.
 
 ---
 
@@ -186,11 +196,20 @@ pub enum CasePattern {
         items: Vec<ListPatternItem>,
         tail: Option<ListPatternTail>,
     },
-    /// Constructor pattern: `Ctor`, `Ctor x`, `Ctor x y _`.
+    /// Constructor pattern: `Ctor`, `Ctor x`, `Ctor x y _`, plus the
+    /// type-qualified form `TypeName.Ctor`, `TypeName.Ctor x`.
     /// For nullary variants, `args` is empty.
+    /// `type_qualifier` is `Some("TypeName")` when the source used the
+    /// qualified form, `None` for the bare form. The bare and qualified
+    /// forms are semantically equivalent; `type_qualifier` is preserved
+    /// only so that GU-S3's name-resolution / ambiguity-resolution rule
+    /// can use the qualifier to disambiguate when both forms are
+    /// otherwise indistinguishable. Walkers that do not care about
+    /// resolution treat the two cases uniformly.
     /// Nested constructor patterns are out of scope for Track GU
     /// (each `CtorPatternArg` is a binder or wildcard, not a sub-pattern).
     Ctor {
+        type_qualifier: Option<String>,
         ctor: String,
         args: Vec<CtorPatternArg>,
     },
@@ -326,29 +345,30 @@ helper is only meaningful once parametric types begin to type-check.
 
 ### 3.7 Memory layout (lowering)
 
-**Generic records use the existing `Record` layout unchanged.** A
-record value is a heap-allocated array of `i64` slots, one per field,
-in declaration order. Type parameters affect only typecheck and
-ergonomics; they leave no trace in the runtime layout. `type Parser a
-= Parser(run: ...)` allocates exactly the same shape as a non-generic
-single-field record.
-
-**Generic unions use a tagged record.** Slot 0 is the tag; slots 1..N
-are the variant's positional arguments. All slots are uniform `i64`
-to match the existing `Record` / tuple representation.
+**Both generic records and generic unions reuse the existing
+`Record` payload layout
+unchanged.** `crates/goby-wasm/src/gen_lower/value.rs` already
+documents `Record` as `(ctor_tag: i64, fields: [i64]...)` in linear
+memory, and `alloc_static_record` (`gen_lower/emit.rs`) already
+allocates `8 + 8 * fields.len()` bytes — i.e. the leading `ctor_tag`
+slot exists today, and a zero-field record (8-byte allocation, tag
+only) is already valid. Track GU therefore introduces **no new
+allocation primitive**: a union value is laid out as
 
 ```
-slot 0 : i64    // variant_index in low 32 bits, high 32 bits zero
-slot 1 : i64    // arg0  (variant-specific; absent for nullary)
-slot 2 : i64    // arg1
+slot 0 (= existing ctor_tag slot) : i64    // variant_index in low 32 bits, high 32 bits zero
+slot 1 (= existing field[0])      : i64    // arg0  (variant-specific; absent for nullary)
+slot 2 (= existing field[1])      : i64    // arg1
    ...
-slot N : i64    // argN-1
+slot N                            : i64    // argN-1
 ```
 
 Constants:
 
-- `UNION_TAG_SLOT = 0` — the slot holding the tag.
-- `UNION_ARG_BASE = 1` — the slot of the first variant argument.
+- `UNION_TAG_SLOT = 0` — the slot holding the tag (same word as the
+  existing record `ctor_tag`).
+- `UNION_ARG_BASE = 1` — the slot of the first variant argument
+  (same offset as the existing record `field[0]`).
 - The tag is read by loading slot 0 and masking the low 32 bits
   (or just comparing as `i64` against the variant index, since the
   high 32 bits are always zero by construction).
@@ -356,16 +376,23 @@ Constants:
 Layout rules:
 
 - The full slot-0 word is `i64` even though the tag value fits in
-  `i32`. This avoids a second allocation shape and reuses the existing
-  uniform `i64` slot machinery.
-- Nullary variants (`Nothing`, `Leaf`, `Activated`) allocate a
-  one-slot record containing only the tag.
-- A future optimisation may share a singleton heap value across all
-  uses of the same nullary variant; see §10 follow-up #6. Track GU
-  does not ship this optimisation.
+  `i32`. This reuses the existing uniform `i64` slot machinery and
+  avoids a second allocation shape.
+- Nullary variants (`Nothing`, `Leaf`, `Activated`) lower to a
+  zero-field record (8-byte allocation, tag only). This is exactly
+  the `fields.len() == 0` case of the existing record allocator and
+  needs no new code path.
+- The variant-index encoding (low 32 bits, high 32 bits zero) leaves
+  the high half free for a future singleton-sharing optimisation
+  (§10 follow-up #5): a shared heap value per nullary variant has the
+  same payload bits as a freshly allocated one, so sharing is purely
+  an allocator-level change and does not affect this layout.
 
-This layout is the existing `Record` representation with one extra
-leading slot; no new allocation primitive is required.
+For generic records (`type Parser a = Parser(run: ...)`,
+`type Box a = Box(value: a)`): type parameters affect only typecheck
+and ergonomics; they leave no trace in the runtime layout. A generic
+record allocates exactly the same shape as a non-generic record with
+the same field count.
 
 ### 3.8 Spec text (`doc/LANGUAGE_SPEC.md` §3)
 
@@ -407,6 +434,14 @@ Add a new "Constructor patterns" subsection:
 > Each binder position is either a lowercase-start identifier (binds
 > the value) or `_` (ignores the value). Nested patterns are not
 > supported in Track GU.
+>
+> Constructor patterns also accept the type-qualified form, e.g.
+> `Maybe.Just x -> ...` / `Maybe.Nothing -> ...`. The qualified and
+> bare forms are equivalent; the qualified form exists so that the
+> diagnostic suggested by the §6 GU-S3 ambiguity-resolution rule
+> (`use the qualified form TypeName.Ctor`) is actually writable in
+> patterns. This mirrors the existing `Iterator.yield` precedent in
+> effect clauses (`doc/LANGUAGE_SPEC.md` §3 effects).
 
 Field access on a generic record uses the existing `value.field`
 syntax; the field's type is determined by instantiating the record's
@@ -425,7 +460,7 @@ walk this list in dependency order.
 | ---- | -------------- |
 | `crates/goby-core/src/ast.rs` | `TypeDeclaration::Union/Record` reshape; `CasePattern::Ctor`; new `UnionVariant`, `CtorPatternArg` |
 | `crates/goby-core/src/parser_top.rs` | `parse_type_declaration_line` parses type params + variant args |
-| `crates/goby-core/src/parser_pattern.rs` | `parse_case_pattern` recognises constructor patterns (`Ctor`, `Ctor x`, `Ctor x _`) |
+| `crates/goby-core/src/parser_pattern.rs` | `parse_case_pattern` recognises constructor patterns (`Ctor`, `Ctor x`, `Ctor x _`) and the qualified form (`TypeName.Ctor`, `TypeName.Ctor x`); reuses `parser_util::is_qualified_name` |
 | `crates/goby-core/src/parser_util.rs` | Helpers for type-param list and variant-arg list parsing |
 | `crates/goby-core/src/formatter.rs` | Re-emit type declarations in the new shape; format constructor patterns |
 | `crates/goby-core/src/lib.rs` | Re-exports of `CasePattern`, `TypeDeclaration` etc.; mechanical update if any new names need to be public |
@@ -668,10 +703,21 @@ Covers both parametric unions and parametric records. Field-typed
 records (e.g. `Parser a = Parser(run: Unit -> a can Token, Fail)`)
 follow the same fresh-instantiation rule as union constructors.
 
+- **GU-S3 first sub-task — extract `freshen_type_scheme`** (D-6).
+  Before adding any GU-specific semantics, lift the existing fresh
+  instantiation logic used for effect-member generic instantiation
+  (`typecheck_effect.rs`, related helpers in `typecheck_unify.rs`)
+  into a single shared helper `freshen_type_scheme` in a suitable
+  module (likely `typecheck_unify.rs` or a new
+  `typecheck_freshen.rs`). Migrate the effect-side call site to use
+  it first, with no behaviour change. Only after that does GU-S3
+  proceed to wire union constructors, record constructors, and
+  record-field access through the same helper. The pre-extraction
+  keeps GU and effect instantiation on one rule and avoids a future
+  duplicate-ruleset cleanup track.
 - **Fresh type-scheme instantiation** per call / pattern / field-access
-  site (§3.6). Add `freshen_type_scheme` (or equivalent) and route
-  every constructor lookup *and* every record-field-access lookup
-  through it. Function-typed fields with effect rows
+  site (§3.6). Route every constructor lookup *and* every
+  record-field-access lookup through `freshen_type_scheme`. Function-typed fields with effect rows
   (`run: Unit -> a can Token, Fail`) are freshened as `Ty::Fun` whose
   param/result types may contain the type parameter `a`; the effect
   row itself is unaffected by GU.
@@ -696,15 +742,27 @@ follow the same fresh-instantiation rule as union constructors.
   through inference; the same `freshen_type_scheme` path covers all
   of these cases because field access reads `Ty` from inference,
   not from syntactic context.
-- **Constructor-name ambiguity resolution.** When two imported unions
+- **Constructor-name ambiguity resolution.** When two unions
   expose the same constructor name (e.g. `Result.Err` and
   `ParseResult.Err`), the typecheck rule is:
-  1. If the scrutinee's type is already known concretely
+  1. **If `type_qualifier` is `Some(t)`** (the source wrote
+     `T.Ctor`): only the constructor of type `t` is a candidate. If
+     `t` does not declare `Ctor`, or if the scrutinee type is already
+     known concretely as `Ty::Con { name: u, .. }` with `u != t`,
+     emit the dedicated diagnostic *"constructor `t.Ctor` does not
+     belong to scrutinee type `u`"* (D-2). This case never falls
+     through to step 2/3.
+  2. If the scrutinee's type is already known concretely
      (`Ty::Con { name, .. }`), use that to disambiguate — only
      constructors of that type are candidates.
-  2. Otherwise, if exactly one imported constructor matches by name,
-     use it.
-  3. Otherwise, emit a diagnostic naming all candidate types and
+  3. Otherwise, **local declarations shadow imported declarations**:
+     if exactly one *local* constructor matches by name, use it; only
+     if no local match exists do imported constructors come into
+     scope. This is the lexical-scope rule used by Rust / Haskell and
+     mirrors the existing import resolution in `parser_top.rs`. (D-3)
+  4. Otherwise, if exactly one constructor matches by name across
+     the locally-visible set, use it.
+  5. Otherwise, emit a diagnostic naming all candidate types and
      suggesting the qualified form `TypeName.Ctor`.
   Constructor *application* (not patterns) follows the same rule with
   expected-type information from the surrounding context.
@@ -775,6 +833,14 @@ handles generic records unchanged.
 - Function-typed record fields (`run: Unit -> a can ...`) lower as
   ordinary function values; the existing record-field lowering path
   treats them uniformly with other field types.
+- **Non-exhaustive `case` is a runtime trap (interim)** (D-4). When
+  no arm matches at runtime, lowering emits the Wasm `unreachable`
+  instruction so execution stops at a clear point rather than
+  silently producing a stale value. This is the **interim contract
+  for the GU window only**: Track EX (`doc/PLAN.md` §4.5c) lifts it
+  to a compile-time error before Track PC starts. `case` writers in
+  the GU window should still cover every variant; the trap exists
+  so that an oversight crashes loudly rather than miscompiles.
 
 **Acceptance**:
 
@@ -794,21 +860,40 @@ handles generic records unchanged.
   typecheck diagnostic quality.
 - Negative-path fixtures cover wrong-arity, wrong-type, unknown-ctor,
   ctor-from-different-type-in-pattern.
+- **Arity-mismatch wording reuses the existing function-call
+  diagnostic** (`typecheck_call.rs`'s `expects argument of type ...`
+  / HOF callback arity messages); no constructor-specific wording is
+  introduced. The diagnostic span is anchored on the constructor
+  reference rather than the whole call so that `Just()` / `Just 1 2`
+  underline `Just`. Track PC fixtures must assert structurally
+  ("diagnostic mentions both candidate types" for ambiguity, "wrong
+  number of arguments" for arity), not by byte-match — see
+  `doc/PLAN_PC.md` §4.5 PC-P1.
 
 **Acceptance**:
 
 - Diagnostic fixtures match recorded wording.
 - `goby-invariants` skill reports no GU-attributable drift.
 
-### GU-X1: Migrate `examples/type.gb` to demonstrate generic types
+### GU-X1: Extend `examples/type.gb` to demonstrate generic types
 
-- Add a generic-union example and a generic-record example to
-  `examples/type.gb` (or sibling files), so the canonical user-facing
-  example showcases both new shapes.
+- **Keep the existing `User` (record) and `UserStatus` (nullary
+  union) sections unchanged** so the canonical sample remains a
+  continuous reference for non-generic types.
+- **Add a generic section** to the same file showing one generic
+  union (`type Maybe a = Just(a) | Nothing` or similar) and one
+  generic record (`type Box a = Box(value: a)`), plus a small
+  `case` over the generic union and a field-access on the generic
+  record. Keep the section short (one screen) so the file stays
+  readable.
+- The canonical sample then covers all four shapes (non-generic
+  union, non-generic record, generic union, generic record) in one
+  place, which is what GU advertises. (D-5)
 
 **Acceptance**:
 
-- `goby check` and `goby run` clean. Output fixture pinned.
+- `goby check` and `goby run` clean. Output fixture pinned (the
+  existing fixture is extended rather than replaced).
 
 ### GU-X2: Final acceptance gate
 
@@ -968,20 +1053,68 @@ expect:
 
 ## 11. Open Questions (Resolved at GU-D0)
 
-These must be answered during the Codex review of GU-D0; recording the
-answer here closes the question.
+All four questions are closed at GU-D0. Q1–Q3 were taken to a Codex
+review on 2026-05-08; the recorded resolution feeds §3.7, §3.8, and
+§6 GU-X0.
 
-1. **Bare `Ctor` vs. qualified `TypeName.Ctor`** — current nullary
-   unions expose both. Recommended default for GU: keep both visible
-   for continuity. Confirm in review.
-2. **Diagnostic wording for arity mismatch on constructor application**
-   — reuse the existing function-call arity diagnostic. Confirm in
-   review.
-3. **Heap layout for variants with args** — §3.7 chooses
-   `[tag, arg0, arg1, …]` matching the existing record shape. Confirm
-   in review whether this conflicts with any backend invariant.
+1. ~~**Bare `Ctor` vs. qualified `TypeName.Ctor`**~~ **Resolved
+   (2026-05-08)**: both forms are accepted at GU entry, in **expression
+   and pattern position**. This is forced by §6 GU-S3's ambiguity
+   diagnostic — suggesting `TypeName.Ctor` is meaningless if patterns
+   cannot accept it — and is consistent with the existing
+   `Iterator.yield` precedent for effect clauses. Pattern parsing
+   reuses the existing `is_qualified_name` helper
+   (`crates/goby-core/src/parser_util.rs`); the additional scope is a
+   qualified-form arm in `parser_pattern.rs` and matching fixtures in
+   `parser_top.rs`. See §3.8.
+2. ~~**Diagnostic wording for arity mismatch on constructor
+   application**~~ **Resolved (2026-05-08)**: reuse the existing
+   function-call arity diagnostic (`typecheck_call.rs`); do not
+   introduce constructor-specific wording. The diagnostic span is
+   anchored on the constructor reference. PC fixtures must assert
+   structurally rather than byte-match GU's wording. See §6 GU-X0 and
+   `doc/PLAN_PC.md` §4.5 PC-P1.
+3. ~~**Heap layout for variants with args**~~ **Resolved
+   (2026-05-08)**: §3.7's layout reuses the existing `Record` payload
+   shape unchanged. `gen_lower/value.rs` already documents `Record`
+   as `(ctor_tag: i64, fields: [i64]...)`, and `alloc_static_record`
+   in `gen_lower/emit.rs` already supports the `fields.len() == 0`
+   case (8-byte allocation, tag only). No new allocation primitive is
+   introduced; nullary variants land on the existing zero-field path;
+   the variant-index encoding leaves room for the §10 follow-up #5
+   singleton-sharing optimisation without surface change. See §3.7.
 4. ~~`Record::type_params` introduction in GU-S1 vs. follow-up~~
    **Resolved**: generic records are in scope for Track GU (§2);
    `Record::type_params` is populated by the parser for generic
    records and remains empty for non-generic records. No follow-up
    churn is deferred.
+5. ~~**AST representation of qualified ctor patterns**~~ **Resolved
+   (2026-05-08)**: §3.2 `CasePattern::Ctor` carries
+   `type_qualifier: Option<String>` alongside `ctor: String`. Bare
+   form sets `type_qualifier = None`; qualified form sets it to the
+   type name. The two forms are semantically equivalent; the field
+   exists so GU-S3's name-resolution rule (Q5 below) can use it.
+6. ~~**Diagnostic for qualified-ctor / scrutinee-type
+   mismatch**~~ **Resolved (2026-05-08)**: when
+   `type_qualifier = Some(t)` and the scrutinee is `Ty::Con { name:
+   u, .. }` with `u != t`, emit a dedicated diagnostic *"constructor
+   `t.Ctor` does not belong to scrutinee type `u`"* rather than
+   falling through to unknown-ctor or generic type-mismatch wording.
+   See §6 GU-S3 step 1.
+7. ~~**Local vs imported ctor name shadowing**~~ **Resolved
+   (2026-05-08)**: local declarations shadow imported declarations
+   (Rust / Haskell convention). See §6 GU-S3 step 3.
+8. ~~**Non-exhaustive `case` runtime contract**~~ **Resolved
+   (2026-05-08)**: interim runtime trap via Wasm `unreachable` for
+   the GU window; Track EX (`doc/PLAN.md` §4.5c) lifts it to a
+   compile-time error before PC starts. See §2 out-of-scope and
+   §6 GU-S4.
+9. ~~**Canonical sample migration (`examples/type.gb`)**~~
+   **Resolved (2026-05-08)**: keep the existing `User` /
+   `UserStatus` sections; add a short generic-union + generic-record
+   section to the same file. See §6 GU-X1.
+10. ~~**`freshen_type_scheme` extraction timing**~~ **Resolved
+    (2026-05-08)**: extracted in GU-S3's first sub-task as a shared
+    helper, with the existing effect-side call site migrated first
+    (no behaviour change). Union ctors / record ctors / record
+    field access then route through the same helper. See §6 GU-S3.

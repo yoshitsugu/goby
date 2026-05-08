@@ -982,6 +982,108 @@ Track PC (§4.6) **depends on RP-3**. PC-P0's pre-flight (§PLAN_PC §4.2)
 no longer needs to *probe* multi-file import; it consumes the answer
 RP-3 has already given.
 
+### 4.5c Track EX: Case Exhaustiveness Checking
+
+Priority: **prerequisite for Track PC (§4.6)**. Locked 2026-05-08.
+
+Goal: reject non-exhaustive `case` expressions at compile time, so
+that pattern matches over user-defined unions, lists, and primitive
+literal arms are statically guaranteed to cover every possible value.
+
+Why this matters:
+
+- Goby has no exhaustiveness checking today (`crates/goby-core/src/`
+  contains zero references to "exhaustive" or equivalent). A `case`
+  whose arms do not cover every value reaches the wasm backend with
+  no static safety net.
+- Track GU (§4.5a) introduces `Maybe`, `ParseResult`, `Tree`, and
+  similar user-defined unions whose value space is *finite and
+  declaration-known* (one variant per declared constructor). The GU
+  window deliberately ships only an interim runtime trap (Wasm
+  `unreachable`) for non-exhaustive `case`; lifting that to a
+  compile-time error is the natural next step.
+- Track PC (§4.6) builds on `Maybe` / `ParseResult` and writes
+  `case` expressions in nearly every combinator. Without static
+  exhaustiveness, every PC combinator that forgets a variant
+  becomes a runtime trap. The user direction (2026-05-08) is that
+  `case` non-exhaustiveness must be a compile-time error before PC
+  starts.
+
+Scope:
+
+- **In scope**:
+  - Constructor patterns over generic / non-generic unions
+    (`Just x | Nothing`).
+  - List patterns (`[]`, `[x, ..xs]`, fixed-length forms).
+  - Bool / Int / String literal patterns where exhaustiveness is
+    decidable in conjunction with `_` / wildcard arms.
+  - Mixed wildcard handling: a trailing `_ -> ...` arm makes any
+    `case` exhaustive by definition.
+  - Cross-module union exhaustiveness (a union declared in module
+    A and matched in module B).
+- **Out of scope** (deferred):
+  - Nested constructor patterns (already deferred in Track GU §2).
+  - Useless / redundant arm detection (a separate diagnostic
+    family; could land as a sibling lint in `goby lint`).
+  - Refinement / GADT-style narrowing.
+
+Blocking dependencies:
+
+- **Track GU (§4.5a) must reach GU-X2 first.** EX needs the GU
+  AST shape (`CasePattern::Ctor`, `UnionTypeInfo` with per-variant
+  metadata) to enumerate the missing variants. EX cannot start
+  before GU-X2 closes.
+- Track RP (§4.5b) is independent of EX.
+
+Execution phases (high-level — full plan lives in
+`doc/PLAN_EX.md` once the track opens):
+
+1. **EX-D0: Design freeze.** Lock the algorithm choice (likely a
+   matrix-based usefulness check à la Maranget — *Compiling Pattern
+   Matching to Good Decision Trees* — restricted to the single-level
+   patterns Track GU surfaces). Lock the diagnostic shape: list
+   *which* variants / list shapes are missing, not just "case is
+   non-exhaustive".
+2. **EX-S1: Typecheck pass.** Add a per-`case` exhaustiveness
+   pass in `typecheck_check.rs` (or a new
+   `typecheck_exhaustive.rs`). Walks union variant lists,
+   list-pattern shapes, and literal arms. Emits a compile-time
+   diagnostic naming missing arms.
+3. **EX-S2: Lowering simplification.** Remove the GU-S4 interim
+   `unreachable` emission for non-exhaustive `case`; the static
+   pass now guarantees every reachable runtime value matches some
+   arm. Wasm `unreachable` may remain as a defensive backstop for
+   genuinely-impossible paths (e.g. arms gated by inferred-but-not-
+   declared invariants), but every non-defensive use disappears.
+4. **EX-X0: Diagnostic polish + fixtures.** Negative-path fixtures
+   for each pattern family (union, list, bool, int / string + `_`)
+   covering the missing-arm diagnostic. `examples/` audit: every
+   shipping example whose `case` was previously implicitly trusting
+   the runtime trap is updated to be statically exhaustive.
+
+Acceptance criteria:
+
+- Non-exhaustive `case` over a user-defined union (e.g.
+  `case m  Just x -> ...`) produces a compile-time diagnostic
+  naming the missing variant (`Nothing`).
+- Non-exhaustive `case` over a list (e.g.
+  `case xs  [] -> ...`) produces a diagnostic naming the missing
+  shape (the cons case).
+- A `case` whose final arm is `_ -> ...` is always exhaustive,
+  regardless of preceding arms.
+- `cargo test -p goby-core --lib` and `cargo nextest run -p
+  goby-wasm` pass.
+- All `examples/` files that contain a `case` expression compile
+  without exhaustiveness diagnostics; any that previously relied on
+  partial coverage are updated.
+- `doc/LANGUAGE_SPEC.md` documents `case` exhaustiveness as a
+  compile-time guarantee.
+
+Track PC (§4.6) **hard-depends on EX-S1**: the operational start
+gate for PC is "GU-X2 closed AND EX-S1 closed". PC's milestone
+table (`doc/PLAN_PC.md` §6) is updated to reflect this when EX
+opens.
+
 ### 4.6 Track PC: Parser Combinator on Algebraic Effects
 
 Priority: **active line (2026-05-07)**. With effect-row polymorphism

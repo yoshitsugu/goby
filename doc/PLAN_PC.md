@@ -757,7 +757,7 @@ PC-P deliverables:
 
 | ID    | Name                                  | Depends on  | Output                                  |
 | ----- | ------------------------------------- | ----------- | --------------------------------------- |
-| PC-M0 | `Maybe` ADT introduction              | **Track GU-X2** | `stdlib/goby/maybe.gb` (type only) + 1 fixture |
+| PC-M0 | `Maybe` ADT introduction              | **Track GU-X2 + Track EX-S1** | `stdlib/goby/maybe.gb` (type only) + 1 fixture |
 | PC-M1 | `Maybe` inspection helpers            | PC-M0       | `is_just`, `is_nothing`, `unwrap_or` + `examples/maybe_inspect.gb` |
 | PC-M2 | `Maybe` row-polymorphic combinators   | PC-M1       | `map`, `and_then`, `to_list` + `examples/maybe_pure.gb`, `examples/maybe_effect.gb` |
 | PC-M3 | `Maybe` docs / invariants gate        | PC-M2       | `LANGUAGE_SPEC.md` mention + `examples/maybe.md` overview + `goby-invariants` pass |
@@ -776,6 +776,13 @@ for each cross-track edge in the table above):
   generic union with constructor args (GU-S3 typecheck + GU-S4 lowering).
   GU-X2 is the closed-form green check across both groups; PC-M0 is
   gated on it. See `doc/PLAN_GU.md` §7.1.
+- **Track EX-S1 → PC-M0** — Track EX (`doc/PLAN.md` §4.5c) lifts
+  non-exhaustive `case` from a runtime trap (the GU-S4 interim
+  contract) to a compile-time error. Track PC's `case` matches over
+  `Maybe` / `ParseResult` rely on this static guarantee; PC does not
+  start until EX-S1 (the typecheck pass) closes. The user direction
+  recorded 2026-05-08 is that PC must inherit static exhaustiveness,
+  not the runtime-trap interim. See `doc/PLAN.md` §4.5c.
 - **Track GU-X2 → PC-P1** — `Parser a = Parser(run: ...)` is a generic
   record; `ParseResult a = Ok(a) | Err(ParseError)` is a generic union.
   Both shapes are in scope for Track GU (`doc/PLAN_GU.md` §2). Without
