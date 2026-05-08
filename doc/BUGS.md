@@ -154,6 +154,81 @@ Open bugs:
   - `crates/goby-wasm/src/gen_lower/value.rs` (TAG_FLOAT free-list
     accounting in `__goby_drop`).
 
+- **2026-05-09.** Stdlib `int.parse` cannot be compiled because its
+  `minimum_int : Int` constant declares the i64 boundary value
+  `-9223372036854775808`, which is outside Goby's 60-bit `Int`
+  representable range. `encode_int` rejects the literal and the
+  module fails with
+  `classification error: integer -9223372036854775808 is outside the 60-bit representable range`.
+
+  Surfaced after Track HF (BUGS.md 2026-05-08, fixed 2026-05-09):
+  the cond/scrutinee scope fix lets `int.parse`'s body reach wasm
+  emission for the first time, and emission then trips this
+  pre-existing literal-range issue. Tests that exercise `int.parse`
+  via a HOF callback (the original BUGS.md 2026-05-08 minimal
+  program — `to_i = with invalid_integer ... in int.parse d` passed
+  to `list.map`) now stop here instead of at the unknown-local emit
+  error.
+
+  Confirmed repro:
+
+  ```goby
+  import goby/list (map, push)
+  import goby/int as int
+  import goby/stdio
+
+  to_i : String -> Int
+  to_i d =
+    with
+      invalid_integer i -> resume -1
+    in
+      int.parse d
+
+  main : Unit -> Unit can Print
+  main =
+    xs = push (push [] "1") "2"
+    ys = map xs to_i
+    println "done"
+  ```
+
+  Observed:
+
+  ```text
+  classification error: integer -9223372036854775808 is outside the 60-bit representable range
+  ```
+
+  Triage notes:
+
+  - `stdlib/goby/int.gb` lines 21–25 declare both `minimum_int_div_10
+    = -922337203685477580` (within 60-bit range) and `minimum_int =
+    -9223372036854775808` (out of range). The latter is the offending
+    literal.
+  - `int.parse`'s `minimum_int` reference is used to detect the
+    `Int.MIN_VALUE` boundary case (`if acc == minimum_int` on line
+    69) so a positive overflow on negation is rejected as
+    `invalid_integer`.
+  - Goby's `Int` is a 60-bit tagged value, so the i64
+    `-9223372036854775808` literal is not representable as an `Int`
+    constant. The stdlib boundary check itself is misaligned with
+    the language's number model.
+
+  Possible fixes (not yet decided):
+
+  1. Drop the boundary check from `int.parse` and document that it
+     accepts inputs that overflow the 60-bit range as
+     `invalid_integer`. Requires updating `int.parse` to detect
+     overflow earlier (e.g. by comparing against the Goby-Int
+     boundary `2^59 - 1` / `-2^59` rather than i64 `MIN_VALUE`).
+  2. Introduce a 64-bit unboxed integer literal form usable inside
+     stdlib but not directly exposed as `Int`. Larger language
+     change.
+  3. Express `minimum_int` as a runtime-computed value (e.g. derived
+     from `minimum_int_div_10 * 10 - 8` once `int.parse` itself is
+     correct). Avoids the literal entirely.
+
+  Either way, the fix is stdlib-side and language-design-touching;
+  it is intentionally out of scope for Track HF.
+
 Resolved bugs:
 
 - **2026-05-08.** Passing a function whose body referenced a top-level
