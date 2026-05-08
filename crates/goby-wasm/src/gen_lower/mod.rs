@@ -1184,76 +1184,6 @@ fn has_tuple_project_in_value(v: &goby_core::ir::ValueExpr) -> bool {
     }
 }
 
-/// Returns true if the computation contains a `ValueExpr::FloatLit` anywhere in its tree.
-///
-/// Float values are heap-boxed (TAG_FLOAT) and the static-output / native fallback
-/// paths cannot render them; programs that mention `Float` must enter the
-/// GeneralLowered path even if they would otherwise look like a pure-Print module
-/// (Track Float Phase E5).
-///
-/// "Anywhere" is taken literally: handler bodies, resume arguments, and `with`
-/// blocks are walked. Even though existing handler-shaped programs already
-/// reach GeneralLowered through other gates, the contract here is "any Float
-/// literal forces GeneralLowered" so this function should not silently return
-/// false for nodes whose subtrees we have not yet inspected.
-fn has_float_in_comp(comp: &CompExpr) -> bool {
-    match comp {
-        CompExpr::Value(v) => has_float_in_value(v),
-        CompExpr::Let { value, body, .. } | CompExpr::LetMut { value, body, .. } => {
-            has_float_in_comp(value) || has_float_in_comp(body)
-        }
-        CompExpr::Seq { stmts, tail } => {
-            stmts.iter().any(has_float_in_comp) || has_float_in_comp(tail)
-        }
-        CompExpr::PerformEffect { args, .. } => args.iter().any(has_float_in_value),
-        CompExpr::Call { callee, args, .. } => {
-            has_float_in_value(callee) || args.iter().any(has_float_in_value)
-        }
-        CompExpr::If { cond, then_, else_ } => {
-            has_float_in_value(cond) || has_float_in_comp(then_) || has_float_in_comp(else_)
-        }
-        CompExpr::Assign { value, .. } => has_float_in_comp(value),
-        CompExpr::Case { scrutinee, arms } => {
-            has_float_in_value(scrutinee) || arms.iter().any(|arm| has_float_in_comp(&arm.body))
-        }
-        CompExpr::Handle { clauses } => {
-            clauses.iter().any(|clause| has_float_in_comp(&clause.body))
-        }
-        CompExpr::WithHandler { handler, body, .. } => {
-            has_float_in_comp(handler) || has_float_in_comp(body)
-        }
-        CompExpr::Resume { value } => has_float_in_value(value),
-        CompExpr::Dup { value } | CompExpr::Drop { value } | CompExpr::DropReuse { value, .. } => {
-            has_float_in_value(value)
-        }
-        CompExpr::AllocReuse { .. } => false,
-        CompExpr::AssignIndex { path, value, .. } => {
-            path.iter().any(has_float_in_value) || has_float_in_comp(value)
-        }
-    }
-}
-
-fn has_float_in_value(v: &goby_core::ir::ValueExpr) -> bool {
-    match v {
-        goby_core::ir::ValueExpr::FloatLit(_) => true,
-        goby_core::ir::ValueExpr::BinOp { left, right, .. } => {
-            has_float_in_value(left) || has_float_in_value(right)
-        }
-        goby_core::ir::ValueExpr::ListLit { elements, .. } => {
-            elements.iter().any(has_float_in_value)
-        }
-        goby_core::ir::ValueExpr::TupleLit(items) => items.iter().any(has_float_in_value),
-        goby_core::ir::ValueExpr::RecordLit { fields, .. } => {
-            fields.iter().any(|(_, v)| has_float_in_value(v))
-        }
-        goby_core::ir::ValueExpr::Interp(parts) => parts.iter().any(|p| match p {
-            goby_core::ir::IrInterpPart::Expr(e) => has_float_in_value(e),
-            goby_core::ir::IrInterpPart::Text(_) => false,
-        }),
-        _ => false,
-    }
-}
-
 fn has_effectful_non_main_decl(module: &Module) -> bool {
     module
         .declarations
@@ -1750,18 +1680,20 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
     //   - a Lambda expression, OR
     //   - a tuple member projection (TupleProject; native evaluator does not support it), OR
     //   - a rooted list update (`AssignIndex`), which the fallback evaluator does not support.
-    //   - a `Float` literal anywhere (heap-boxed; the static-output / native fallback
-    //     paths cannot render TAG_FLOAT, so Float values must take the GeneralLowered
-    //     route — Track Float Phase E5).
     //   - non-main user-defined declarations (helpers may use constructs the fallback cannot run).
     // Pure-Print programs without any of the above can stay on the simpler paths.
+    //
+    // Float literals used to force GeneralLowered (Track Float Phase E5-A);
+    // E5-C lifted that constraint — `NativeValue::Float` and the `IrBinOp::Float*`
+    // arms in `lower.rs::eval_value` now render Float via the shared
+    // `gen_lower::value::format_float`, so the static-output / interpreter-bridge
+    // paths can print Float-typed expressions.
     let has_non_main_user_decls = ir_module.decls.iter().any(|d| d.name != "main");
     if !has_runtime_read_effect(&ir_decl.body)
         && !has_handler_rewrite_entrypoints(&ir_decl.body)
         && !has_lambda_in_comp(&ir_decl.body)
         && !has_rooted_list_update(&ir_decl.body)
         && !has_tuple_project_in_comp(&ir_decl.body)
-        && !has_float_in_comp(&ir_decl.body)
         && !has_non_main_user_decls
     {
         return Ok(Err(
@@ -2273,6 +2205,32 @@ main =
             reason,
             Some(GeneralLowerUnsupportedReason::NotRequiringRuntimeCapability),
             "pure-Print program must return NotRequiringRuntimeCapability"
+        );
+    }
+
+    #[test]
+    fn supports_general_lower_module_returns_reason_for_pure_float_arithmetic_main() {
+        // Track Float E5-C: a pure-print Float-arithmetic main no longer
+        // forces GeneralLowered. Before E5-C the `has_float_in_comp` clause
+        // in the capability allowlist would route this program through GL
+        // (so TAG_FLOAT could render); E5-C added Float to the static-output
+        // / native fallback path (NativeValue::Float, IrBinOp::Float* arms,
+        // format_float), and this gate clause was lifted. Lock the boundary
+        // so a regression pulling Float back into GL would fail loudly.
+        let module = parse_module(
+            r#"
+main : Unit -> Unit
+main =
+  print "${1.5 + 2.5}"
+"#,
+        )
+        .expect("source should parse");
+        let reason =
+            supports_general_lower_module(&module).expect("classification should not error");
+        assert_eq!(
+            reason,
+            Some(GeneralLowerUnsupportedReason::NotRequiringRuntimeCapability),
+            "pure Float arithmetic main must NOT require GeneralLowered after E5-C"
         );
     }
 

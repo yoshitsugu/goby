@@ -110,8 +110,10 @@ fn parse_alloc_stats_field(stderr: &str, field: &str) -> u64 {
 
 #[test]
 fn compile_module_accepts_float_literal_in_main() {
-    // Float literals compile through the GeneralLowered path: heap-boxed
-    // (TAG_FLOAT) and rendered by the host formatter via `format_float`.
+    // Float literals compile end-to-end. Since E5-C the static-output /
+    // native fallback path can also render Float (via NativeValue::Float
+    // + format_float), so this assertion is route-agnostic — we only
+    // require that some path produces a non-empty wasm module.
     let source = "\
 main : Unit -> Unit can Print
 main = print \"${1.0}\"

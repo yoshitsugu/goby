@@ -318,10 +318,14 @@ main =
         assert_eq!(output, "[\"a\", \"b\", \"c\"]");
     }
 
-    /// Track Float Phase E5-A acceptance: a `Float` literal must round-trip
-    /// through TAG_FLOAT codegen and the host-side `format_tagged_value`
-    /// (which calls `format_float`) when interpolated as `"${expr}"`.
-    /// Binop / fallback parity arrive in E5-B / E5-C.
+    /// Track Float acceptance: a `Float` literal interpolated as
+    /// `"${expr}"` must round-trip end-to-end through whichever lowering
+    /// path the program qualifies for. E5-A first proved this on the
+    /// GeneralLowered (TAG_FLOAT + host `format_tagged_value`) route;
+    /// since E5-C the native fallback (NativeValue::Float + `format_float`)
+    /// can also serve pure-print Float mains. Both paths share
+    /// `format_float`, so the rendered text is byte-identical regardless
+    /// of which path runs.
     #[test]
     fn float_literal_executes_via_compiled_wasm() {
         let module = parse_module(
