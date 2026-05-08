@@ -887,11 +887,10 @@ The two tracks (GU, RP) can land in either order; PC pre-flight
 Unrelated. GU is purely a data / pattern feature; it does not touch
 effect-handler semantics.
 
-### 7.4 In-flight stdlib work (Track Float etc.)
+### 7.4 In-flight stdlib work
 
-During GU's window, in-flight stdlib edits must not assume the new
-union form until GU-S3 has landed. Conversely, GU touches no
-`Float`-specific code.
+During GU's window, any concurrent stdlib edits must not assume the
+new union form until GU-S3 has landed.
 
 ---
 

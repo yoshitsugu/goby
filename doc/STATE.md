@@ -1,175 +1,11 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-08 (Track Float complete — E1〜E6 fully shipped,
-incl. roadmap-label hygiene cleanup, LSP hover smoke tests, fmt-clean
-baseline, and PLAN/STATE sync. Track PC remains queued behind user
-design review.)
+Last updated: 2026-05-08.
 
 ## Current Focus
 
-**No active implementation track.** Track Float is closed. Next
-actionable work is one of the queued tracks under "Next Step" below
-(Track PC requires user design review on `tmp/pc.md`).
-
-Locked surface (LANGUAGE_SPEC §3): literal grammar `<int>.<frac>` only
-(`1.0`, `0.5`, `-3.25`); `Float` is a distinct primitive with no implicit
-`Int`/`Float` coercion; `+`/`-`/`*`/`/`/`==`/`<`/`<=`/`>`/`>=` overload
-on operand type; `Int / Int` keeps integer division; runtime semantics
-follow IEEE 754 (NaN ≠ NaN, division by zero produces ±Infinity / NaN);
-printing follows Haskell `show` (`1.0`, `Infinity`, `-Infinity`, `NaN`,
-`-0.0`, `0.0`).
-
-Phase progress:
-
-- **E1** complete (`9c6e5e3`): semantics lock, doc updates only.
-- **E2** complete (`80ba5c9`): `FloatBits(u64)` newtype, `Expr::FloatLit`,
-  `ResolvedExpr::FloatLit`, `ValueExpr::FloatLit`, `Ty::Float`,
-  `parse_float_literal` (qualified-access still wins for `pair.0`),
-  exhaustive-match pass across `goby-core` + `goby-wasm`.
-- **E3** complete (`fe143db`): typecheck operator dispatch
-  (`Float, Float -> Float` for arithmetic, `Float, Float -> Bool` for
-  comparisons), typed IR variants (`IrBinOp::Float{Add,Sub,Mul,Div,Eq,
-  Lt,Gt,Le,Ge}`), shallow lowering dispatcher in `ir_lower`, and a
-  workspace-wide wasm safety net: every `goby_wasm` public compile /
-  execute entry point and `runtime_io_execution_kind` reject any module
-  containing a `Float` literal with a clear "Float values are not yet
-  runnable on the wasm path (Track Float Phase E5)" `CodegenError` so a
-  var-rooted Float operand cannot silently flow through integer wasm
-  ops.
-- **E4** complete (`caecbc6`): Wasm runtime value representation lock — heap-boxed
-  `f64` plus a new `TAG_FLOAT` (`0xB`). The current 4-bit tag + 60-bit
-  payload cannot carry arbitrary IEEE 754 bit patterns, so `Float`
-  values must live behind a heap pointer alongside `List` / `Tuple` /
-  `Cell` payloads. `gen_lower/value.rs` now exposes `encode_float_ptr` /
-  `decode_float_ptr` (Cell-shaped tagged pointer) and the pure bit
-  helpers `float_bits_to_i64` / `i64_to_float_bits`. At E4 the heap
-  allocation itself, `f64.const` / `f64.add` / ... emission, and the
-  interpreter fallback remained deferred to E5; the E3 wasm safety
-  net (rejection of modules containing Float literals) was kept in
-  place at this point and was later removed across E5-A / E5-B / E5-C.
-- **E5** complete (split into E5-A → E5-D in `doc/PLAN.md` §4.4):
-  - **E5-A** complete (`37d8da6`): Float literal end-to-end on the Wasm path.
-    `WasmBackendInstr::AllocFloatBox { bits_instrs }` allocates the
-    8-byte `(bits: i64)` box and emits a TAG_FLOAT-tagged pointer.
-    `__goby_dup` / `__goby_drop` learn TAG_FLOAT (drop is an
-    *independent* branch from Cell — raw IEEE bits must not be
-    recursively dropped — but reuses the Cell free-list slot).
-    `format_float` in `gen_lower/value.rs` renders Haskell-`show`
-    form and is shared between the host TAG_FLOAT decoder
-    (`wasm_exec::format_tagged_value`) and the future interpreter
-    fallback. The Phase E3 module-level safety net is removed; the
-    GeneralLowered capability gate gains a `has_float_in_comp` clause
-    so `Float` programs no longer fall into the static-output /
-    native-fallback path that cannot render TAG_FLOAT.
-  - **E5-B** complete (`a12a9c7`, `9556d89`): `IrBinOp::Float{Add,Sub,Mul,Div,Eq,Lt,Gt,Le,Ge}`
-    now emit real `unbox → f64.<op> → rebox` Wasm. Stack order for
-    non-commutative ops is locked via two i64 scratch locals
-    (`scratch0 = right`, `scratch1 = left`, matching the existing
-    Mul/Div convention). Arithmetic shares the `AllocFloatBox` shape
-    via the new `emit_alloc_float_box_with_bits_local` helper so
-    literal-allocated and computed Float values stay interchangeable
-    on the heap. `==` follows IEEE 754 (`f64.eq`), not bit-eq, so
-    `NaN == NaN` is False and `-0.0 == 0.0` is True. Var-rooted Float
-    arithmetic (`my_add a b = a + b` over `Float -> Float -> Float`)
-    needed an ir_lower-level dispatcher fix: `LowerCtx` now carries a
-    `float_locals` set populated from the declaration's annotation
-    (`typecheck_types::ty_from_annotation` reused) so that
-    `ResolvedExpr::Ref(ResolvedRef::Local(name))` can resolve back to
-    `Float` and select the `IrBinOp::Float*` variant. Lambda / let /
-    handler-clause params shadow same-named entries in `float_locals`
-    for the duration of their body lowering and restore on exit.
-    **Limitation (intentional, scope of E5-D parity slice):** only
-    decl-rooted parameters and literal / Float-binop trees are tracked.
-    Float values introduced by `let x = a + b` or by call-return such
-    as `(my_add 1.0 2.0) + 3.0` still lower to integer `Add` because
-    the binding's type is unknown at lowering time. A typed resolved
-    IR is the eventual long-term home for this dispatch. The old
-    interim reject test was retired in favour of var-rooted
-    arithmetic / comparison execution tests (`compile_tests`) covering
-    Add/Sub/Mul/Div, ÷0 → Infinity / -Infinity / NaN, ±0 equality,
-    NaN-self-inequality, Lt/Gt/Le/Ge ordering, NaN ordering, and a
-    shadow regression test pinning the local-let → Int dispatch.
-  - **E5-C** complete (`e1075d0`, `6eb5baa`, `321396d`, `4f71945`,
-    `1c0f534`): interpreter
-    fallback for Float. `RuntimeValue::Float(f64)` and
-    `NativeValue::Float(f64)` plumb through every fallback path
-    (`runtime_value` / `runtime_resolver` / `runtime_expr` /
-    `runtime_replay` / `runtime_decl::runtime_value_to_expr` /
-    `lower.rs::eval_value`). Equality is IEEE 754 via `f64 == f64`
-    in `runtime_value_eq` (single source of truth — `[NaN] != [NaN]`,
-    `Record { f: -0.0 } == Record { f: 0.0 }`). `apply_binop_runtime_value`
-    gains Float×Float `Add/Sub/Mul/Div/Lt/Gt/Le/Ge` (Eq is shared with
-    runtime_value_eq); refactored to a private free
-    `apply_binop_runtime_value_pure` so the dispatch table is testable
-    without a `RuntimeOutputResolver`. `lower.rs::eval_value` adds
-    `IrBinOp::Float*` arms that dispatch on the IR opcode (E5-B
-    introduced them) and never mix Float into the integer
-    `IrBinOp::Add` arm. Both `RuntimeValue::Float::format_text` and
-    `NativeValue::Float::as_output_text` route through
-    `gen_lower::value::format_float` for byte-identical output with the
-    Wasm host formatter (`1.0`, `Infinity`, `-Infinity`, `NaN`, `-0.0`,
-    `0.0`). The capability allowlist clause `has_float_in_comp` (which
-    forced every Float-touching program into GeneralLowered in E5-A)
-    is removed; pure-print Float mains now classify as
-    `NotRequiringRuntimeCapability` and take the simpler route. Mixed
-    Float + lambda / handler / read / non-main helpers still funnel
-    into GL via the remaining capability triggers.
-    Defensive guards: `apply_pipeline` (resolver) and
-    `execute_unit_call_ast` (exec) refuse `RuntimeValue::contains_float()`
-    arguments because their source-synthesis path can't spell
-    `Infinity` / `NaN` / `-0.0` as surface literals; the recursive
-    predicate also catches `[NaN]` / `(Infinity)` nested inside
-    list/tuple/record. `RuntimeLocals::int_view` explicitly skips
-    Float so `IntEvaluator` never sees a Float-shaped local.
-    `runtime_unit.rs` and `runtime_decl.rs` extend the bare-literal
-    no-op statement filter (`{Var, IntLit, StringLit, BoolLit}`) to
-    include `FloatLit`. Tests: `runtime_value::tests` (5 IEEE / format
-    / contains_float), `runtime_apply::tests` (8 dispatch tests
-    including Float==Int False, NaN ordering, ÷0), `lower::tests` (5
-    end-to-end native-fallback Float emit/output covering arithmetic,
-    ÷0 → Infinity, NaN, `-0.0 == 0.0`, NaN ordering),
-    `gen_lower::tests::supports_general_lower_module_returns_reason_for_pure_float_arithmetic_main`
-    (locks the lifted gate boundary). `cargo nextest run -p goby-wasm`:
-    848 passed, 12 skipped.
-  - **E5-D** complete (`7823bdd`, `2fbdfab`): parity acceptance +
-    user-facing example. `examples/float_basics.gb` ships the
-    documented Float surface (literal / `+ - * /` / comparisons /
-    ±Infinity / NaN / ±0) wired into the `typechecks_examples`,
-    `idempotent_float_basics`, and a `float_basics_example_executes`
-    end-to-end test that pins the exact stdout. Five GL/native
-    parity table tests cover the distinct `format_float` branches
-    (finite arithmetic, +Infinity, NaN, sign-bit-preserving "-0.0",
-    signed-zero equality). See `doc/PLAN.md` §4.4 for the parity
-    test design and helper mechanics. `cargo nextest run -p goby-wasm`:
-    854 passed, 12 skipped.
-- **E6** complete (`ae37503`, `72cc658`, `08b6104`): follow-up sweep.
-  - `ae37503` ran `cargo fmt --all` on the workspace to clear
-    pre-existing fmt drift so the cleanup commit's diff would only
-    show intended comment edits.
-  - `72cc658` rewrote 25 Float-derived roadmap-label sites
-    (`Track Float`, `Phase E1..E5`, `E5-A/B/C/D`) in `goby-core` and
-    `goby-wasm` code comments and test docstrings into technical
-    descriptions per `doc/PLAN.md` §2 plan-label hygiene policy.
-    Comment-only change, no behavior delta.
-  - `08b6104` added two LSP hover smoke tests covering `Float`
-    top-level annotations (`SymbolIndex` rendering path) and
-    inferred local bindings (`infer_local_bindings` + `check_expr`
-    path), bringing `goby-lsp` test count from 54 to 56.
-  - formatter idempotence: `idempotent_float_basics` already pins
-    `examples/float_basics.gb`; no other Float-shaped formatter
-    case needed pinning, so coverage was not broadened.
-  - grapheme-track roadmap-label residue (`e4_` / `e5_` / `e6_`
-    test prefixes and related comment-internal `E4` / `E5` / `E6`
-    references in `crates/goby-wasm/src/lib.rs`,
-    `crates/goby-wasm/src/compile_tests.rs`, and
-    `crates/goby-wasm/tests/wasm_exports_and_smoke.rs`) is
-    intentionally out of Track Float scope; triaged separately
-    under "Parallel known-red cleanup" below.
-
-**Track PC** (`doc/PLAN.md` §4.6) remains queued — design exploration is
-in progress in `tmp/pc.md` (`Parser` shape, effect protocol,
-backtracking, error type). PC-2 is still gated on §3.3 multi-shot /
-branch-local state.
+**No active implementation track.** Track PC is the next primary target
+once the user finishes the design review in `tmp/pc.md`.
 
 ## Known Red / Green State
 
@@ -183,15 +19,13 @@ Green:
 
 Red / ignored:
 
-- Pre-existing `#[ignore]`d perceus / compile_tests entries from M10
-  closure (see `doc/PLAN.md` §4.2).
+- Pre-existing `#[ignore]`d perceus / compile_tests entries (see
+  `doc/BUGS.md` for any per-case detail).
 - `goby-wasm` lib test `tests::fold_m5_string_accumulator` is a known
   CPU-bound hang on this checkout; track it via `doc/BUGS.md` and skip
   it in nextest runs.
 
 ## Next Step
-
-Track Float is fully closed. Pick up one of the queued tracks below.
 
 **Primary (queued, blocked on user design review):**
 
@@ -209,9 +43,9 @@ Track Float is fully closed. Pick up one of the queued tracks below.
 
 **Other queued tracks (lower priority):**
 
-- Track OOB (out-of-bounds handling polish).
-- Track D D5/D6 follow-ups (`goby lint`).
-- Track RR-6 limit tuning.
+- Track OOB (out-of-bounds handling polish; `doc/PLAN.md` §4.5).
+- Track D D5/D6 follow-ups (`goby lint`; `doc/PLAN.md` §4.1).
+- Track RR-6 limit tuning (`doc/PLAN.md` §4.5 RR).
 
 **Parallel known-red cleanup (lowest priority):**
 
@@ -219,38 +53,11 @@ Track Float is fully closed. Pick up one of the queued tracks below.
   `e6_` test prefixes and comment-internal `E4` / `E5` / `E6`
   references survive in `crates/goby-wasm/src/lib.rs`,
   `crates/goby-wasm/src/compile_tests.rs`, and
-  `crates/goby-wasm/tests/wasm_exports_and_smoke.rs`. They predate
-  Track Float and were intentionally excluded from Track Float E6's
-  scope. Rewrite per `doc/PLAN.md` §2 (locked 2026-03-25) when a
-  grapheme-related track is opened or as a standalone hygiene PR.
+  `crates/goby-wasm/tests/wasm_exports_and_smoke.rs`. Rewrite per
+  `doc/PLAN.md` §2 (locked 2026-03-25) when a grapheme-related track
+  is opened or as a standalone hygiene PR.
 - Pre-existing typecheck regressions in 8 example files
   (`case_arm_block.gb`, `function_reference.gb`, `list_set.gb`,
   `list_spread.gb`, `mut.gb`, `string_graphemes.gb`, `tco.gb`,
   `to_integer.gb`) reproduce on the `975863e` baseline. Triage
   separately with a `doc/BUGS.md` entry per case.
-
-## Recently Closed (Reference Only)
-
-- **Effect row polymorphism** (Track EP, 2026-05-07): row-polymorphic
-  callback signatures (`can ..., {e}`) propagate effects through stdlib
-  HOFs and user-defined HOFs; closed callback rows reject effectful
-  lambdas; diagnostic wording distinguishes "missing effect in closed
-  row" from "row variable cannot be unified" (LANGUAGE_SPEC §5).
-  Implementation pieces: row representation (`unify_effect_rows`,
-  `apply_row_substitution`), lambda inference
-  (`infer_expr_effects`, `infer_curried_lambda_body_effects`,
-  `infer_call_effects_at_site`), and the decoupling of `decl_can_ops`
-  from `covered_ops` so callback effects surface to the row variable
-  instead of being swallowed by an outer `can`. 13 `ep3_*` acceptance
-  tests in `crates/goby-core/src/typecheck.rs` plus the EP-2 acceptance
-  set pin the contract.
-- **Track E (Perceus)**: M0–M11 complete. Durable design in
-  `doc/PLAN.md` §4.2; runtime-allocator unification, `LetMut`-aware
-  `return_ownership_value`, and the 138×138 stdin acceptance test all
-  shipped.
-- **Generic TCO (RR-5)** and **Sequence-backed `List`**: published
-  contracts in `doc/LANGUAGE_SPEC.md`.
-- **WB-4C lexical handler metadata**: shared IR carries `EffectOpId`;
-  handler-clause lowering and legality analysis use `effect + op`
-  identity when available. Lexical target records for `WithHandler` /
-  `PerformEffect` remain a follow-up slice.

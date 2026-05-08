@@ -87,11 +87,11 @@ syntax/semantics.
     `Float, Float -> Bool` comparisons (`+`, `-`, `*`, `/`, `==`, `<`,
     `<=`, `>`, `>=`), and runtime printing through `format_float` (the
     Haskell-`show` rendering above) all ship on both lowering routes:
-    GeneralLowered Wasm (E5-A literal, E5-B arithmetic / comparison via
-    `IrBinOp::Float*` and `f64.<op>` emission, with `Float` values
-    represented at runtime as heap-boxed `f64` behind `TAG_FLOAT`) and
-    the static-output / native fallback path (E5-C
-    `NativeValue::Float(f64)` + `IrBinOp::Float*` arms in
+    the GeneralLowered Wasm path (Float literals and arithmetic /
+    comparison via `IrBinOp::Float*` plus `f64.<op>` emission, with
+    `Float` values represented at runtime as heap-boxed `f64` behind
+    `TAG_FLOAT`) and the static-output / native fallback path
+    (`NativeValue::Float(f64)` + `IrBinOp::Float*` arms in
     `lower.rs::eval_value`, plus `RuntimeValue::Float(f64)` in the
     interpreter family). Both paths share `gen_lower::value::format_float`
     so output is byte-identical. Equality follows IEEE 754
@@ -99,7 +99,7 @@ syntax/semantics.
     Float dispatcher in `ir_lower` covers parameter-rooted Float
     arithmetic; `let x = a + b` style locals and call-return Float
     values still lower to integer ops at IR time pending a typed
-    resolved IR (tracked in `doc/PLAN.md` §4.4).
+    resolved IR.
 - `List` contract (published M8):
   - `List` is Goby's default ordered collection surface.
   - Runtime representation is intentionally not specified as a linked-list
