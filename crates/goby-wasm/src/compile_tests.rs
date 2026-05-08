@@ -419,6 +419,148 @@ main =
     assert_eq!(run_general_lowered_float_program(source), "True");
 }
 
+/// Compile, classify, and run a Float program that must take the
+/// native-fallback (NotRuntimeIo) path. Pure-print mains with no
+/// helpers / handlers / lambdas qualify.
+fn run_native_fallback_float_program(source: &str) -> String {
+    let module = parse_module(source).expect("source should parse");
+    assert_eq!(
+        runtime_io_execution_kind(&module).expect("classification should succeed"),
+        crate::RuntimeIoExecutionKind::NotRuntimeIo,
+        "native-fallback Float test must hit NotRuntimeIo \
+         (the native fallback emitter owns this shape)"
+    );
+    let wasm = compile_module(&module).expect("Float program should compile");
+    assert_valid_wasm_module(&wasm);
+    crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+        .expect("compiled Wasm should execute Float program")
+}
+
+/// Drive a single Float scenario through both lowering routes and
+/// assert byte-identical output. The GL source must include a
+/// non-main user decl (to force `GeneralLowered` classification and
+/// reach `IrBinOp::Float*` Wasm emission); the native source is a
+/// pure-print main (NotRuntimeIo, native fallback emit). Both share
+/// `gen_lower::value::format_float` so a regression in either path's
+/// rendering surfaces as a parity mismatch.
+fn assert_float_parity(expected: &str, gl_source: &str, native_source: &str) {
+    let gl_output = run_general_lowered_float_program(gl_source);
+    let native_output = run_native_fallback_float_program(native_source);
+    // Direct route-vs-route equality first: surfaces parity drift
+    // even when `expected` was the value that drifted.
+    assert_eq!(
+        gl_output, native_output,
+        "GL route and native-fallback route disagree on Float rendering"
+    );
+    assert_eq!(gl_output, expected, "GL route output mismatch");
+    assert_eq!(native_output, expected, "native-fallback route output mismatch");
+}
+
+#[test]
+fn float_parity_finite_arithmetic_renders_identically_on_both_routes() {
+    assert_float_parity(
+        "4.0",
+        "\
+my_add : Float -> Float -> Float
+my_add a b = a + b
+
+main : Unit -> Unit can Print
+main =
+  result = my_add 1.5 2.5
+  print \"${result}\"
+",
+        "\
+main : Unit -> Unit can Print
+main = print \"${1.5 + 2.5}\"
+",
+    );
+}
+
+#[test]
+fn float_parity_division_by_zero_renders_infinity_on_both_routes() {
+    assert_float_parity(
+        "Infinity",
+        "\
+my_div : Float -> Float -> Float
+my_div a b = a / b
+
+main : Unit -> Unit can Print
+main =
+  result = my_div 1.0 0.0
+  print \"${result}\"
+",
+        "\
+main : Unit -> Unit can Print
+main = print \"${1.0 / 0.0}\"
+",
+    );
+}
+
+#[test]
+fn float_parity_nan_renders_identically_on_both_routes() {
+    assert_float_parity(
+        "NaN",
+        "\
+my_div : Float -> Float -> Float
+my_div a b = a / b
+
+main : Unit -> Unit can Print
+main =
+  result = my_div 0.0 0.0
+  print \"${result}\"
+",
+        "\
+main : Unit -> Unit can Print
+main = print \"${0.0 / 0.0}\"
+",
+    );
+}
+
+#[test]
+fn float_parity_negative_zero_renders_with_sign_bit_on_both_routes() {
+    // Pins signed-zero rendering itself (distinct format_float branch
+    // and bit-preservation through TAG_FLOAT). The Eq parity case
+    // proves -0.0 == 0.0 returns Bool True; this case proves the
+    // sign bit survives through a Float arithmetic round-trip and
+    // both routes still print "-0.0".
+    assert_float_parity(
+        "-0.0",
+        "\
+my_mul : Float -> Float -> Float
+my_mul a b = a * b
+
+main : Unit -> Unit can Print
+main =
+  result = my_mul -1.0 0.0
+  print \"${result}\"
+",
+        "\
+main : Unit -> Unit can Print
+main = print \"${-1.0 * 0.0}\"
+",
+    );
+}
+
+#[test]
+fn float_parity_signed_zero_equality_renders_true_on_both_routes() {
+    assert_float_parity(
+        "True",
+        "\
+my_eq : Float -> Float -> Bool
+my_eq a b = a == b
+
+main : Unit -> Unit can Print
+main =
+  result = my_eq -0.0 0.0
+  print \"${result}\"
+",
+        "\
+main : Unit -> Unit can Print
+main = print \"${-0.0 == 0.0}\"
+",
+    );
+}
+
 #[test]
 fn float_basics_example_executes_with_expected_output() {
     // examples/float_basics.gb compiles and runs end-to-end,
