@@ -853,19 +853,33 @@ Execution phases (revised after Codex Pass1 review):
      (`compile_tests::compile_module_rejects_var_rooted_float_arithmetic_until_phase_e5b`)
      was retired in E5-B itself when var-rooted Float arithmetic
      became executable, so removal is no longer pending.
-6. **Phase E6: roadmap-label hygiene + LSP hover + final docs sync**.
-   - rewrite the `Track Float` / `E5-*` mentions left in code
-     comments and test docstrings during E5-A through E5-D so they
-     describe the technical purpose directly instead of referencing
-     transient milestone IDs, per the locked-in policy in §2 of this
-     document,
-   - confirm LSP hover renders `Float` annotations / inferred types,
-   - broaden formatter idempotence coverage if other Float-shaped
-     formatter cases beyond `examples/float_basics.gb` need pinning,
-   - finalize `doc/STATE.md` Track Float status; spec was already
-     locked in E1 and the implementation-status paragraph is kept
-     current as E5-* slices land,
-   - run `goby-invariants` before commit.
+6. **Phase E6 complete** (`ae37503`, `72cc658`, `08b6104`):
+     follow-up sweep.
+   - `ae37503` brought the workspace back to `cargo fmt --all`-clean
+     so the cleanup commit's diff would not be polluted with
+     pre-existing formatting drift.
+   - `72cc658` rewrote 25 Float-derived roadmap-label sites (`Track
+     Float`, `Phase E1..E5`, `E5-A/B/C/D`) across `goby-core` and
+     `goby-wasm` into technical descriptions per §2 plan-label policy.
+     Comment-only change, no behavior delta.
+   - `08b6104` added two LSP hover smoke tests covering `Float`
+     top-level annotations (`SymbolIndex` path) and inferred local
+     bindings (`infer_local_bindings` + `check_expr` path).
+   - formatter idempotence: `idempotent_float_basics` already pins
+     `examples/float_basics.gb`; no additional Float-shaped formatter
+     case needed pinning, so coverage was not broadened.
+   - grapheme-track roadmap-label residue (`e4_` / `e5_` / `e6_` test
+     prefixes and related comments in `goby-wasm/src/lib.rs`,
+     `compile_tests.rs`, `tests/wasm_exports_and_smoke.rs`) is
+     intentionally out of Track Float scope; triaged separately as a
+     "parallel known-red cleanup" entry in `doc/STATE.md`.
+   - End-of-track green state (verified at E6 commit time, includes
+     interim wasm test additions from `ad45613` / `2fb1189` since the
+     E5-D snapshot):
+     `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`
+     → 856 passed / 12 skipped;
+     `cargo test -p goby-core --lib` → 917 passed / 2 ignored;
+     `cargo test -p goby-lsp` → 56 passed (54 → 56 from this phase).
 
 Acceptance criteria (track-level):
 

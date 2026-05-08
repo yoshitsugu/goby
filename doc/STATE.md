@@ -1,14 +1,15 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-08 (Track Float E1–E5 implementation complete
-incl. E5-D parity acceptance + `examples/float_basics.gb`; only the
-E6 follow-up sweep — roadmap-label hygiene cleanup, LSP hover,
-formatter coverage broadening, final docs sync — remains. Track PC
-remains queued behind user design review.)
+Last updated: 2026-05-08 (Track Float complete — E1〜E6 fully shipped,
+incl. roadmap-label hygiene cleanup, LSP hover smoke tests, fmt-clean
+baseline, and PLAN/STATE sync. Track PC remains queued behind user
+design review.)
 
 ## Current Focus
 
-**Track Float: `Float` / Wasm `f64` Support** (`doc/PLAN.md` §4.4).
+**No active implementation track.** Track Float is closed. Next
+actionable work is one of the queued tracks under "Next Step" below
+(Track PC requires user design review on `tmp/pc.md`).
 
 Locked surface (LANGUAGE_SPEC §3): literal grammar `<int>.<frac>` only
 (`1.0`, `0.5`, `-3.25`); `Float` is a distinct primitive with no implicit
@@ -141,11 +142,29 @@ Phase progress:
     signed-zero equality). See `doc/PLAN.md` §4.4 for the parity
     test design and helper mechanics. `cargo nextest run -p goby-wasm`:
     854 passed, 12 skipped.
-- **E6** queued: roadmap-label hygiene cleanup for E5-A/B/C/D code
-  comments and test docstrings (locked-in policy in `doc/PLAN.md`
-  §2), LSP hover for `Float` annotations / inferred types, formatter
-  idempotence broadening if other Float-shaped cases need pinning,
-  final PLAN + STATE sync.
+- **E6** complete (`ae37503`, `72cc658`, `08b6104`): follow-up sweep.
+  - `ae37503` ran `cargo fmt --all` on the workspace to clear
+    pre-existing fmt drift so the cleanup commit's diff would only
+    show intended comment edits.
+  - `72cc658` rewrote 25 Float-derived roadmap-label sites
+    (`Track Float`, `Phase E1..E5`, `E5-A/B/C/D`) in `goby-core` and
+    `goby-wasm` code comments and test docstrings into technical
+    descriptions per `doc/PLAN.md` §2 plan-label hygiene policy.
+    Comment-only change, no behavior delta.
+  - `08b6104` added two LSP hover smoke tests covering `Float`
+    top-level annotations (`SymbolIndex` rendering path) and
+    inferred local bindings (`infer_local_bindings` + `check_expr`
+    path), bringing `goby-lsp` test count from 54 to 56.
+  - formatter idempotence: `idempotent_float_basics` already pins
+    `examples/float_basics.gb`; no other Float-shaped formatter
+    case needed pinning, so coverage was not broadened.
+  - grapheme-track roadmap-label residue (`e4_` / `e5_` / `e6_`
+    test prefixes and related comment-internal `E4` / `E5` / `E6`
+    references in `crates/goby-wasm/src/lib.rs`,
+    `crates/goby-wasm/src/compile_tests.rs`, and
+    `crates/goby-wasm/tests/wasm_exports_and_smoke.rs`) is
+    intentionally out of Track Float scope; triaged separately
+    under "Parallel known-red cleanup" below.
 
 **Track PC** (`doc/PLAN.md` §4.6) remains queued — design exploration is
 in progress in `tmp/pc.md` (`Parser` shape, effect protocol,
@@ -158,8 +177,9 @@ Green:
 
 - `cargo test -p goby-core --lib`: 917 passed / 2 ignored.
 - `cargo check --workspace`: warning-free.
+- `cargo test -p goby-lsp`: 56 passed / 0 failed.
 - `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`:
-  the regular wasm suite passes (854 / 12 skipped).
+  the regular wasm suite passes (856 / 12 skipped).
 
 Red / ignored:
 
@@ -171,32 +191,19 @@ Red / ignored:
 
 ## Next Step
 
-**Primary (Track Float E6 — final follow-up sweep):**
+Track Float is fully closed. Pick up one of the queued tracks below.
 
-E5-A through E5-D shipped the full Float implementation surface
-(GeneralLowered Wasm path, fallback runtime, gate-lift, parity
-acceptance, user-facing example). E6 is a non-implementation sweep
-that polishes what E5-* left behind:
+**Primary (queued, blocked on user design review):**
 
-1. Roadmap-label hygiene cleanup: prior E5-A/B/C/D commits left
-   `Track Float` / `E5-*` mentions in code comments and test
-   docstrings, in violation of the `doc/PLAN.md` §2 policy locked
-   2026-03-25. Rewrite to technical descriptions ("after Float
-   support landed in the native fallback...", etc.).
-2. Add an LSP hover smoke test (or equivalent) confirming `Float`
-   annotations and inferred Float types render correctly in the
-   editor surface.
-3. Broaden formatter idempotence coverage if other Float-shaped
-   inputs exist beyond `examples/float_basics.gb` (the example
-   itself is already covered by `formatter::tests::idempotent_float_basics`).
-4. Final `doc/STATE.md` / `doc/PLAN.md` sync once the cleanup
-   lands.
+- **Track PC: Parser combinator on algebraic effects**
+  (`doc/PLAN.md` §4.6). PC-0 design lock is the immediate next
+  action once the user finishes reviewing `tmp/pc.md`. After that,
+  motivating fixtures (`parser_number`, `parser_arith`,
+  `parser_json_lite`) land as failing examples. PC-2 remains gated
+  on §3.3 multi-shot / branch-local state.
 
-**Parallel (queued, parallelizable):**
+**PC blockers (orthogonal to PC-0):**
 
-- **PC-0 design lock** (`doc/PLAN.md` §4.6): once the user finishes the
-  design review in `tmp/pc.md`, motivating fixtures (`parser_number`,
-  `parser_arith`, `parser_json_lite`) land as failing examples.
 - **§3.3 multi-shot classification + branch-local state surface**: the
   only remaining hard PC-2 blocker.
 
@@ -208,6 +215,14 @@ that polishes what E5-* left behind:
 
 **Parallel known-red cleanup (lowest priority):**
 
+- **Grapheme-track roadmap-label hygiene**: residual `e4_` / `e5_` /
+  `e6_` test prefixes and comment-internal `E4` / `E5` / `E6`
+  references survive in `crates/goby-wasm/src/lib.rs`,
+  `crates/goby-wasm/src/compile_tests.rs`, and
+  `crates/goby-wasm/tests/wasm_exports_and_smoke.rs`. They predate
+  Track Float and were intentionally excluded from Track Float E6's
+  scope. Rewrite per `doc/PLAN.md` §2 (locked 2026-03-25) when a
+  grapheme-related track is opened or as a standalone hygiene PR.
 - Pre-existing typecheck regressions in 8 example files
   (`case_arm_block.gb`, `function_reference.gb`, `list_set.gb`,
   `list_spread.gb`, `mut.gb`, `string_graphemes.gb`, `tco.gb`,
