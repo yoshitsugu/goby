@@ -158,6 +158,7 @@ impl<'m> RuntimeOutputResolver<'m> {
 
         match expr {
             Expr::IntLit(n) => Out::Done(RuntimeValue::Int(*n)),
+            Expr::FloatLit(bits) => Out::Done(RuntimeValue::Float(bits.to_f64())),
             Expr::BoolLit(b) => Out::Done(RuntimeValue::Bool(*b)),
             Expr::StringLit(s) => Out::Done(RuntimeValue::String(s.clone())),
             Expr::Var { name, .. } => match locals.get(name) {

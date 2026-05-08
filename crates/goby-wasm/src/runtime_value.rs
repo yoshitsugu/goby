@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::InlineHandlerValue;
+use crate::gen_lower::value::format_float;
 use crate::runtime_eval::IntCallable;
 
 #[derive(Default, Clone)]
@@ -13,6 +14,9 @@ pub(crate) struct RuntimeLocals {
 
 impl RuntimeLocals {
     /// Return a filtered view of Int-typed bindings for the IntEvaluator.
+    /// Float bindings are intentionally skipped — the IntEvaluator only
+    /// understands i64 payloads, so leaking a Float here would silently
+    /// reinterpret bits as Int.
     pub(crate) fn int_view(&self) -> HashMap<String, i64> {
         let mut result = HashMap::new();
         for (name, value) in &self.values {
@@ -125,6 +129,9 @@ pub(crate) fn runtime_value_eq(left: &RuntimeValue, right: &RuntimeValue) -> boo
     match (left, right) {
         (RuntimeValue::String(a), RuntimeValue::String(b)) => a == b,
         (RuntimeValue::Int(a), RuntimeValue::Int(b)) => a == b,
+        // IEEE 754: NaN != NaN, -0.0 == 0.0. Single source of truth for
+        // nested List/Tuple/Record comparisons containing Float.
+        (RuntimeValue::Float(a), RuntimeValue::Float(b)) => a == b,
         (RuntimeValue::Unit, RuntimeValue::Unit) => true,
         (RuntimeValue::Bool(a), RuntimeValue::Bool(b)) => a == b,
         (RuntimeValue::Tuple(a), RuntimeValue::Tuple(b)) => {
@@ -169,6 +176,7 @@ pub(crate) enum RootedAssignResult {
 pub(crate) enum RuntimeValue {
     String(String),
     Int(i64),
+    Float(f64),
     Unit,
     Bool(bool),
     Tuple(Vec<RuntimeValue>),
@@ -210,6 +218,25 @@ impl RuntimeValue {
         self.format_text(false)
     }
 
+    /// Returns true if this value contains a `Float` anywhere (including
+    /// nested inside `List` / `Tuple` / `Record`). Used by source-synthesis
+    /// call sites (`apply_pipeline`, `execute_unit_call_ast`) to refuse
+    /// values that would produce unparseable `Infinity` / `NaN` / `-0.0`
+    /// text via `to_expression_text`.
+    pub(crate) fn contains_float(&self) -> bool {
+        match self {
+            Self::Float(_) => true,
+            Self::Tuple(items) | Self::List(items) => items.iter().any(Self::contains_float),
+            Self::Record { fields, .. } => fields.values().any(Self::contains_float),
+            Self::String(_)
+            | Self::Int(_)
+            | Self::Unit
+            | Self::Bool(_)
+            | Self::Handler(_)
+            | Self::Callable(_) => false,
+        }
+    }
+
     /// Format value as a Goby expression literal (strings are double-quoted).
     pub(crate) fn to_expression_text(&self) -> String {
         self.format_text(true)
@@ -225,6 +252,7 @@ impl RuntimeValue {
                 }
             }
             Self::Int(value) => value.to_string(),
+            Self::Float(value) => format_float(*value),
             Self::Unit => "Unit".to_string(),
             Self::Bool(b) => if *b { "True" } else { "False" }.to_string(),
             Self::Tuple(items) => {
@@ -406,6 +434,112 @@ mod tests {
                 .to_expression_text(),
             "[[1, 2], [3, 30]]"
         );
+    }
+
+    #[test]
+    fn runtime_value_float_equality_follows_ieee_754() {
+        // NaN != NaN
+        let nan = RuntimeValue::Float(f64::NAN);
+        let nan2 = RuntimeValue::Float(f64::NAN);
+        assert!(!runtime_value_eq(&nan, &nan2));
+
+        // -0.0 == 0.0
+        let neg_zero = RuntimeValue::Float(-0.0);
+        let pos_zero = RuntimeValue::Float(0.0);
+        assert!(runtime_value_eq(&neg_zero, &pos_zero));
+
+        // 1.0 == 1.0
+        let one_a = RuntimeValue::Float(1.0);
+        let one_b = RuntimeValue::Float(1.0);
+        assert!(runtime_value_eq(&one_a, &one_b));
+
+        // Int and Float never compare equal even when value coincides.
+        let int_one = RuntimeValue::Int(1);
+        assert!(!runtime_value_eq(&one_a, &int_one));
+    }
+
+    #[test]
+    fn runtime_value_nested_float_equality_follows_ieee_754() {
+        let nan_list_a = RuntimeValue::List(vec![RuntimeValue::Float(f64::NAN)]);
+        let nan_list_b = RuntimeValue::List(vec![RuntimeValue::Float(f64::NAN)]);
+        assert!(!runtime_value_eq(&nan_list_a, &nan_list_b));
+
+        let mut neg_zero_record_fields = HashMap::new();
+        neg_zero_record_fields.insert("f".to_string(), RuntimeValue::Float(-0.0));
+        let mut pos_zero_record_fields = HashMap::new();
+        pos_zero_record_fields.insert("f".to_string(), RuntimeValue::Float(0.0));
+        let neg_zero_record = RuntimeValue::Record {
+            constructor: "Box".to_string(),
+            fields: neg_zero_record_fields,
+        };
+        let pos_zero_record = RuntimeValue::Record {
+            constructor: "Box".to_string(),
+            fields: pos_zero_record_fields,
+        };
+        assert!(runtime_value_eq(&neg_zero_record, &pos_zero_record));
+    }
+
+    #[test]
+    fn runtime_value_float_format_matches_format_float() {
+        // format_text must match gen_lower::value::format_float for parity
+        // with the Wasm host formatter (`wasm_exec::format_tagged_value`).
+        assert_eq!(RuntimeValue::Float(1.0).to_output_text(), "1.0");
+        assert_eq!(RuntimeValue::Float(-3.25).to_output_text(), "-3.25");
+        assert_eq!(RuntimeValue::Float(0.0).to_output_text(), "0.0");
+        assert_eq!(RuntimeValue::Float(-0.0).to_output_text(), "-0.0");
+        assert_eq!(RuntimeValue::Float(f64::NAN).to_output_text(), "NaN");
+        assert_eq!(
+            RuntimeValue::Float(f64::INFINITY).to_output_text(),
+            "Infinity"
+        );
+        assert_eq!(
+            RuntimeValue::Float(f64::NEG_INFINITY).to_output_text(),
+            "-Infinity"
+        );
+    }
+
+    #[test]
+    fn runtime_value_contains_float_recurses_into_list_tuple_record() {
+        assert!(RuntimeValue::Float(1.0).contains_float());
+        assert!(!RuntimeValue::Int(1).contains_float());
+        assert!(!RuntimeValue::String("1.0".into()).contains_float());
+
+        assert!(
+            RuntimeValue::List(vec![RuntimeValue::Int(1), RuntimeValue::Float(f64::NAN)])
+                .contains_float()
+        );
+        assert!(
+            !RuntimeValue::List(vec![RuntimeValue::Int(1), RuntimeValue::Int(2)])
+                .contains_float()
+        );
+
+        assert!(RuntimeValue::Tuple(vec![RuntimeValue::Float(0.0)]).contains_float());
+
+        let mut fields = HashMap::new();
+        fields.insert("inner".to_string(), RuntimeValue::Float(-3.25));
+        assert!(
+            RuntimeValue::Record {
+                constructor: "Box".to_string(),
+                fields,
+            }
+            .contains_float()
+        );
+
+        // Nested list-in-list also recurses.
+        assert!(
+            RuntimeValue::List(vec![RuntimeValue::List(vec![RuntimeValue::Float(2.0)])])
+                .contains_float()
+        );
+    }
+
+    #[test]
+    fn runtime_locals_int_view_skips_float_bindings() {
+        let mut locals = RuntimeLocals::default();
+        locals.store("n", RuntimeValue::Int(7));
+        locals.store("f", RuntimeValue::Float(2.5));
+        let view = locals.int_view();
+        assert_eq!(view.get("n"), Some(&7));
+        assert_eq!(view.get("f"), None);
     }
 
     #[test]

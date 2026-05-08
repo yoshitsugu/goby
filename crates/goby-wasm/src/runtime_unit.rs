@@ -286,8 +286,11 @@ impl<'m> RuntimeOutputResolver<'m> {
             return self.execute_unit_call_out(&repr, locals, callables, evaluators);
         }
 
-        if let Expr::Var { name: _, .. } | Expr::IntLit(_) | Expr::StringLit(_) | Expr::BoolLit(_) =
-            expr
+        if let Expr::Var { name: _, .. }
+        | Expr::IntLit(_)
+        | Expr::FloatLit(_)
+        | Expr::StringLit(_)
+        | Expr::BoolLit(_) = expr
         {
             return Out::Done(());
         }

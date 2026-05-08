@@ -152,6 +152,15 @@ impl<'m> RuntimeOutputResolver<'m> {
                 Out::Suspend(_) | Out::Escape(_) | Out::Err(_) => None,
             }
         } else {
+            // Float values cannot be re-synthesized as Goby source:
+            // NaN / Infinity / -Infinity / -0.0 have no surface literal.
+            // Refuse top-level Float and any value that contains Float
+            // nested inside List / Tuple / Record — `to_expression_text`
+            // recurses, so `[NaN]` / `(Infinity)` would otherwise slip
+            // through. Removed entirely once source synthesis goes away.
+            if function.parameter.is_some() && arg_val.contains_float() {
+                return None;
+            }
             let call_expr = if function.parameter.is_some() {
                 format!("{} {}", fn_name, arg_val.to_expression_text())
             } else {

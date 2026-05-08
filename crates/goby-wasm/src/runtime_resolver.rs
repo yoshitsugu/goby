@@ -375,6 +375,16 @@ impl<'m> RuntimeOutputResolver<'m> {
         if callee == BUILTIN_PRINT {
             return None;
         }
+        // Float values cannot be re-synthesized as Goby source: NaN /
+        // Infinity / -Infinity / -0.0 have no surface literal form.
+        // Refuse top-level Float and any value that contains Float
+        // nested inside List / Tuple / Record — `to_expression_text`
+        // recurses, so `[NaN]` / `(Infinity)` would otherwise slip
+        // through. Track Float E5-D / future work removes the
+        // source-synthesis path entirely.
+        if value.contains_float() {
+            return None;
+        }
         // NOTE: delegates to the string-based path which uses its own depth
         // counter (IntEvaluator::depth), so _depth is not propagated into that
         // chain. This is a known limitation until the string path is removed.
@@ -761,10 +771,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                 self.eval_expr_ast(expr, locals, callables, evaluators, depth)
             }
             Expr::IntLit(n) => Some(RuntimeValue::Int(*n)),
-            // Phase E2 stub: RuntimeValue does not carry Float yet (Phase E5
-            // adds it). Returning None defers the question to the regular
-            // evaluator path, which still cannot produce a Float.
-            Expr::FloatLit(_) => None,
+            Expr::FloatLit(bits) => Some(RuntimeValue::Float(bits.to_f64())),
             Expr::BoolLit(b) => Some(RuntimeValue::Bool(*b)),
             Expr::StringLit(s) => Some(RuntimeValue::String(s.clone())),
             Expr::InterpolatedString(_) => {

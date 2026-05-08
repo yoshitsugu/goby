@@ -9,6 +9,9 @@ impl<'m> RuntimeOutputResolver<'m> {
         match value {
             RuntimeValue::String(text) => Some(Expr::StringLit(text.clone())),
             RuntimeValue::Int(number) => Some(Expr::IntLit(*number)),
+            RuntimeValue::Float(value) => {
+                Some(Expr::FloatLit(goby_core::ast::FloatBits::from_f64(*value)))
+            }
             RuntimeValue::Unit => Some(Expr::unit_value()),
             RuntimeValue::Bool(value) => Some(Expr::BoolLit(*value)),
             RuntimeValue::Tuple(items) => Some(Expr::TupleLit(
@@ -222,6 +225,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     Stmt::Expr(
                         Expr::Var { name: _, .. }
                             | Expr::IntLit(_)
+                            | Expr::FloatLit(_)
                             | Expr::StringLit(_)
                             | Expr::BoolLit(_),
                         _
@@ -299,6 +303,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     Stmt::Expr(
                         Expr::Var { name: _, .. }
                             | Expr::IntLit(_)
+                            | Expr::FloatLit(_)
                             | Expr::StringLit(_)
                             | Expr::BoolLit(_),
                         _
@@ -398,6 +403,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     Stmt::Expr(
                         Expr::Var { name: _, .. }
                             | Expr::IntLit(_)
+                            | Expr::FloatLit(_)
                             | Expr::StringLit(_)
                             | Expr::BoolLit(_),
                         _
@@ -459,6 +465,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     Stmt::Expr(
                         Expr::Var { name: _, .. }
                             | Expr::IntLit(_)
+                            | Expr::FloatLit(_)
                             | Expr::StringLit(_)
                             | Expr::BoolLit(_),
                         _
@@ -523,6 +530,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     Stmt::Expr(
                         Expr::Var { name: _, .. }
                             | Expr::IntLit(_)
+                            | Expr::FloatLit(_)
                             | Expr::StringLit(_)
                             | Expr::BoolLit(_),
                         _
@@ -579,6 +587,7 @@ impl<'m> RuntimeOutputResolver<'m> {
                     Stmt::Expr(
                         Expr::Var { name: _, .. }
                             | Expr::IntLit(_)
+                            | Expr::FloatLit(_)
                             | Expr::StringLit(_)
                             | Expr::BoolLit(_),
                         _
