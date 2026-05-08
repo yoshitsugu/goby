@@ -7,6 +7,7 @@ use crate::{
     CodegenError,
     backend::WasmProgramBuilder,
     effect_handler_legality::{HandlerLegalitySummary, analyze_module_handler_legality},
+    gen_lower::value::format_float,
     layout::MemoryLayout,
     planning::{
         DeclarationLoweringMode, EffectId, EffectOperationRef, LoweringPlan, LoweringStyle,
@@ -264,6 +265,7 @@ fn runtime_force_portable_fallback_override_enabled() -> bool {
 enum NativeValue {
     String(String),
     Int(i64),
+    Float(f64),
     Bool(bool),
     Unit,
     Callable(NativeCallable),
@@ -282,6 +284,7 @@ impl NativeValue {
         match self {
             Self::String(s) => s.clone(),
             Self::Int(n) => n.to_string(),
+            Self::Float(f) => format_float(*f),
             Self::Bool(true) => "True".to_string(),
             Self::Bool(false) => "False".to_string(),
             Self::Unit => String::new(),
@@ -393,11 +396,7 @@ fn eval_value(
     match value {
         ValueExpr::StrLit(s) => Some(NativeValue::String(s.clone())),
         ValueExpr::IntLit(n) => Some(NativeValue::Int(*n)),
-        // Phase E2 stub: NativeValue does not carry Float yet (Phase E5 adds
-        // it together with the rest of the runtime fallback). Return None
-        // so this fast path falls back to the regular lowered code, which
-        // still cannot produce a Float value until Phase E5.
-        ValueExpr::FloatLit(_) => None,
+        ValueExpr::FloatLit(bits) => Some(NativeValue::Float(bits.to_f64())),
         ValueExpr::BoolLit(b) => Some(NativeValue::Bool(*b)),
         ValueExpr::Unit => Some(NativeValue::Unit),
         ValueExpr::ListLit { .. }
@@ -476,6 +475,39 @@ fn eval_value(
                     Some(NativeValue::Bool(a <= b))
                 }
                 (IrBinOp::Ge, NativeValue::Int(a), NativeValue::Int(b)) => {
+                    Some(NativeValue::Bool(a >= b))
+                }
+                // Float branch — lower.rs sees IR (E5-B added FloatAdd /
+                // FloatSub / ... opcodes), so dispatch on the IR variant
+                // rather than re-using the integer Add / Sub arms.
+                // ÷0 follows IEEE 754 (±Infinity / NaN); NaN comparisons
+                // are False per f64 semantics; Eq follows IEEE numeric
+                // equality, not bit equality (NaN != NaN, -0.0 == 0.0).
+                (IrBinOp::FloatAdd, NativeValue::Float(a), NativeValue::Float(b)) => {
+                    Some(NativeValue::Float(a + b))
+                }
+                (IrBinOp::FloatSub, NativeValue::Float(a), NativeValue::Float(b)) => {
+                    Some(NativeValue::Float(a - b))
+                }
+                (IrBinOp::FloatMul, NativeValue::Float(a), NativeValue::Float(b)) => {
+                    Some(NativeValue::Float(a * b))
+                }
+                (IrBinOp::FloatDiv, NativeValue::Float(a), NativeValue::Float(b)) => {
+                    Some(NativeValue::Float(a / b))
+                }
+                (IrBinOp::FloatEq, NativeValue::Float(a), NativeValue::Float(b)) => {
+                    Some(NativeValue::Bool(a == b))
+                }
+                (IrBinOp::FloatLt, NativeValue::Float(a), NativeValue::Float(b)) => {
+                    Some(NativeValue::Bool(a < b))
+                }
+                (IrBinOp::FloatGt, NativeValue::Float(a), NativeValue::Float(b)) => {
+                    Some(NativeValue::Bool(a > b))
+                }
+                (IrBinOp::FloatLe, NativeValue::Float(a), NativeValue::Float(b)) => {
+                    Some(NativeValue::Bool(a <= b))
+                }
+                (IrBinOp::FloatGe, NativeValue::Float(a), NativeValue::Float(b)) => {
                     Some(NativeValue::Bool(a >= b))
                 }
                 _ => None,
@@ -653,8 +685,8 @@ mod tests {
 
     use super::{
         EffectExecutionMode, EffectModeFallbackReason, NativeLoweringResult, RuntimeProfile,
-        build_lowering_plan, build_typed_continuation_ir, select_effect_execution_mode_with_inputs,
-        try_emit_native_module_with_handoff,
+        build_lowering_plan, build_typed_continuation_ir, collect_phase2_output_text_from_ir,
+        select_effect_execution_mode_with_inputs, try_emit_native_module_with_handoff,
     };
 
     fn expected_compile_time_runtime_profile() -> RuntimeProfile {
@@ -700,6 +732,96 @@ main =
                 .iter()
                 .any(|entry| entry.declaration_name == "main"),
             "handoff should expose per-declaration lowering mode snapshot"
+        );
+    }
+
+    fn assert_native_outputs(source: &str, expected: &str) {
+        let module = parse_module(source).expect("source should parse");
+        let lowering_plan = build_lowering_plan(&module);
+        let actual = collect_phase2_output_text_from_ir(&module, &lowering_plan);
+        assert_eq!(
+            actual.as_deref(),
+            Some(expected),
+            "static-output text mismatch (source: {source:?})",
+        );
+        // Belt-and-suspenders: also verify the wasm module emit path
+        // accepts the program (Emitted, not NotLowered / Handoff).
+        let lowered =
+            try_emit_native_module_with_handoff(&module).expect("native lowering should not error");
+        assert!(
+            matches!(lowered, NativeLoweringResult::Emitted(_)),
+            "expected Emitted for {source:?}, got NotLowered or Handoff",
+        );
+    }
+
+    #[test]
+    fn native_lowerer_emits_float_arithmetic_program() {
+        // Float arithmetic on the static-output / native fallback path:
+        // NativeValue::Float carries the value, IrBinOp::FloatAdd
+        // dispatches, format_float renders for `print` — and the rendered
+        // text matches the spec form (`4.0`, not `4`).
+        assert_native_outputs(
+            r#"
+main : Unit -> Unit
+main =
+  print (1.5 + 2.5)
+"#,
+            "4.0",
+        );
+    }
+
+    #[test]
+    fn native_lowerer_emits_float_division_by_zero_program() {
+        // ÷0 → +Infinity rendered via format_float as "Infinity"
+        // (Haskell-show form per spec §3).
+        assert_native_outputs(
+            r#"
+main : Unit -> Unit
+main =
+  print (1.0 / 0.0)
+"#,
+            "Infinity",
+        );
+    }
+
+    #[test]
+    fn native_lowerer_emits_float_nan_program() {
+        // 0.0 / 0.0 → NaN rendered as the literal "NaN".
+        assert_native_outputs(
+            r#"
+main : Unit -> Unit
+main =
+  print (0.0 / 0.0)
+"#,
+            "NaN",
+        );
+    }
+
+    #[test]
+    fn native_lowerer_emits_float_comparison_program() {
+        // IrBinOp::FloatEq: -0.0 == 0.0 is True (IEEE numeric equality).
+        // Locks the Float comparison surface in the static-output path.
+        assert_native_outputs(
+            r#"
+main : Unit -> Unit
+main =
+  print (-0.0 == 0.0)
+"#,
+            "True",
+        );
+    }
+
+    #[test]
+    fn native_lowerer_emits_float_nan_ordering_program() {
+        // IrBinOp::FloatLt with a NaN operand is always False per IEEE 754,
+        // mirroring f64's native ordering semantics.
+        assert_native_outputs(
+            r#"
+main : Unit -> Unit
+main =
+  print ((0.0 / 0.0) < 1.0)
+"#,
+            "False",
         );
     }
 
