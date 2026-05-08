@@ -1683,11 +1683,10 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
     //   - non-main user-defined declarations (helpers may use constructs the fallback cannot run).
     // Pure-Print programs without any of the above can stay on the simpler paths.
     //
-    // Float literals used to force GeneralLowered (Track Float Phase E5-A);
-    // E5-C lifted that constraint — `NativeValue::Float` and the `IrBinOp::Float*`
-    // arms in `lower.rs::eval_value` now render Float via the shared
-    // `gen_lower::value::format_float`, so the static-output / interpreter-bridge
-    // paths can print Float-typed expressions.
+    // Float literals do NOT force GeneralLowered: `NativeValue::Float` and
+    // the `IrBinOp::Float*` arms in `lower.rs::eval_value` render Float via
+    // the shared `gen_lower::value::format_float`, so the static-output /
+    // interpreter-bridge paths can print Float-typed expressions.
     let has_non_main_user_decls = ir_module.decls.iter().any(|d| d.name != "main");
     if !has_runtime_read_effect(&ir_decl.body)
         && !has_handler_rewrite_entrypoints(&ir_decl.body)
@@ -2210,13 +2209,13 @@ main =
 
     #[test]
     fn supports_general_lower_module_returns_reason_for_pure_float_arithmetic_main() {
-        // Track Float E5-C: a pure-print Float-arithmetic main no longer
-        // forces GeneralLowered. Before E5-C the `has_float_in_comp` clause
-        // in the capability allowlist would route this program through GL
-        // (so TAG_FLOAT could render); E5-C added Float to the static-output
-        // / native fallback path (NativeValue::Float, IrBinOp::Float* arms,
-        // format_float), and this gate clause was lifted. Lock the boundary
-        // so a regression pulling Float back into GL would fail loudly.
+        // A pure-print Float-arithmetic main does NOT force GeneralLowered.
+        // The static-output / native fallback path (`NativeValue::Float`,
+        // the `IrBinOp::Float*` arms in `lower.rs::eval_value`, and the
+        // shared `gen_lower::value::format_float`) can render Float, so
+        // the capability allowlist no longer needs a Float-specific clause.
+        // Lock the boundary so a regression pulling Float back into GL
+        // would fail loudly.
         let module = parse_module(
             r#"
 main : Unit -> Unit
@@ -2230,7 +2229,7 @@ main =
         assert_eq!(
             reason,
             Some(GeneralLowerUnsupportedReason::NotRequiringRuntimeCapability),
-            "pure Float arithmetic main must NOT require GeneralLowered after E5-C"
+            "pure Float arithmetic main must NOT require GeneralLowered"
         );
     }
 

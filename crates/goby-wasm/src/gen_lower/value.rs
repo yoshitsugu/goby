@@ -61,8 +61,9 @@ pub(crate) const TAG_CHUNK: u8 = 0xA;
 /// IEEE 754 bit pattern of the f64. The payload is a u32 pointer to that allocation.
 /// Boxing is required because the 60-bit payload region cannot carry arbitrary f64
 /// bit patterns. The actual heap allocation and the `f64.const` / `f64.add` / ... emission
-/// are performed by Phase E5; this module only provides the tagged-i64 plumbing and the
-/// pure bit-pattern conversion helpers used by the emitter and host runtime.
+/// happen at the emitter / lower layer; this module only provides the tagged-i64
+/// plumbing and the pure bit-pattern conversion helpers used by the emitter and host
+/// runtime.
 pub(crate) const TAG_FLOAT: u8 = 0xB;
 
 /// Bit mask for the lower 60 bits (payload region).

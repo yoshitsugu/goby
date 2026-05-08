@@ -108,10 +108,10 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
                 (BinOpKind::Div, Ty::Int, Ty::Int) => Ty::Int,
                 (BinOpKind::Mod, Ty::Int, Ty::Int) => Ty::Int,
                 (BinOpKind::BitXor, Ty::Int, Ty::Int) => Ty::Int,
-                // Track Float Phase E3: `+`, `-`, `*`, `/` overload on
-                // operand type. `Float, Float -> Float`; the integer
-                // arithmetic above is unchanged. Mixed `Int` / `Float`
-                // operands fall through to the diagnostic path.
+                // `+`, `-`, `*`, `/` overload on operand type:
+                // `Float, Float -> Float`; the integer arithmetic above
+                // is unchanged. Mixed `Int` / `Float` operands fall
+                // through to the diagnostic path.
                 (BinOpKind::Add, Ty::Float, Ty::Float) => Ty::Float,
                 (BinOpKind::Sub, Ty::Float, Ty::Float) => Ty::Float,
                 (BinOpKind::Mul, Ty::Float, Ty::Float) => Ty::Float,
@@ -121,8 +121,8 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
                 (BinOpKind::Gt, Ty::Int, Ty::Int) => Ty::Bool,
                 (BinOpKind::Le, Ty::Int, Ty::Int) => Ty::Bool,
                 (BinOpKind::Ge, Ty::Int, Ty::Int) => Ty::Bool,
-                // Track Float Phase E3: ordering comparisons on `Float`
-                // produce `Bool`. NaN handling follows IEEE 754 at runtime.
+                // Ordering comparisons on `Float` produce `Bool`. NaN
+                // handling follows IEEE 754 at runtime.
                 (BinOpKind::Lt, Ty::Float, Ty::Float) => Ty::Bool,
                 (BinOpKind::Gt, Ty::Float, Ty::Float) => Ty::Bool,
                 (BinOpKind::Le, Ty::Float, Ty::Float) => Ty::Bool,
@@ -234,9 +234,10 @@ fn is_equality_comparable(env: &TypeEnv, left: &Ty, right: &Ty) -> bool {
 
 fn equality_type_supported(ty: &Ty) -> bool {
     match ty {
-        // `Float` participates in `==`, `<`, etc. via Phase E3 dispatch.
-        // NaN comparisons follow IEEE 754 (`NaN == NaN == False`); the
-        // typechecker only verifies type compatibility here.
+        // `Float` participates in `==`, `<`, etc. via the operator
+        // dispatch above. NaN comparisons follow IEEE 754
+        // (`NaN == NaN == False`); the typechecker only verifies type
+        // compatibility here.
         Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit => true,
         Ty::List(inner) => equality_type_supported(inner),
         Ty::Tuple(items) => items.iter().all(equality_type_supported),

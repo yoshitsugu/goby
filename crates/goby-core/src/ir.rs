@@ -64,11 +64,11 @@ pub enum IrBinOp {
     Gt,
     Le,
     Ge,
-    // Track Float Phase E3: typed Float arithmetic / comparison variants.
-    // The integer `Add` / ... variants keep their existing tagged-i64
-    // semantics, while these variants emit `f64.add` / `f64.lt` / ...
-    // at the wasm layer (Phase E5). Splitting at the IR level avoids the
-    // backend having to recover operand type from surrounding context.
+    // Typed Float arithmetic / comparison variants. The integer `Add` /
+    // ... variants keep their existing tagged-i64 semantics, while these
+    // variants emit `f64.add` / `f64.lt` / ... at the wasm layer.
+    // Splitting at the IR level avoids the backend having to recover
+    // operand type from surrounding context.
     FloatAdd,
     FloatSub,
     FloatMul,

@@ -256,7 +256,7 @@ impl FloatBits {
 /// with a trailing `.0`. Special IEEE 754 values (NaN, ±Infinity) cannot
 /// arise from a literal — they are arithmetic results — but render here as
 /// `"NaN"` / `"Infinity"` / `"-Infinity"` for safety. `Float` runtime
-/// printing uses a richer helper introduced in Phase E5.
+/// printing uses a richer helper (`gen_lower::value::format_float`).
 pub fn format_float_literal(value: f64) -> String {
     if value.is_nan() {
         return "NaN".to_string();

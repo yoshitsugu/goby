@@ -200,12 +200,13 @@ pub(crate) fn parse_expr(src: &str) -> Option<Expr> {
 
 /// Parse a `Float` literal of the locked surface form `<int>.<frac>`.
 ///
-/// The grammar is intentionally narrow (Track Float Phase E1):
+/// The grammar is intentionally narrow:
 /// - both the integer and fractional parts are one or more decimal digits,
 /// - a single leading `-` is allowed, matching how `IntLit` already
 ///   absorbs negative integer literals.
 /// Exponent notation (`1e3`), hex floats, digit separators, and the
-/// shorthand forms `1.` / `.5` are rejected.
+/// shorthand forms `1.` / `.5` are rejected so future surface extensions
+/// (exponent / hex / separators) stay open.
 fn parse_float_literal(src: &str) -> Option<Expr> {
     let body = src.strip_prefix('-').unwrap_or(src);
     let (int_part, frac_part) = body.split_once('.')?;
@@ -1376,16 +1377,16 @@ mod tests {
 
     #[test]
     fn rejects_partial_float_literals() {
-        // Phase E1 lock: `<int>.<frac>` requires both sides; `1.` and `.5`
-        // must be rejected so future surface extensions stay open.
+        // The locked `<int>.<frac>` grammar requires both sides; `1.` and
+        // `.5` must be rejected so future surface extensions stay open.
         assert_eq!(parse_expr("1."), None);
         assert_eq!(parse_expr(".5"), None);
     }
 
     #[test]
     fn rejects_exponent_and_hex_float_forms() {
-        // Phase E1 lock: exponent notation, hex floats, and digit
-        // separators are explicitly out of scope.
+        // Exponent notation, hex floats, and digit separators are
+        // explicitly out of scope of the current literal grammar.
         assert_eq!(parse_expr("1e3"), None);
         assert_eq!(parse_expr("1.2e-3"), None);
         assert_eq!(parse_expr("0x1p10"), None);
@@ -1393,7 +1394,7 @@ mod tests {
 
     #[test]
     fn parenthesised_float_literal_remains_a_float() {
-        // Phase E3 follow-up: Track Float guard relies on a Float literal
+        // The Float operator-dispatch guard relies on a Float literal
         // anywhere in the AST being detectable. Parens around a Float must
         // not erase the literal (parsing as `Call` or unrelated would
         // bypass the wasm runtime guard for var-rooted Float arguments).

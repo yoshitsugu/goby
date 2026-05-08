@@ -318,14 +318,13 @@ main =
         assert_eq!(output, "[\"a\", \"b\", \"c\"]");
     }
 
-    /// Track Float acceptance: a `Float` literal interpolated as
-    /// `"${expr}"` must round-trip end-to-end through whichever lowering
-    /// path the program qualifies for. E5-A first proved this on the
-    /// GeneralLowered (TAG_FLOAT + host `format_tagged_value`) route;
-    /// since E5-C the native fallback (NativeValue::Float + `format_float`)
-    /// can also serve pure-print Float mains. Both paths share
-    /// `format_float`, so the rendered text is byte-identical regardless
-    /// of which path runs.
+    /// `Float` end-to-end acceptance: a `Float` literal interpolated as
+    /// `"${expr}"` must round-trip through whichever lowering path the
+    /// program qualifies for. The GeneralLowered route renders via
+    /// TAG_FLOAT + the host `format_tagged_value`, while the native
+    /// fallback renders via `NativeValue::Float` + `format_float`. Both
+    /// paths share `format_float`, so the rendered text is byte-identical
+    /// regardless of which path runs.
     #[test]
     fn float_literal_executes_via_compiled_wasm() {
         let module = parse_module(

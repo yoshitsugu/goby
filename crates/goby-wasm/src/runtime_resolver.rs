@@ -380,8 +380,8 @@ impl<'m> RuntimeOutputResolver<'m> {
         // Refuse top-level Float and any value that contains Float
         // nested inside List / Tuple / Record — `to_expression_text`
         // recurses, so `[NaN]` / `(Infinity)` would otherwise slip
-        // through. Track Float E5-D / future work removes the
-        // source-synthesis path entirely.
+        // through. A future revision removes the source-synthesis path
+        // entirely.
         if value.contains_float() {
             return None;
         }

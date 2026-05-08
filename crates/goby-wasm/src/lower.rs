@@ -477,12 +477,13 @@ fn eval_value(
                 (IrBinOp::Ge, NativeValue::Int(a), NativeValue::Int(b)) => {
                     Some(NativeValue::Bool(a >= b))
                 }
-                // Float branch — lower.rs sees IR (E5-B added FloatAdd /
-                // FloatSub / ... opcodes), so dispatch on the IR variant
-                // rather than re-using the integer Add / Sub arms.
-                // ÷0 follows IEEE 754 (±Infinity / NaN); NaN comparisons
-                // are False per f64 semantics; Eq follows IEEE numeric
-                // equality, not bit equality (NaN != NaN, -0.0 == 0.0).
+                // Float branch — `lower.rs` sees the typed IR
+                // (`IrBinOp::FloatAdd` / `FloatSub` / ...), so dispatch on
+                // the IR variant rather than re-using the integer
+                // `Add` / `Sub` arms. ÷0 follows IEEE 754 (±Infinity / NaN);
+                // NaN comparisons are False per f64 semantics; Eq follows
+                // IEEE numeric equality, not bit equality
+                // (NaN != NaN, -0.0 == 0.0).
                 (IrBinOp::FloatAdd, NativeValue::Float(a), NativeValue::Float(b)) => {
                     Some(NativeValue::Float(a + b))
                 }

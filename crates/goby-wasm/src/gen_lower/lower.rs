@@ -3498,7 +3498,7 @@ fn lower_value_ctx(
     match v {
         ValueExpr::Unit => Ok(vec![WasmBackendInstr::I64Const(encode_unit())]),
         ValueExpr::IntLit(n) => Ok(vec![WasmBackendInstr::I64Const(encode_int(*n)?)]),
-        // Phase E5: lower a Float literal to an `AllocFloatBox` whose `bits_instrs`
+        // Lower a Float literal to an `AllocFloatBox` whose `bits_instrs`
         // pushes the IEEE 754 bit pattern as a single i64 constant. The actual
         // 8-byte heap allocation, store, and TAG_FLOAT pointer push happen at
         // emit time (see `gen_lower/emit.rs::AllocFloatBox`).
@@ -3650,9 +3650,10 @@ fn lower_value_ctx(
 fn static_heap_value(value: &ValueExpr) -> Option<StaticHeapValue> {
     match value {
         ValueExpr::IntLit(n) => Some(StaticHeapValue::Int(*n)),
-        // Phase E2 stub: Float static-heap representation lands in Phase E4.
-        // Returning `None` keeps the static-heap fast path off, which is
-        // safe even though Float programs cannot actually run yet.
+        // Float values are heap-boxed via the `AllocFloatBox` path (a
+        // `(bits: i64)` allocation tagged with TAG_FLOAT) rather than embedded
+        // in the static-heap fast path; returning `None` here routes Float
+        // literals through the dynamic alloc path instead.
         ValueExpr::FloatLit(_) => None,
         ValueExpr::BoolLit(b) => Some(StaticHeapValue::Bool(*b)),
         ValueExpr::StrLit(text) => Some(StaticHeapValue::Str(text.clone())),

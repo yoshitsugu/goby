@@ -2194,12 +2194,12 @@ main =
     // `main` carries auto-discharge for the prelude's embedded effects (Print,
     // Read), which would mask a row-variable leak.
 
-    // ----- Track Float Phase E3 acceptance (`doc/PLAN.md` §4.4) -----
+    // ----- Float typechecker acceptance (`doc/PLAN.md` §4.4) -----
 
     #[test]
     fn float_literal_with_explicit_annotation_typechecks() {
-        // Phase E3: a `Float` literal under a `Float` annotation must
-        // typecheck cleanly.
+        // A `Float` literal under a `Float` annotation must typecheck
+        // cleanly.
         let source = "\
 pi : Unit -> Float
 pi = 3.14
@@ -2257,10 +2257,10 @@ v = -3.25
 
     #[test]
     fn passing_float_where_int_required_reports_distinct_diagnostic() {
-        // Phase E3 acceptance: the typechecker must clearly distinguish
-        // `Int` from `Float` in mismatch diagnostics. The argument-type
-        // mismatch path renders both names directly via `ty_name`, which
-        // now prints `Ty::Float` as `"Float"`.
+        // The typechecker must clearly distinguish `Int` from `Float` in
+        // mismatch diagnostics. The argument-type mismatch path renders
+        // both names directly via `ty_name`, which now prints
+        // `Ty::Float` as `"Float"`.
         let source = "\
 take_int : Int -> Int
 take_int x = x
