@@ -2303,4 +2303,84 @@ main =
             })
         );
     }
+
+    /// Track HF (BUGS.md 2026-05-08): the `If` cond fix proven end-to-end via
+    /// a bare top-level `Bool` binding referenced as `if flag` inside a user
+    /// aux passed to `list.map`. Bool top-level decls (unlike `Int = 10`)
+    /// are not constant-folded into static values at the IR use site, so
+    /// `cond` survives as `Var("flag")` and exercises the `lower.rs:2688`
+    /// scope-resolution path. Pre-fix this errored with
+    /// `gen_lower/emit: unknown local 'flag'`.
+    #[test]
+    fn track_hf_general_lower_emits_for_user_aux_with_top_level_bool_in_if_cond() {
+        let module = parse_module(
+            r#"
+import goby/list (map, push)
+import goby/stdio
+
+flag : Bool
+flag = True
+
+describe : Int -> String
+describe _ =
+  if flag
+    "on"
+  else
+    "off"
+
+main : Unit -> Unit can Print
+main =
+  xs = push (push [] 0) 0
+  ys = map xs describe
+  println "done"
+"#,
+        )
+        .expect("source should parse");
+        let result = try_general_lower_module(&module)
+            .expect("emit must not return CodegenError (pre-fix this failed with unknown local)");
+        assert!(
+            result.is_some(),
+            "general lowering + emit should succeed for `describe` (if cond on top-level Bool) \
+             passed to list.map"
+        );
+    }
+
+    /// Track HF (BUGS.md 2026-05-08): the `Case` scrutinee fix at
+    /// `lower.rs:3373` proven end-to-end through `try_general_lower_module`.
+    /// A user aux that pattern-matches on a top-level binding and is passed
+    /// as a HOF callback must lower AND emit. Pre-fix this errored with
+    /// `gen_lower/emit: unknown local 'mode'`.
+    #[test]
+    fn track_hf_general_lower_emits_for_user_aux_with_top_level_in_case_scrutinee() {
+        let module = parse_module(
+            r#"
+import goby/list (map, push)
+import goby/stdio
+
+mode : Int
+mode = 1
+
+describe : Int -> String
+describe _ =
+  case mode
+    0 -> "off"
+    1 -> "on"
+    _ -> "other"
+
+main : Unit -> Unit can Print
+main =
+  xs = push (push [] 0) 0
+  ys = map xs describe
+  println "done"
+"#,
+        )
+        .expect("source should parse");
+        let result = try_general_lower_module(&module)
+            .expect("emit must not return CodegenError (pre-fix this failed with unknown local)");
+        assert!(
+            result.is_some(),
+            "general lowering + emit should succeed for `describe` (case on top-level binding) \
+             passed to list.map"
+        );
+    }
 }

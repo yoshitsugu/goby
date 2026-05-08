@@ -2685,7 +2685,7 @@ fn lower_comp_inner(
         }
 
         CompExpr::If { cond, then_, else_ } => {
-            let mut instrs = lower_value(cond)?;
+            let mut instrs = lower_value_ctx(cond, aliases, bindings, known_decls)?;
             let then_instrs = lower_comp_inner(
                 then_,
                 tail_position,
@@ -3370,7 +3370,7 @@ fn lower_case(
     let counter = CASE_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
     let scrutinee_local = format!("__case_scrutinee_{counter}");
 
-    let scrutinee_instrs = lower_value(scrutinee)?;
+    let scrutinee_instrs = lower_value_ctx(scrutinee, aliases, bindings, known_decls)?;
 
     let mut backend_arms = Vec::new();
     for arm in arms {
@@ -3765,7 +3765,7 @@ fn lower_value_as_arg(
             });
             Ok(vec![WasmBackendInstr::PushFuncHandle { decl_name }])
         }
-        ValueExpr::Var(name) if known_decls.contains(name.as_str()) => {
+        ValueExpr::Var(name) if known_decls.contains(name.as_str()) && !bindings.is_bound(name) => {
             Ok(vec![WasmBackendInstr::PushFuncHandle {
                 decl_name: name.clone(),
             }])
@@ -3776,7 +3776,7 @@ fn lower_value_as_arg(
             {
                 return lower_print_effect_as_arg(op, lambda_decls);
             }
-            lower_value(v)
+            lower_value_ctx(v, aliases, bindings, known_decls)
         }
         ValueExpr::Lambda { param, body } => lower_lambda(
             param,
@@ -3791,9 +3791,9 @@ fn lower_value_as_arg(
             if let Some(BackendEffectOp::Print(op)) = backend_effect_op(module, name) {
                 return lower_print_effect_as_arg(op, lambda_decls);
             }
-            lower_value(v)
+            lower_value_ctx(v, aliases, bindings, known_decls)
         }
-        other => lower_value(other),
+        other => lower_value_ctx(other, aliases, bindings, known_decls),
     }
 }
 
@@ -6531,6 +6531,244 @@ build n =
                     ]
                 },
             }]
+        );
+    }
+
+    /// Track HF (BUGS.md 2026-05-08): an `If` cond that references a name in
+    /// `known_decls` must lower to a top-level decl call, not `LoadLocal`.
+    /// The bug was that `lower_comp_inner` lowered the cond via `lower_value`
+    /// (which discards `known_decls`), so a bare reference to a stdlib
+    /// top-level value declaration (e.g. `minimum_int_div_10` inside
+    /// `int.parse`) emitted `LoadLocal { "minimum_int_div_10" }` and the
+    /// emitter later failed with `unknown local`.
+    #[test]
+    fn track_hf_if_cond_var_in_known_decls_lowers_as_decl_call() {
+        // if flag then 1 else 0
+        let comp = CompExpr::If {
+            cond: Box::new(ValueExpr::Var("flag".to_string())),
+            then_: Box::new(CompExpr::Value(ValueExpr::IntLit(1))),
+            else_: Box::new(CompExpr::Value(ValueExpr::IntLit(0))),
+        };
+        let known_decls: HashSet<String> = ["flag".to_string()].into();
+        let mut lambda_decls = Vec::new();
+        let instrs = lower_comp_collecting_lambdas(&comp, &known_decls, &mut lambda_decls)
+            .expect("if-cond lowering should succeed");
+        // Expect the cond preamble to be `[I64Const(unit), DeclCall { "flag" }]`,
+        // i.e. a unit-arg call to the nullary top-level decl.
+        let has_decl_call_for_flag = instrs
+            .iter()
+            .any(|i| matches!(i, I::DeclCall { decl_name } if decl_name == "flag"));
+        assert!(
+            has_decl_call_for_flag,
+            "If cond `flag` should lower to DeclCall {{ decl_name: \"flag\" }} when \
+             flag is in known_decls; got: {instrs:?}",
+        );
+        let has_load_local_for_flag = instrs
+            .iter()
+            .any(|i| matches!(i, I::LoadLocal { name } if name == "flag"));
+        assert!(
+            !has_load_local_for_flag,
+            "If cond `flag` must NOT lower to LoadLocal when flag is in \
+             known_decls (this is the BUGS.md 2026-05-08 bug signature); \
+             got: {instrs:?}",
+        );
+    }
+
+    /// Track HF (BUGS.md 2026-05-08): if a cond name is shadowed by a local
+    /// (`bindings.is_bound(name) == true`), it must still emit `LoadLocal`,
+    /// not `DeclCall`. Guards against the fix accidentally promoting locals
+    /// to decl calls.
+    #[test]
+    fn track_hf_if_cond_var_shadowed_by_local_stays_load_local() {
+        // let flag = 1; if flag then 1 else 0
+        let comp = CompExpr::Let {
+            name: "flag".to_string(),
+            ty: goby_core::ir::IrType::Unknown,
+            value: Box::new(CompExpr::Value(ValueExpr::IntLit(1))),
+            body: Box::new(CompExpr::If {
+                cond: Box::new(ValueExpr::Var("flag".to_string())),
+                then_: Box::new(CompExpr::Value(ValueExpr::IntLit(1))),
+                else_: Box::new(CompExpr::Value(ValueExpr::IntLit(0))),
+            }),
+        };
+        let known_decls: HashSet<String> = ["flag".to_string()].into();
+        let mut lambda_decls = Vec::new();
+        let instrs = lower_comp_collecting_lambdas(&comp, &known_decls, &mut lambda_decls)
+            .expect("let-shadowed if-cond lowering should succeed");
+        let has_decl_call_for_flag = instrs
+            .iter()
+            .any(|i| matches!(i, I::DeclCall { decl_name } if decl_name == "flag"));
+        assert!(
+            !has_decl_call_for_flag,
+            "Local `flag` shadows the top-level decl; cond must NOT lower \
+             to DeclCall, got: {instrs:?}",
+        );
+        let has_load_local_for_flag = instrs
+            .iter()
+            .any(|i| matches!(i, I::LoadLocal { name } if name == "flag"));
+        assert!(
+            has_load_local_for_flag,
+            "Local `flag` shadows the top-level decl; cond must lower to \
+             LoadLocal, got: {instrs:?}",
+        );
+    }
+
+    /// Track HF (BUGS.md 2026-05-08): same scope-resolution bug, but for
+    /// `Case` scrutinee at lower.rs:3373. A bare reference to a known top-level
+    /// decl in scrutinee position must lower as a decl call, not `LoadLocal`.
+    #[test]
+    fn track_hf_case_scrutinee_var_in_known_decls_lowers_as_decl_call() {
+        // case tag of _ -> 0
+        let comp = CompExpr::Case {
+            scrutinee: Box::new(ValueExpr::Var("tag".to_string())),
+            arms: vec![goby_core::ir::IrCaseArm {
+                pattern: IrCasePattern::Wildcard,
+                body: CompExpr::Value(ValueExpr::IntLit(0)),
+            }],
+        };
+        let known_decls: HashSet<String> = ["tag".to_string()].into();
+        let mut lambda_decls = Vec::new();
+        let instrs = lower_comp_collecting_lambdas(&comp, &known_decls, &mut lambda_decls)
+            .expect("case-scrutinee lowering should succeed");
+        let has_decl_call_for_tag = instrs
+            .iter()
+            .any(|i| matches!(i, I::DeclCall { decl_name } if decl_name == "tag"));
+        assert!(
+            has_decl_call_for_tag,
+            "Case scrutinee `tag` should lower to DeclCall {{ decl_name: \"tag\" }} \
+             when tag is in known_decls; got: {instrs:?}",
+        );
+        let has_load_local_for_tag = instrs
+            .iter()
+            .any(|i| matches!(i, I::LoadLocal { name } if name == "tag"));
+        assert!(
+            !has_load_local_for_tag,
+            "Case scrutinee `tag` must NOT lower to LoadLocal when tag is in \
+             known_decls (BUGS.md 2026-05-08 bug signature); got: {instrs:?}",
+        );
+    }
+
+    /// Track HF (BUGS.md 2026-05-08): pre-existing shadowing bug in
+    /// `lower_value_as_arg`'s known-decl arm (catches `Var(name) ∈
+    /// known_decls` but does not check `!bindings.is_bound(name)`). Without
+    /// the guard, a local variable that shadows a top-level decl would be
+    /// promoted to a `PushFuncHandle` of the *top-level* function. This
+    /// shadowing-preservation guard is the same shape as the If/Case
+    /// guards above.
+    #[test]
+    fn track_hf_arg_var_shadowed_by_local_does_not_become_func_handle() {
+        // let f = 0; f f  — call site passes the local `f` as an arg to itself.
+        // Outer call is just `g f` where `g` is a known top-level decl and
+        // `f` is a let-bound local that ALSO collides with a known top-level
+        // name. The arg `f` must lower as `LoadLocal`, not `PushFuncHandle`.
+        let comp = CompExpr::Let {
+            name: "f".to_string(),
+            ty: goby_core::ir::IrType::Unknown,
+            value: Box::new(CompExpr::Value(ValueExpr::IntLit(0))),
+            body: Box::new(CompExpr::Call {
+                callee: Box::new(ValueExpr::Var("g".to_string())),
+                args: vec![ValueExpr::Var("f".to_string())],
+                reuse_token: None,
+            }),
+        };
+        let known_decls: HashSet<String> = ["f".to_string(), "g".to_string()].into();
+        let mut lambda_decls = Vec::new();
+        let instrs = lower_comp_collecting_lambdas(&comp, &known_decls, &mut lambda_decls)
+            .expect("call with shadowed arg should lower");
+        let has_func_handle_for_f = instrs
+            .iter()
+            .any(|i| matches!(i, I::PushFuncHandle { decl_name } if decl_name == "f"));
+        assert!(
+            !has_func_handle_for_f,
+            "Local `f` shadows the top-level decl; arg position must NOT \
+             lower to PushFuncHandle, got: {instrs:?}",
+        );
+        let has_load_local_for_f = instrs
+            .iter()
+            .any(|i| matches!(i, I::LoadLocal { name } if name == "f"));
+        assert!(
+            has_load_local_for_f,
+            "Local `f` shadows the top-level decl; arg must lower to \
+             LoadLocal, got: {instrs:?}",
+        );
+    }
+
+    /// Track HF (BUGS.md 2026-05-08): the same scope bug surfaces in
+    /// `lower_value_as_arg`'s composite fallback (was `lower_value(other)`
+    /// at the catch-all arm, which discarded `known_decls`). When a HOF
+    /// call argument is a non-Var, non-Lambda value that internally
+    /// references a top-level binding (e.g. `BinOp { Add, Var("limit"), 1 }`
+    /// for `f (limit + 1)`), the inner `Var("limit")` must lower as a
+    /// top-level `DeclCall`, not `LoadLocal`.
+    #[test]
+    fn track_hf_arg_composite_fallback_resolves_top_level_var_as_decl_call() {
+        // f (limit + 1)  where `f` and `limit` are both known top-level decls.
+        let comp = CompExpr::Call {
+            callee: Box::new(ValueExpr::Var("f".to_string())),
+            args: vec![ValueExpr::BinOp {
+                op: goby_core::ir::IrBinOp::Add,
+                left: Box::new(ValueExpr::Var("limit".to_string())),
+                right: Box::new(ValueExpr::IntLit(1)),
+            }],
+            reuse_token: None,
+        };
+        let known_decls: HashSet<String> = ["f".to_string(), "limit".to_string()].into();
+        let mut lambda_decls = Vec::new();
+        let instrs = lower_comp_collecting_lambdas(&comp, &known_decls, &mut lambda_decls)
+            .expect("call with composite arg should lower");
+        let has_decl_call_for_limit = instrs
+            .iter()
+            .any(|i| matches!(i, I::DeclCall { decl_name } if decl_name == "limit"));
+        assert!(
+            has_decl_call_for_limit,
+            "Top-level `limit` inside the composite arg should lower to \
+             DeclCall, got: {instrs:?}",
+        );
+        let has_load_local_for_limit = instrs
+            .iter()
+            .any(|i| matches!(i, I::LoadLocal { name } if name == "limit"));
+        assert!(
+            !has_load_local_for_limit,
+            "Top-level `limit` inside the composite arg must NOT lower to \
+             LoadLocal (lower_value_as_arg fallback bug, sibling of \
+             BUGS.md 2026-05-08); got: {instrs:?}",
+        );
+    }
+
+    /// Track HF (BUGS.md 2026-05-08): shadowing-preservation guard for `Case`.
+    #[test]
+    fn track_hf_case_scrutinee_var_shadowed_by_local_stays_load_local() {
+        let comp = CompExpr::Let {
+            name: "tag".to_string(),
+            ty: goby_core::ir::IrType::Unknown,
+            value: Box::new(CompExpr::Value(ValueExpr::IntLit(1))),
+            body: Box::new(CompExpr::Case {
+                scrutinee: Box::new(ValueExpr::Var("tag".to_string())),
+                arms: vec![goby_core::ir::IrCaseArm {
+                    pattern: IrCasePattern::Wildcard,
+                    body: CompExpr::Value(ValueExpr::IntLit(0)),
+                }],
+            }),
+        };
+        let known_decls: HashSet<String> = ["tag".to_string()].into();
+        let mut lambda_decls = Vec::new();
+        let instrs = lower_comp_collecting_lambdas(&comp, &known_decls, &mut lambda_decls)
+            .expect("let-shadowed case lowering should succeed");
+        let has_decl_call_for_tag = instrs
+            .iter()
+            .any(|i| matches!(i, I::DeclCall { decl_name } if decl_name == "tag"));
+        assert!(
+            !has_decl_call_for_tag,
+            "Local `tag` shadows the top-level decl; scrutinee must NOT lower \
+             to DeclCall, got: {instrs:?}",
+        );
+        let has_load_local_for_tag = instrs
+            .iter()
+            .any(|i| matches!(i, I::LoadLocal { name } if name == "tag"));
+        assert!(
+            has_load_local_for_tag,
+            "Local `tag` shadows the top-level decl; scrutinee must lower to \
+             LoadLocal, got: {instrs:?}",
         );
     }
 }

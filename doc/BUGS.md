@@ -118,85 +118,6 @@ Open bugs:
     current failure appears to involve list-pattern `case` inside a called
     function returning a value.
 
-- **2026-05-08.** Passing an effect-handler-wrapping function as a value
-  to a higher-order function (e.g. `list.map`) makes wasm emission fail
-  with `gen_lower/emit: unknown local '<top-level binding>'`, even though
-  the wrapper is fully effect-resolved at the type level (no `can` clause)
-  and is therefore expected to be interchangeable with an ordinary pure
-  function.
-
-  Confirmed repro:
-
-  Save the following complete program (no external file needed) and run
-  `goby run` on it:
-
-  ```goby
-  import goby/list (map, push)
-  import goby/int as int
-  import goby/stdio
-
-  to_i : String -> Int
-  to_i d =
-    with
-      invalid_integer i -> resume -1
-    in
-      int.parse d
-
-  main : Unit -> Unit can Print
-  main =
-    xs = push (push [] "1") "2"
-    ys = map xs to_i
-    println "done"
-  ```
-
-  Observed:
-
-  ```text
-  runtime error: gen_lower/emit: unknown local 'minimum_int'
-  ```
-
-  Expected: the program prints `done`. `to_i : String -> Int` carries no
-  residual effect after the `invalid_integer` handler resolves
-  `StringParseError`, so it should be usable wherever a plain
-  `String -> Int` is accepted, including as the callback to `list.map`.
-
-  Triage notes:
-
-  - Calling `to_i` directly (`to_i "42"`) lowers and runs fine.
-  - A pure helper that references a top-level binding from another module
-    (no effect handler) and is passed to `map` lowers fine, so the trigger
-    requires the combination of (a) an effect handler in the body and
-    (b) the function being used as a first-class value via a higher-order
-    call site.
-  - The unresolved name in the error (`minimum_int` /
-    `minimum_int_div_10`) is a top-level value declaration in
-    `stdlib/goby/int.gb` that `int.parse`'s body references. The emit
-    error originates in `crates/goby-wasm/src/gen_lower/emit.rs:667`
-    (`Locals::get`), which means the lowering path for the indirect-call
-    callee is walking the body of the wrapped function and resolving
-    those names against the per-function locals scope instead of the
-    module/top-level scope used by the original declaration's lowering.
-  - The aoc-style program that surfaced this in practice (a
-    `parse`/`parse_inner` pair feeding `to_i` through `list.map` with a
-    real stdin) trapped at runtime with `E-RUNTIME-TRAP` from
-    `__tail_group_dispatch_0`, but `goby run` on the minimal program
-    above already fails before execution at the emit stage, which is the
-    canonical form to debug against.
-
-  Fix scope (do not patch ad-hoc): the underlying defect is the
-  indirect-call lowering path resolving names in the wrapped function's
-  body against the wrong scope. The repro happens to surface through
-  `String -> Int` and `int.parse`'s `minimum_int` reference, but the
-  same shape will break for any function of the form
-  "`with <handler> in <call to a stdlib/other-module function whose body
-  references its own top-level bindings>`" once it is passed as a value
-  to a higher-order callback. The fix must restore correct scope
-  resolution for the indirect-call wrapper in general — i.e. it should
-  not special-case `int.parse`, `minimum_int`, or the `String -> Int`
-  signature, and the regression test should cover at least one
-  additional shape (different module, different effect, non-`Int`
-  return) to lock in the general behavior.
-
 - **2026-05-08.** `WasmBackendInstr::AllocFloatBox` and
   `WasmBackendInstr::AllocMutableCell` share two limitations that should
   be addressed together as a follow-up cell-allocation refactor (raised
@@ -234,6 +155,59 @@ Open bugs:
     accounting in `__goby_drop`).
 
 Resolved bugs:
+
+- **2026-05-08.** Passing a function whose body referenced a top-level
+  binding inside an `If` cond / `Case` scrutinee / non-trivial HOF call
+  argument made wasm emission fail with
+  `gen_lower/emit: unknown local '<top-level binding>'`. The original
+  repro shape was `to_i = with invalid_integer ... in int.parse d`
+  passed as a callback to `list.map`, where `int.parse`'s body
+  references stdlib-internal `minimum_int` / `minimum_int_div_10` in
+  `if acc < minimum_int_div_10` etc.
+
+  Root cause (Track HF, doc/PLAN.md 4.7a): four
+  `lower_value(...)`-via-`lower_value` callsites in
+  `crates/goby-wasm/src/gen_lower/lower.rs` discarded the surrounding
+  `aliases` / `bindings` / `known_decls` context, so a bare
+  `Var(top-level)` in those positions was lowered as `LoadLocal` instead
+  of the unit-arg `DeclCall` form used everywhere else. Affected
+  positions:
+  - `lower.rs:2688` — `CompExpr::If` cond
+  - `lower.rs:3373` — `lower_case` scrutinee
+  - `lower.rs:3779` / `3794` / `3796` — three `lower_value_as_arg`
+    fallbacks (Var non-effect-op, GlobalRef non-effect-op, composite
+    catch-all)
+
+  An additional pre-existing shadowing bug was found in the same
+  function: `lower_value_as_arg`'s known-decl arm (`lower.rs:3768`) did
+  not check `!bindings.is_bound(name)`, so a local that shadowed a
+  top-level decl could be promoted to a `PushFuncHandle` of the
+  top-level function.
+
+  Fix: route the four discarding callsites through
+  `lower_value_ctx(..., aliases, bindings, known_decls)` and add the
+  `!bindings.is_bound(name)` shadowing guard to the known-decl arm.
+
+  Regression coverage:
+  - Direct IR-level unit tests in `gen_lower::lower::tests`:
+    `track_hf_if_cond_var_in_known_decls_lowers_as_decl_call`,
+    `track_hf_case_scrutinee_var_in_known_decls_lowers_as_decl_call`,
+    `track_hf_arg_composite_fallback_resolves_top_level_var_as_decl_call`,
+    plus three shadowing-preservation guards
+    (`*_var_shadowed_by_local_*`) covering If / Case / arg-position
+    `lower_value_as_arg`.
+  - Emit-path integration tests in `gen_lower::tests`:
+    `track_hf_general_lower_emits_for_user_aux_with_top_level_bool_in_if_cond`
+    and `track_hf_general_lower_emits_for_user_aux_with_top_level_in_case_scrutinee`
+    — both verified red pre-fix (`unknown local 'flag'` /
+    `unknown local 'mode'`) and green post-fix.
+
+  Note: the BUGS.md original repro program (`to_i` + `list.map` calling
+  stdlib `int.parse`) now passes wasm emission but trips a separate,
+  pre-existing bug — `minimum_int = -9223372036854775808` is outside
+  Goby's Int 60-bit representable range, so `encode_int` rejects the
+  literal. That stdlib follow-up is **not** part of Track HF and should
+  be tracked separately.
 
 - **2026-05-07.** `goby-wasm` lib test `tests::fold_m5_string_accumulator`
   hung indefinitely (CPU-bound). `git bisect` between the test's

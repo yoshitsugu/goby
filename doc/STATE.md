@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-08.
+Last updated: 2026-05-09.
 
 ## Current Focus
 
@@ -29,7 +29,7 @@ Green:
 - `cargo check --workspace`: warning-free.
 - `cargo test -p goby-lsp`: 56 passed / 0 failed.
 - `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`:
-  the regular wasm suite passes (856 / 12 skipped).
+  the regular wasm suite passes (865 / 11 skipped after Track HF, 2026-05-09).
 
 Red / ignored:
 
