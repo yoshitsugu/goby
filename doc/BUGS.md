@@ -118,6 +118,71 @@ Open bugs:
     current failure appears to involve list-pattern `case` inside a called
     function returning a value.
 
+- **2026-05-08.** Passing an effect-handler-wrapping function as a value
+  to a higher-order function (e.g. `list.map`) makes wasm emission fail
+  with `gen_lower/emit: unknown local '<top-level binding>'`, even though
+  the wrapper is fully effect-resolved at the type level (no `can` clause)
+  and is therefore expected to be interchangeable with an ordinary pure
+  function.
+
+  Confirmed repro:
+
+  Save the following complete program (no external file needed) and run
+  `goby run` on it:
+
+  ```goby
+  import goby/list (map, push)
+  import goby/int as int
+  import goby/stdio
+
+  to_i : String -> Int
+  to_i d =
+    with
+      invalid_integer i -> resume -1
+    in
+      int.parse d
+
+  main : Unit -> Unit can Print
+  main =
+    xs = push (push [] "1") "2"
+    ys = map xs to_i
+    println "done"
+  ```
+
+  Observed:
+
+  ```text
+  runtime error: gen_lower/emit: unknown local 'minimum_int'
+  ```
+
+  Expected: the program prints `done`. `to_i : String -> Int` carries no
+  residual effect after the `invalid_integer` handler resolves
+  `StringParseError`, so it should be usable wherever a plain
+  `String -> Int` is accepted, including as the callback to `list.map`.
+
+  Triage notes:
+
+  - Calling `to_i` directly (`to_i "42"`) lowers and runs fine.
+  - A pure helper that references a top-level binding from another module
+    (no effect handler) and is passed to `map` lowers fine, so the trigger
+    requires the combination of (a) an effect handler in the body and
+    (b) the function being used as a first-class value via a higher-order
+    call site.
+  - The unresolved name in the error (`minimum_int` /
+    `minimum_int_div_10`) is a top-level value declaration in
+    `stdlib/goby/int.gb` that `int.parse`'s body references. The emit
+    error originates in `crates/goby-wasm/src/gen_lower/emit.rs:667`
+    (`Locals::get`), which means the lowering path for the indirect-call
+    callee is walking the body of the wrapped function and resolving
+    those names against the per-function locals scope instead of the
+    module/top-level scope used by the original declaration's lowering.
+  - The aoc-style program that surfaced this in practice (a
+    `parse`/`parse_inner` pair feeding `to_i` through `list.map` with a
+    real stdin) trapped at runtime with `E-RUNTIME-TRAP` from
+    `__tail_group_dispatch_0`, but `goby run` on the minimal program
+    above already fails before execution at the emit stage, which is the
+    canonical form to debug against.
+
 - **2026-05-08.** `WasmBackendInstr::AllocFloatBox` and
   `WasmBackendInstr::AllocMutableCell` share two limitations that should
   be addressed together as a follow-up cell-allocation refactor (raised
