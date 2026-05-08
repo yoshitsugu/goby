@@ -119,8 +119,7 @@ main : Unit -> Unit can Print
 main = print \"${1.0}\"
 ";
     let module = parse_module(source).expect("should parse");
-    let wasm = compile_module(&module)
-        .expect("Float literal in main must compile end-to-end");
+    let wasm = compile_module(&module).expect("Float literal in main must compile end-to-end");
     assert!(!wasm.is_empty(), "compiled wasm must not be empty");
 }
 
@@ -453,7 +452,10 @@ fn assert_float_parity(expected: &str, gl_source: &str, native_source: &str) {
         "GL route and native-fallback route disagree on Float rendering"
     );
     assert_eq!(gl_output, expected, "GL route output mismatch");
-    assert_eq!(native_output, expected, "native-fallback route output mismatch");
+    assert_eq!(
+        native_output, expected,
+        "native-fallback route output mismatch"
+    );
 }
 
 #[test]

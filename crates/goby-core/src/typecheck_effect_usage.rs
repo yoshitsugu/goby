@@ -3,12 +3,12 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::{Expr, InterpolatedPart, Span, Stmt};
 use crate::typecheck::TypecheckError;
 use crate::typecheck_ambiguity::ensure_no_ambiguous_refs_in_expr;
+use crate::typecheck_call::{CallContext, infer_call_effects_at_site};
 use crate::typecheck_check::{check_expr, env_with_case_pattern_bindings};
 use crate::typecheck_env::{EffectMap, RowSubst, Ty, TypeEnv, TypeSubst};
 use crate::typecheck_render::ty_name;
 use crate::typecheck_span::{best_available_expr_span, best_available_name_use_span};
 use crate::typecheck_stmt::check_body_stmts;
-use crate::typecheck_call::{CallContext, infer_call_effects_at_site};
 use crate::typecheck_unify::{
     apply_type_substitution, instantiate_handler_clause_signature, ty_contains_type_var,
     type_hole_conflict_note, unify_types_with_subst,
@@ -192,10 +192,7 @@ pub(crate) fn check_unhandled_effects_in_expr(
     // with the effective union for op-call validation, preserving the
     // existing "can clause permits this op" behaviour.
     let with_only_covered_ops = covered_ops;
-    let covered_ops_owned: HashSet<String> = covered_ops
-        .union(decl_can_ops)
-        .cloned()
-        .collect();
+    let covered_ops_owned: HashSet<String> = covered_ops.union(decl_can_ops).cloned().collect();
     let covered_ops: &HashSet<String> = &covered_ops_owned;
     fn check_effect_op_call_arg_types_in_handler_scope(
         op_name: &str,

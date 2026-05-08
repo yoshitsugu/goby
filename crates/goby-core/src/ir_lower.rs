@@ -1026,10 +1026,7 @@ fn resolved_expr_is_float(ctx: &LowerCtx, expr: &ResolvedExpr) -> bool {
     match expr {
         ResolvedExpr::FloatLit(_) => true,
         ResolvedExpr::BinOp { op, left, right } => match op {
-            BinOpKind::Add
-            | BinOpKind::Sub
-            | BinOpKind::Mul
-            | BinOpKind::Div => {
+            BinOpKind::Add | BinOpKind::Sub | BinOpKind::Mul | BinOpKind::Div => {
                 resolved_expr_is_float(ctx, left) || resolved_expr_is_float(ctx, right)
             }
             _ => false,

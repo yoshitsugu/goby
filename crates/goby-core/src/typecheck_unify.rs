@@ -259,9 +259,7 @@ pub(crate) fn unify_types_with_subst(
         | (Ty::Float, Ty::Float)
         | (Ty::Bool, Ty::Bool)
         | (Ty::Str, Ty::Str)
-        | (Ty::Unit, Ty::Unit) => {
-            true
-        }
+        | (Ty::Unit, Ty::Unit) => true,
         (Ty::List(left), Ty::List(right)) => {
             unify_types_with_subst(&left, &right, type_subst, row_subst, env, next_id)
         }
@@ -499,7 +497,9 @@ fn ty_contains_anonymous_type_hole(ty: &Ty) -> bool {
                 || ty_contains_anonymous_type_hole(result)
         }
         Ty::Con { args, .. } => args.iter().any(ty_contains_anonymous_type_hole),
-        Ty::Handler { .. } | Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => false,
+        Ty::Handler { .. } | Ty::Int | Ty::Float | Ty::Bool | Ty::Str | Ty::Unit | Ty::Unknown => {
+            false
+        }
     }
 }
 

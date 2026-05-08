@@ -20,7 +20,9 @@ use crate::gen_lower::backend_ir::{
     BackendAllocInit, BackendEffectOp, BackendIntrinsic, BackendPrintOp, BackendReadOp,
     StaticHeapValue, WasmBackendInstr,
 };
-use crate::gen_lower::value::{ValueError, encode_bool, encode_int, encode_unit, float_bits_to_i64};
+use crate::gen_lower::value::{
+    ValueError, encode_bool, encode_int, encode_unit, float_bits_to_i64,
+};
 
 /// Counter for generating unique lambda auxiliary declaration names (`__lambda_N`).
 static LAMBDA_COUNTER: AtomicU32 = AtomicU32::new(0);

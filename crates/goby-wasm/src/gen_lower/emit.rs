@@ -9472,10 +9472,7 @@ fn emit_bin_op(
             };
             // Convert the wasm result into a Goby tagged i64.
             match op {
-                IrBinOp::FloatAdd
-                | IrBinOp::FloatSub
-                | IrBinOp::FloatMul
-                | IrBinOp::FloatDiv => {
+                IrBinOp::FloatAdd | IrBinOp::FloatSub | IrBinOp::FloatMul | IrBinOp::FloatDiv => {
                     // Rebox: f64 → bits → scratch0 → AllocFloatBox shape.
                     let hs = require_heap_state(heap_state, "BinOp::Float<arithmetic>")?;
                     function.instruction(&Instruction::I64ReinterpretF64);

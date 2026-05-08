@@ -509,8 +509,7 @@ mod tests {
                 .contains_float()
         );
         assert!(
-            !RuntimeValue::List(vec![RuntimeValue::Int(1), RuntimeValue::Int(2)])
-                .contains_float()
+            !RuntimeValue::List(vec![RuntimeValue::Int(1), RuntimeValue::Int(2)]).contains_float()
         );
 
         assert!(RuntimeValue::Tuple(vec![RuntimeValue::Float(0.0)]).contains_float());

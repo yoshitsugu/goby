@@ -2228,9 +2228,8 @@ int_div : Unit -> Int
 int_div = 7 / 2
 ";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module).expect(
-            "`/` overloads on operand type: Float / Float -> Float, Int / Int -> Int",
-        );
+        typecheck_module(&module)
+            .expect("`/` overloads on operand type: Float / Float -> Float, Int / Int -> Int");
     }
 
     #[test]
@@ -2410,9 +2409,8 @@ build : List Int -> ((Int -> Int -> Int can {e}) -> Int can {e})
 build xs = fold xs 0
 ";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module).expect(
-            "partial application of fold (without callback) should not require any effect",
-        );
+        typecheck_module(&module)
+            .expect("partial application of fold (without callback) should not require any effect");
     }
 
     #[test]
@@ -2433,9 +2431,8 @@ run xs =
       emit(n))
 ";
         let module = parse_module(source).expect("should parse");
-        typecheck_module(&module).expect(
-            "handler inside lambda should discharge its effect; run needs no can",
-        );
+        typecheck_module(&module)
+            .expect("handler inside lambda should discharge its effect; run needs no can");
     }
 
     // ----- EP-3 acceptance (PLAN.md §4.6 EP-3) -----
@@ -2580,8 +2577,7 @@ run : List Int -> List Int can Log
 run xs = map xs (fn x -> emit(x))
 ";
         let module = parse_module(source_with_can).expect("should parse");
-        typecheck_module(&module)
-            .expect("effectful callback with matching outer can should pass");
+        typecheck_module(&module).expect("effectful callback with matching outer can should pass");
 
         let source_without_can = "\
 import goby/list ( map )
@@ -2643,9 +2639,8 @@ run : Int can Log, Print2
 run = take_cb (fn n -> emit(n) + println2(n))
 ";
         let module = parse_module(source).expect("should parse");
-        let err = typecheck_module(&module).expect_err(
-            "closed callback row must reject a lambda with extra effects",
-        );
+        let err = typecheck_module(&module)
+            .expect_err("closed callback row must reject a lambda with extra effects");
         // EP-3 diagnostic refinement: closed-row missing-effect case must be
         // distinguishable from a row variable failure (LANGUAGE_SPEC §5
         // line 283-284). The diagnostic carries the offending effect name
@@ -2709,9 +2704,8 @@ run : Int can Log
 run = take_cb (fn n -> n + 1)
 ";
         let module = parse_module(source).expect("should parse");
-        let err = typecheck_module(&module).expect_err(
-            "closed callback row demanding `Log` must reject a pure lambda",
-        );
+        let err = typecheck_module(&module)
+            .expect_err("closed callback row demanding `Log` must reject a pure lambda");
         assert!(
             err.message.contains("Log"),
             "diagnostic should mention the missing required effect, got: {err}"
@@ -2775,9 +2769,8 @@ run : Int can Log, Print2
 run = take_cb_open (fn n -> println2(n))
 ";
         let module = parse_module(source).expect("should parse");
-        let err = typecheck_module(&module).expect_err(
-            "open callback row missing a required fixed effect must be rejected",
-        );
+        let err = typecheck_module(&module)
+            .expect_err("open callback row missing a required fixed effect must be rejected");
         assert!(
             err.message.contains("row variable cannot be unified"),
             "row-variable mismatch diagnostic must say so explicitly, got: {err}"
@@ -2811,9 +2804,8 @@ run : Int can Log, Print2
 run = both emit_fn println2_fn
 ";
         let module = parse_module(source).expect("should parse");
-        let err = typecheck_module(&module).expect_err(
-            "shared `{e}` must not unify with two distinct closed effect rows",
-        );
+        let err = typecheck_module(&module)
+            .expect_err("shared `{e}` must not unify with two distinct closed effect rows");
         assert!(
             err.message.contains("Log") || err.message.contains("Print2"),
             "diagnostic should mention one of the conflicting effects, got: {err}"

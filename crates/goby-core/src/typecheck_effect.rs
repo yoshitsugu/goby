@@ -284,24 +284,10 @@ fn walk_expr_for_effects(
         }
         Expr::ListLit { elements, spread } => {
             for el in elements {
-                walk_expr_for_effects(
-                    el,
-                    env,
-                    effect_map,
-                    required_effects_map,
-                    covered_ops,
-                    out,
-                );
+                walk_expr_for_effects(el, env, effect_map, required_effects_map, covered_ops, out);
             }
             if let Some(s) = spread {
-                walk_expr_for_effects(
-                    s,
-                    env,
-                    effect_map,
-                    required_effects_map,
-                    covered_ops,
-                    out,
-                );
+                walk_expr_for_effects(s, env, effect_map, required_effects_map, covered_ops, out);
             }
         }
         Expr::TupleLit(items) => {
@@ -317,9 +303,18 @@ fn walk_expr_for_effects(
             }
         }
         Expr::Var { name, .. } => {
-            collect_op_or_callee_effects(name, env, effect_map, required_effects_map, covered_ops, out);
+            collect_op_or_callee_effects(
+                name,
+                env,
+                effect_map,
+                required_effects_map,
+                covered_ops,
+                out,
+            );
         }
-        Expr::Qualified { receiver, member, .. } => {
+        Expr::Qualified {
+            receiver, member, ..
+        } => {
             let qualified = format!("{}.{}", receiver, member);
             collect_op_or_callee_effects(
                 &qualified,
@@ -377,14 +372,7 @@ fn walk_expr_for_effects(
                 covered_ops,
                 out,
             );
-            walk_expr_for_effects(
-                arg,
-                env,
-                effect_map,
-                required_effects_map,
-                covered_ops,
-                out,
-            );
+            walk_expr_for_effects(arg, env, effect_map, required_effects_map, covered_ops, out);
         }
         Expr::MethodCall {
             receiver,
@@ -402,14 +390,7 @@ fn walk_expr_for_effects(
                 out,
             );
             for arg in args {
-                walk_expr_for_effects(
-                    arg,
-                    env,
-                    effect_map,
-                    required_effects_map,
-                    covered_ops,
-                    out,
-                );
+                walk_expr_for_effects(arg, env, effect_map, required_effects_map, covered_ops, out);
             }
         }
         Expr::Pipeline { value, callee, .. } => {
@@ -451,14 +432,7 @@ fn walk_expr_for_effects(
             let extra = covered_ops_from_handler(handler, env, effect_map);
             let mut merged: HashSet<String> = covered_ops.clone();
             merged.extend(extra);
-            walk_stmts_for_effects(
-                body,
-                env,
-                effect_map,
-                required_effects_map,
-                &merged,
-                out,
-            );
+            walk_stmts_for_effects(body, env, effect_map, required_effects_map, &merged, out);
         }
         Expr::Resume { value } => walk_expr_for_effects(
             value,
@@ -776,13 +750,7 @@ mod infer_expr_effects_tests {
         let effect_map = effect_map_with("Log", &["log"]);
         let body = call(var("log"), Expr::StringLit("hi".to_string()));
 
-        let row = infer_expr_effects(
-            &body,
-            &env,
-            &effect_map,
-            &HashMap::new(),
-            &HashSet::new(),
-        );
+        let row = infer_expr_effects(&body, &env, &effect_map, &HashMap::new(), &HashSet::new());
 
         let expected: BTreeSet<String> = ["Log".to_string()].into_iter().collect();
         assert_eq!(row.fixed, expected);
@@ -862,13 +830,7 @@ mod infer_expr_effects_tests {
             right: Box::new(Expr::IntLit(2)),
         };
 
-        let row = infer_expr_effects(
-            &body,
-            &env,
-            &effect_map,
-            &HashMap::new(),
-            &HashSet::new(),
-        );
+        let row = infer_expr_effects(&body, &env, &effect_map, &HashMap::new(), &HashSet::new());
 
         assert!(row.is_empty_closed());
     }
@@ -905,13 +867,7 @@ mod infer_expr_effects_tests {
             span: None,
         };
 
-        let row = infer_expr_effects(
-            &body,
-            &env,
-            &effect_map,
-            &HashMap::new(),
-            &HashSet::new(),
-        );
+        let row = infer_expr_effects(&body, &env, &effect_map, &HashMap::new(), &HashSet::new());
 
         let expected: BTreeSet<String> = ["Log".to_string()].into_iter().collect();
         assert_eq!(row.fixed, expected);
@@ -948,7 +904,10 @@ mod infer_expr_effects_tests {
             &HashSet::new(),
         );
 
-        assert!(row.fixed.is_empty(), "qualified clause should cover bare op");
+        assert!(
+            row.fixed.is_empty(),
+            "qualified clause should cover bare op"
+        );
     }
 
     #[test]
@@ -978,13 +937,7 @@ mod infer_expr_effects_tests {
             body,
         };
 
-        let row = infer_expr_effects(
-            &with_expr,
-            &env,
-            &effect_map,
-            &required,
-            &HashSet::new(),
-        );
+        let row = infer_expr_effects(&with_expr, &env, &effect_map, &required, &HashSet::new());
 
         assert!(
             row.fixed.is_empty(),
@@ -1008,13 +961,7 @@ mod infer_expr_effects_tests {
             Stmt::Expr(var("log"), None),
         ]);
 
-        let row = infer_expr_effects(
-            &body,
-            &env,
-            &effect_map,
-            &HashMap::new(),
-            &HashSet::new(),
-        );
+        let row = infer_expr_effects(&body, &env, &effect_map, &HashMap::new(), &HashSet::new());
 
         assert!(
             row.fixed.is_empty(),

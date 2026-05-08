@@ -119,11 +119,7 @@ pub(crate) fn check_ordinary_call_arg_types_in_expr(
             // the merge that `check_unhandled_effects_in_expr` does on the
             // `Expr::With` branch.
             let handler_covered =
-                crate::typecheck_effect::covered_ops_from_handler(
-                    handler,
-                    env,
-                    ctx.effect_map,
-                );
+                crate::typecheck_effect::covered_ops_from_handler(handler, env, ctx.effect_map);
             let mut merged = ctx.covered_ops.clone();
             merged.extend(handler_covered);
             let inner_ctx = CallContext {
@@ -136,9 +132,7 @@ pub(crate) fn check_ordinary_call_arg_types_in_expr(
             }
             Ok(())
         }
-        Expr::Resume { value } => {
-            check_ordinary_call_arg_types_in_expr(value, env, decl_name, ctx)
-        }
+        Expr::Resume { value } => check_ordinary_call_arg_types_in_expr(value, env, decl_name, ctx),
         Expr::Block(stmts) => {
             for stmt in stmts {
                 check_ordinary_call_arg_types_in_stmt(stmt, env, decl_name, ctx)?;
@@ -192,9 +186,7 @@ fn check_ordinary_call_arg_types_in_stmt(
         Stmt::Binding { value, .. }
         | Stmt::MutBinding { value, .. }
         | Stmt::Assign { value, .. }
-        | Stmt::Expr(value, _) => {
-            check_ordinary_call_arg_types_in_expr(value, env, decl_name, ctx)
-        }
+        | Stmt::Expr(value, _) => check_ordinary_call_arg_types_in_expr(value, env, decl_name, ctx),
     }
 }
 
@@ -304,14 +296,10 @@ fn validate_call_chain(
                 // closes this by either flattening curried lambda inferred
                 // types or carrying the body's row through nested `Ty::Fun`
                 // segments before this point.
-                let expected_outer_effects = match env
-                    .resolve_alias(&apply_type_substitution(
-                        &expected_after_subst,
-                        &subst,
-                        &row_subst,
-                        env,
-                    ), 0)
-                {
+                let expected_outer_effects = match env.resolve_alias(
+                    &apply_type_substitution(&expected_after_subst, &subst, &row_subst, env),
+                    0,
+                ) {
                     Ty::Fun { effects, .. } => effects,
                     _ => EffectRow::closed_empty(),
                 };
@@ -323,11 +311,7 @@ fn validate_call_chain(
                 // *terminal* body's effects by walking through nested
                 // `Expr::Lambda` AST nodes so the row variable absorbs what
                 // the callback emits when fully applied.
-                let actual_outer_effects = if expected_arity_flat(
-                    &expected_after_subst,
-                    env,
-                ) > 1
-                {
+                let actual_outer_effects = if expected_arity_flat(&expected_after_subst, env) > 1 {
                     infer_curried_lambda_body_effects(
                         arg,
                         env,
@@ -357,22 +341,17 @@ fn validate_call_chain(
                     // the surrounding declaration happens to list `can E`.
                     let target_name = resolved_callable_name(target);
                     let call_target = target_name.as_deref().unwrap_or("function");
-                    let resolved_expected =
-                        crate::typecheck_unify::apply_row_substitution(
-                            &expected_outer_effects,
-                            &row_subst,
-                        )
-                        .unwrap_or_else(|| expected_outer_effects.clone());
-                    let resolved_actual =
-                        crate::typecheck_unify::apply_row_substitution(
-                            &actual_outer_effects,
-                            &row_subst,
-                        )
-                        .unwrap_or_else(|| actual_outer_effects.clone());
-                    let detail = classify_effect_row_mismatch(
-                        &resolved_expected,
-                        &resolved_actual,
-                    );
+                    let resolved_expected = crate::typecheck_unify::apply_row_substitution(
+                        &expected_outer_effects,
+                        &row_subst,
+                    )
+                    .unwrap_or_else(|| expected_outer_effects.clone());
+                    let resolved_actual = crate::typecheck_unify::apply_row_substitution(
+                        &actual_outer_effects,
+                        &row_subst,
+                    )
+                    .unwrap_or_else(|| actual_outer_effects.clone());
+                    let detail = classify_effect_row_mismatch(&resolved_expected, &resolved_actual);
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
                         span: best_available_expr_span(arg),
@@ -625,8 +604,9 @@ pub(crate) fn infer_call_effects_at_site(
     }
     let mut next_id = 0usize;
     let target_ty = check_expr(target, env);
-    let Ty::Fun { params, effects, .. } =
-        instantiate_ty_with_fresh_type_vars_for_call_site(&target_ty, &mut next_id)
+    let Ty::Fun {
+        params, effects, ..
+    } = instantiate_ty_with_fresh_type_vars_for_call_site(&target_ty, &mut next_id)
     else {
         return None;
     };
@@ -772,16 +752,8 @@ fn classify_effect_row_mismatch(expected: &EffectRow, actual: &EffectRow) -> Str
                     .collect::<Vec<_>>()
                     .join(", ")
             };
-            let extras: Vec<String> = actual
-                .fixed
-                .difference(&expected.fixed)
-                .cloned()
-                .collect();
-            let missing: Vec<String> = expected
-                .fixed
-                .difference(&actual.fixed)
-                .cloned()
-                .collect();
+            let extras: Vec<String> = actual.fixed.difference(&expected.fixed).cloned().collect();
+            let missing: Vec<String> = expected.fixed.difference(&actual.fixed).cloned().collect();
             match (extras.is_empty(), missing.is_empty()) {
                 (true, true) => String::new(),
                 (false, true) => format!(
