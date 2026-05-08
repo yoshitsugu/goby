@@ -4,13 +4,17 @@ Last updated: 2026-05-08.
 
 ## Current Focus
 
-**Track GU (generic user-defined types) — design freeze complete (GU-D0).**
-`doc/PLAN_GU.md` §11 Open Questions Q1–Q3 closed via Codex review on
-2026-05-08; the resolutions are recorded in §3.7 (heap layout reuses
-existing `Record` payload), §3.8 (qualified `TypeName.Ctor` accepted in
-both expression and pattern position), and §6 GU-X0 (arity diagnostic
-reuses function-call wording). Next phase is **GU-D1: spec freeze** —
-apply §3.8 to `doc/LANGUAGE_SPEC.md` §3 before any code lands.
+**Track GU (generic user-defined types) — spec freeze complete (GU-D1).**
+`doc/PLAN_GU.md` §3.8 surface text is now in `doc/LANGUAGE_SPEC.md`
+(commit `9c715e5`, 2026-05-08): the new union/record grammar (with type
+parameters and variant args) is documented in §2 alongside the alias
+form, and the constructor-pattern subsection (bare and `TypeName.Ctor`
+forms) is documented in §3 next to list patterns. `doc/PLAN_IR.md` WB-2B
+"Out of scope" note is updated to drop the now-incorrect "do not exist
+in the current language spec" claim. Next phase is **GU-S1: destructive
+AST swap** — `crates/goby-core/src/ast.rs` is reshaped to the §3.1/§3.2
+final form; the build is intentionally broken at the GU-S1 commit and
+GU-S2 walks the layers in dependency order to repair it.
 
 Track PC remains queued; it cannot start before GU-X2 (the closed-form
 green check). The earlier reference to `tmp/pc.md` is dropped — the
@@ -39,11 +43,12 @@ Red / ignored:
 
 **Primary (active):**
 
-- **Track GU (generic user-defined types) — GU-D1 next.** GU-D0 design
-  freeze complete (Codex-reviewed 2026-05-08). The next step is to
-  apply `doc/PLAN_GU.md` §3.8 to `doc/LANGUAGE_SPEC.md` §3 (spec
-  freeze), then GU-S1 (destructive AST swap; build intentionally
-  breaks). See `doc/PLAN_GU.md` §6 for the full phase list.
+- **Track GU (generic user-defined types) — GU-S1 next.** GU-D0 design
+  freeze and GU-D1 spec freeze complete (commits up to `9c715e5`,
+  2026-05-08). The next step is GU-S1 (destructive AST swap in
+  `crates/goby-core/src/ast.rs` to the §3.1/§3.2 final shape; the
+  build is intentionally broken at this phase and repaired layer by
+  layer in GU-S2). See `doc/PLAN_GU.md` §6 for the full phase list.
 
 **Queued behind GU:**
 
