@@ -1469,6 +1469,28 @@ main = ()
     }
 
     #[test]
+    fn hover_at_top_level_function_with_float_annotation() {
+        // `Float` annotations on top-level declarations must render
+        // identically to `Int` annotations in hover (the SymbolIndex
+        // path stores and returns the annotation text verbatim).
+        let source = "add : Float -> Float -> Float\nadd x y = x + y\n";
+        let hover = hover_at(
+            source,
+            None,
+            Position {
+                line: 1,
+                character: 0,
+            },
+        );
+        let hover = hover.expect("expected hover");
+        if let HoverContents::Markup(mc) = hover.contents {
+            assert_eq!(mc.value, "add : Float -> Float -> Float");
+        } else {
+            panic!("expected Markup hover contents");
+        }
+    }
+
+    #[test]
     fn hover_at_unknown_position_returns_none() {
         let source = "add x = x + 1\n";
         // cursor on whitespace
@@ -1698,6 +1720,28 @@ main = ()
         if let Some(hover) = result {
             if let HoverContents::Markup(mc) = hover.contents {
                 assert_eq!(mc.value, "y : Int");
+            } else {
+                panic!("expected Markup hover");
+            }
+        }
+    }
+
+    #[test]
+    fn local_binding_hover_basic_float() {
+        // Local-binding hover relies on `infer_local_bindings` +
+        // `check_expr` to render the inferred type. With a `Float`
+        // declaration annotation, `y = x + 1.0` must infer to
+        // `Float` (Float + Float -> Float) and render as "y : Float".
+        let source = "add : Float -> Float\nadd x =\n  y = x + 1.0\n  y\n";
+        let pos = Position {
+            line: 2,
+            character: 2,
+        };
+        let result = hover_at(source, None, pos);
+        assert!(result.is_some(), "expected hover for local binding 'y'");
+        if let Some(hover) = result {
+            if let HoverContents::Markup(mc) = hover.contents {
+                assert_eq!(mc.value, "y : Float");
             } else {
                 panic!("expected Markup hover");
             }
