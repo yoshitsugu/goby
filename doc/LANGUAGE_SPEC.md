@@ -83,16 +83,23 @@ syntax/semantics.
       - `NaN` → `NaN`,
       - negative zero → `-0.0`, zero → `0.0`.
   - implementation status (2026-05-08): the literal grammar, type rules,
-    operator overloading, diagnostics, runtime value representation
-    (heap-boxed `f64` behind `TAG_FLOAT`), and runtime printing through
-    `format_float` (the Haskell-`show` rendering above) are live for
-    `Float` literals: a `Float` value can be created in source, flow
-    through `print` / interpolation, and round-trip the host formatter.
-    `Float, Float -> Float` arithmetic and `Float, Float -> Bool`
-    comparisons (`+`, `-`, `*`, `/`, `==`, `<`, `<=`, `>`, `>=`) are still
-    deferred to Phase E5-B (`doc/PLAN.md` §4.4); programs that compute on
-    `Float` operands surface a Phase-E5-pointed codegen error until that
-    work lands.
+    operator overloading, diagnostics, `Float, Float -> Float` arithmetic,
+    `Float, Float -> Bool` comparisons (`+`, `-`, `*`, `/`, `==`, `<`,
+    `<=`, `>`, `>=`), and runtime printing through `format_float` (the
+    Haskell-`show` rendering above) all ship on both lowering routes:
+    GeneralLowered Wasm (E5-A literal, E5-B arithmetic / comparison via
+    `IrBinOp::Float*` and `f64.<op>` emission, with `Float` values
+    represented at runtime as heap-boxed `f64` behind `TAG_FLOAT`) and
+    the static-output / native fallback path (E5-C
+    `NativeValue::Float(f64)` + `IrBinOp::Float*` arms in
+    `lower.rs::eval_value`, plus `RuntimeValue::Float(f64)` in the
+    interpreter family). Both paths share `gen_lower::value::format_float`
+    so output is byte-identical. Equality follows IEEE 754
+    (`NaN != NaN`, `-0.0 == 0.0`), not bit equality. The decl-rooted
+    Float dispatcher in `ir_lower` covers parameter-rooted Float
+    arithmetic; `let x = a + b` style locals and call-return Float
+    values still lower to integer ops at IR time pending a typed
+    resolved IR (tracked in `doc/PLAN.md` §4.4).
 - `List` contract (published M8):
   - `List` is Goby's default ordered collection surface.
   - Runtime representation is intentionally not specified as a linked-list

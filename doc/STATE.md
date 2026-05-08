@@ -1,8 +1,9 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-08 (Track Float E1–E4 + E5-A and E5-B landed;
-E5-C — interpreter fallback for Float — is the next active line.
-Track PC remains queued behind user design review.)
+Last updated: 2026-05-08 (Track Float E1–E4 + E5-A, E5-B, and E5-C
+landed; E5-D — parity acceptance + `examples/float_basics.gb` — is
+the next active line. Track PC remains queued behind user design
+review.)
 
 ## Current Focus
 
@@ -85,9 +86,47 @@ Phase progress:
     Add/Sub/Mul/Div, ÷0 → Infinity / -Infinity / NaN, ±0 equality,
     NaN-self-inequality, Lt/Gt/Le/Ge ordering, NaN ordering, and a
     shadow regression test pinning the local-let → Int dispatch.
-  - **E5-C** queued: interpreter fallback (`RuntimeValue::Float`,
-    `NativeValue::Float`, runtime equality and printing through
-    `format_float`).
+  - **E5-C** complete (commits backfill in next slice): interpreter
+    fallback for Float. `RuntimeValue::Float(f64)` and
+    `NativeValue::Float(f64)` plumb through every fallback path
+    (`runtime_value` / `runtime_resolver` / `runtime_expr` /
+    `runtime_replay` / `runtime_decl::runtime_value_to_expr` /
+    `lower.rs::eval_value`). Equality is IEEE 754 via `f64 == f64`
+    in `runtime_value_eq` (single source of truth — `[NaN] != [NaN]`,
+    `Record { f: -0.0 } == Record { f: 0.0 }`). `apply_binop_runtime_value`
+    gains Float×Float `Add/Sub/Mul/Div/Lt/Gt/Le/Ge` (Eq is shared with
+    runtime_value_eq); refactored to a private free
+    `apply_binop_runtime_value_pure` so the dispatch table is testable
+    without a `RuntimeOutputResolver`. `lower.rs::eval_value` adds
+    `IrBinOp::Float*` arms that dispatch on the IR opcode (E5-B
+    introduced them) and never mix Float into the integer
+    `IrBinOp::Add` arm. Both `RuntimeValue::Float::format_text` and
+    `NativeValue::Float::as_output_text` route through
+    `gen_lower::value::format_float` for byte-identical output with the
+    Wasm host formatter (`1.0`, `Infinity`, `-Infinity`, `NaN`, `-0.0`,
+    `0.0`). The capability allowlist clause `has_float_in_comp` (which
+    forced every Float-touching program into GeneralLowered in E5-A)
+    is removed; pure-print Float mains now classify as
+    `NotRequiringRuntimeCapability` and take the simpler route. Mixed
+    Float + lambda / handler / read / non-main helpers still funnel
+    into GL via the remaining capability triggers.
+    Defensive guards: `apply_pipeline` (resolver) and
+    `execute_unit_call_ast` (exec) refuse `RuntimeValue::contains_float()`
+    arguments because their source-synthesis path can't spell
+    `Infinity` / `NaN` / `-0.0` as surface literals; the recursive
+    predicate also catches `[NaN]` / `(Infinity)` nested inside
+    list/tuple/record. `RuntimeLocals::int_view` explicitly skips
+    Float so `IntEvaluator` never sees a Float-shaped local.
+    `runtime_unit.rs` and `runtime_decl.rs` extend the bare-literal
+    no-op statement filter (`{Var, IntLit, StringLit, BoolLit}`) to
+    include `FloatLit`. Tests: `runtime_value::tests` (5 IEEE / format
+    / contains_float), `runtime_apply::tests` (8 dispatch tests
+    including Float==Int False, NaN ordering, ÷0), `lower::tests` (5
+    end-to-end native-fallback Float emit/output covering arithmetic,
+    ÷0 → Infinity, NaN, `-0.0 == 0.0`, NaN ordering),
+    `gen_lower::tests::supports_general_lower_module_returns_reason_for_pure_float_arithmetic_main`
+    (locks the lifted gate boundary). `cargo nextest run -p goby-wasm`:
+    848 passed, 12 skipped.
   - **E5-D** queued: parity acceptance + minimal
     `examples/float_basics.gb`. The E5-B interim reject test has
     already been retired so removal is no longer pending.
@@ -118,24 +157,24 @@ Red / ignored:
 
 ## Next Step
 
-**Primary (Track Float E5-C):**
+**Primary (Track Float E5-D):**
 
-Add an interpreter fallback for `Float`. Today the GeneralLowered Wasm
-path is the only one that can run programs containing Float values; the
-fallback runtime (`runtime_apply` / `runtime_decl` / `runtime_resolver`
-/ `lower.rs::eval_value`) lacks `RuntimeValue::Float(f64)` and
-`NativeValue::Float(f64)`, and the capability allowlist still rejects
-Float-typed bindings outside the GeneralLowered gate. E5-C work:
+Land the parity acceptance slice. The Wasm path (E5-A literal,
+E5-B arithmetic / comparison) and the fallback paths (E5-C) now both
+render Float through `gen_lower::value::format_float`, so output is
+byte-identical regardless of which lowering route a program takes.
+E5-D work:
 
-1. Add `RuntimeValue::Float(f64)` and `NativeValue::Float(f64)`,
-   plumb them through `runtime_value_eq`, `format_text`, and the
-   resolver / apply / decl entry points.
-2. Route equality and printing through the shared
-   `gen_lower/value::format_float` so the fallback and the Wasm host
-   formatter agree on `1.0`, `Infinity`, `-Infinity`, `NaN`, `-0.0`,
-   `0.0`. Equality follows IEEE 754, not bit-eq.
-3. Lift the GeneralLowered-only restriction in the capability
-   allowlist for Float once parity is demonstrable.
+1. Add a minimal `examples/float_basics.gb` exercising the Float
+   surface (literal printing, arithmetic, comparison, ±Infinity / NaN
+   from ÷0).
+2. Drive that example (and existing var-rooted Float arithmetic
+   sources) through both lowering routes — the GL helper
+   `run_general_lowered_float_program` for the Wasm path, plus the
+   native-fallback path — and assert byte-identical output.
+3. Confirm that the existing E5-B interim reject test
+   (`compile_module_rejects_var_rooted_float_arithmetic_until_phase_e5b`)
+   stays retired; removal already shipped in E5-B.
 
 **Parallel (queued, parallelizable):**
 

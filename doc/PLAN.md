@@ -758,7 +758,8 @@ Execution phases (revised after Codex Pass1 review):
      The Phase E3 module-level safety net is removed; the GeneralLowered
      capability gate gains a `has_float_in_comp` clause so `Float` programs
      no longer fall into the static-output / native-fallback path that
-     cannot render TAG_FLOAT.
+     cannot render TAG_FLOAT. (The `has_float_in_comp` clause is later
+     lifted in E5-C once the fallback paths can render Float themselves.)
    - **E5-B** (complete): real `Float, Float -> Float` and
      `Float, Float -> Bool` Wasm emission. The deferred
      `IrBinOp::Float{Add,Sub,Mul,Div,Eq,Lt,Gt,Le,Ge}` codegen errors are
@@ -781,25 +782,62 @@ Execution phases (revised after Codex Pass1 review):
      dispatcher remains decl-param + literal-rooted only** — Float
      values introduced by `let x = a + b` or by call-return are still
      not tracked at lowering time and lower to integer ops; a typed
-     resolved IR (E5-D / post-Float work) is the long-term home.
+     resolved IR (post-Float work) is the long-term home.
      The interim `compile_module_rejects_var_rooted_float_arithmetic_until_phase_e5b`
      test was retired in favour of 16 var-rooted execution tests plus a
      shadow regression test.
-   - **E5-C** (queued): interpreter fallback. Add `RuntimeValue::Float(f64)`
-     and `NativeValue::Float(f64)`, route `runtime_value_eq` /
-     `format_text` / `runtime_expr` literal+binop / `lower.rs::eval_value`
-     / `runtime_apply.rs` / `runtime_decl.rs` / `runtime_resolver.rs` and
-     the fallback capability allowlist through `format_float`. Equality
-     here also follows IEEE 754, not bit-eq.
+   - **E5-C** (complete): interpreter fallback for Float. Both fallback
+     evaluators learn Float so `Float` programs no longer have to take
+     the GeneralLowered Wasm route to be runnable / printable.
+     `RuntimeValue::Float(f64)` plumbs through every
+     `RuntimeOutputResolver` family path (`runtime_value` /
+     `runtime_resolver` / `runtime_expr` / `runtime_replay` /
+     `runtime_decl::runtime_value_to_expr`); `runtime_value_eq` uses
+     `f64 == f64` so IEEE 754 (`NaN != NaN`, `-0.0 == 0.0`) is the
+     single source of truth for nested `[NaN]` / `Record { f: -0.0 }`
+     comparisons. `apply_binop_runtime_value` gains Float×Float
+     `Add/Sub/Mul/Div/Lt/Gt/Le/Ge` arms (Eq is shared with
+     `runtime_value_eq`); the dispatch body was refactored into a
+     private free `apply_binop_runtime_value_pure(op, lv, rv)` so the
+     table is testable without constructing a full
+     `RuntimeOutputResolver`. The static-output / native fallback in
+     `lower.rs` adds `NativeValue::Float(f64)` and 9 `IrBinOp::Float*`
+     arms in `eval_value`; the IR opcode is the dispatch source of
+     truth so Float operands never mix into the integer `IrBinOp::Add`
+     arm. Both `format_text` and `as_output_text` route through the
+     shared `gen_lower::value::format_float` for byte-identical output
+     with the Wasm host formatter (`1.0`, `Infinity`, `-Infinity`,
+     `NaN`, `-0.0`, `0.0`). Defensive guards: `apply_pipeline` and
+     `execute_unit_call_ast` reject any `RuntimeValue::contains_float()`
+     argument because the source-synthesis path through
+     `to_expression_text` cannot spell `Infinity` / `NaN` / `-0.0` as
+     surface literals (the recursive predicate also catches `[NaN]`
+     nested in list/tuple/record). `RuntimeLocals::int_view` skips
+     Float so `IntEvaluator` never sees a Float-shaped local.
+     `runtime_unit.rs` and `runtime_decl.rs` extend the
+     bare-literal-statement no-op filter to include `FloatLit`. The
+     `has_float_in_comp` capability allowlist clause introduced in
+     E5-A is removed (helpers `has_float_in_comp` /
+     `has_float_in_value` deleted as dead code); pure-print Float
+     mains now classify as `NotRequiringRuntimeCapability` and take
+     the simpler route, while mixed Float + lambda / handler / read /
+     non-main helpers still funnel into GL via the remaining
+     capability triggers. New regression test
+     `gen_lower::tests::supports_general_lower_module_returns_reason_for_pure_float_arithmetic_main`
+     locks the lifted gate boundary.
    - **E5-D** (queued): parity acceptance + minimal `examples/float_basics.gb`.
      The E5-B interim guard test
      (`compile_tests::compile_module_rejects_var_rooted_float_arithmetic_until_phase_e5b`)
      was retired in E5-B itself when var-rooted Float arithmetic became
      executable, so removal is no longer pending.
-6. **Phase E6: Examples / formatter / LSP / docs sync**.
-   - add `examples/float_basics.gb` (or equivalent) and a formatter
-     idempotence test,
-   - update `doc/STATE.md` Track Float status; spec was already locked in E1,
+6. **Phase E6: Formatter idempotence + LSP hover + final docs sync**.
+   - add a formatter idempotence test for Float literals,
+   - confirm LSP hover renders `Float` annotations / inferred types,
+   - finalize `doc/STATE.md` Track Float status; spec was already locked
+     in E1 and the implementation-status paragraph is kept current as
+     E5-* slices land,
+   - any additional Float examples beyond the minimal
+     `examples/float_basics.gb` that E5-D ships,
    - run `goby-invariants` before commit.
 
 Acceptance criteria (track-level):
