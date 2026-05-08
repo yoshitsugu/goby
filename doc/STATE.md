@@ -57,7 +57,7 @@ Phase progress:
     GeneralLowered capability gate gains a `has_float_in_comp` clause
     so `Float` programs no longer fall into the static-output /
     native-fallback path that cannot render TAG_FLOAT.
-  - **E5-B** complete: `IrBinOp::Float{Add,Sub,Mul,Div,Eq,Lt,Gt,Le,Ge}`
+  - **E5-B** complete (`a12a9c7`, `9556d89`): `IrBinOp::Float{Add,Sub,Mul,Div,Eq,Lt,Gt,Le,Ge}`
     now emit real `unbox → f64.<op> → rebox` Wasm. Stack order for
     non-commutative ops is locked via two i64 scratch locals
     (`scratch0 = right`, `scratch1 = left`, matching the existing
