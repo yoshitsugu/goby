@@ -904,6 +904,7 @@ pub(crate) fn collect_all_instrs(instrs: &[WasmBackendInstr]) -> Vec<&WasmBacken
 /// Returns true when `instrs` require heap-cursor state.
 pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
     use crate::gen_lower::backend_ir::BackendCasePattern;
+    use goby_core::ir::IrBinOp;
     collect_all_instrs(instrs).iter().any(|i| {
         matches!(
             i,
@@ -918,6 +919,16 @@ pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                 | WasmBackendInstr::CreateClosure { .. }
                 | WasmBackendInstr::AllocMutableCell { .. }
                 | WasmBackendInstr::AllocFloatBox { .. }
+                // Float arithmetic ops rebox the f64 result into a fresh
+                // TAG_FLOAT box, so heap cursor state is required. Float
+                // comparisons (FloatEq/Lt/Gt/Le/Ge) consume two boxed
+                // operands but produce a TAG_BOOL i64 — no heap state.
+                | WasmBackendInstr::BinOp {
+                    op: IrBinOp::FloatAdd
+                        | IrBinOp::FloatSub
+                        | IrBinOp::FloatMul
+                        | IrBinOp::FloatDiv
+                }
                 | WasmBackendInstr::Intrinsic {
                     intrinsic: BackendIntrinsic::StringSplit
                         | BackendIntrinsic::ValueToString
@@ -1048,7 +1059,21 @@ fn needs_scratch_state(instrs: &[WasmBackendInstr]) -> bool {
     }
 
     collect_all_instrs(instrs).iter().any(|instr| match instr {
-        WasmBackendInstr::BinOp { op } => matches!(op, IrBinOp::Eq),
+        WasmBackendInstr::BinOp { op } => matches!(
+            op,
+            IrBinOp::Eq
+                // All Float ops route operands through the i64 scratch
+                // pool to fix left/right order before unbox/compare/rebox.
+                | IrBinOp::FloatAdd
+                | IrBinOp::FloatSub
+                | IrBinOp::FloatMul
+                | IrBinOp::FloatDiv
+                | IrBinOp::FloatEq
+                | IrBinOp::FloatLt
+                | IrBinOp::FloatGt
+                | IrBinOp::FloatLe
+                | IrBinOp::FloatGe
+        ),
         WasmBackendInstr::RefCountDropReuse { .. } => true,
         WasmBackendInstr::Intrinsic {
             intrinsic:
@@ -1218,7 +1243,24 @@ fn required_i64_scratch_count(instrs: &[WasmBackendInstr]) -> u32 {
             )
         }),
         WasmBackendInstr::BinOp { op } => {
-            matches!(op, IrBinOp::Mul | IrBinOp::Div | IrBinOp::Mod | IrBinOp::Eq)
+            matches!(
+                op,
+                IrBinOp::Mul
+                    | IrBinOp::Div
+                    | IrBinOp::Mod
+                    | IrBinOp::Eq
+                    // Float ops use two i64 scratches to stage left/right
+                    // unboxed operands before f64.<op> / f64.<cmp>.
+                    | IrBinOp::FloatAdd
+                    | IrBinOp::FloatSub
+                    | IrBinOp::FloatMul
+                    | IrBinOp::FloatDiv
+                    | IrBinOp::FloatEq
+                    | IrBinOp::FloatLt
+                    | IrBinOp::FloatGt
+                    | IrBinOp::FloatLe
+                    | IrBinOp::FloatGe
+            )
         }
         _ => false,
     });
@@ -2343,6 +2385,7 @@ fn emit_instrs_with_heap_depth(
                     op,
                     i64_scratch_base,
                     scratch_state,
+                    helper_state,
                     PtrWidth::from_memory64(options.memory_config.memory64),
                 )?;
             }
@@ -9055,14 +9098,19 @@ fn emit_list_set_in_place_helper(
 /// because `TAG_BOOL & TAG_BOOL == TAG_BOOL` (0x2 & 0x2 = 0x2). No retagging needed.
 ///
 /// `i64_scratch_base` is the index of the first scratch i64 local (allocated when
-/// `required_i64_scratch_count > 0`). Mul/Div/Mod require two consecutive scratch i64 locals.
+/// `required_i64_scratch_count > 0`). Mul/Div/Mod, Eq, and the Float ops
+/// (Add/Sub/Mul/Div/Eq/Lt/Gt/Le/Ge) require two consecutive scratch i64 locals.
+/// `heap_state` is provided when the function performs heap allocation; Float
+/// arithmetic uses it to rebox the f64 result into a fresh TAG_FLOAT box.
 fn emit_bin_op(
     function: &mut Function,
     op: &IrBinOp,
     i64_scratch_base: Option<u32>,
-    helper_state: Option<EmitScratchState>,
+    scratch_state: Option<EmitScratchState>,
+    heap_state: Option<HeapEmitState>,
     pw: PtrWidth,
 ) -> Result<(), CodegenError> {
+    let _ = heap_state; // E5-B Step 1: heap_state will be consumed by Float arithmetic in Step 2.
     const PAYLOAD_MASK: i64 = (1i64 << 60) - 1;
     const TAG_INT_SHIFT: i64 = (TAG_INT as i64) << 60;
     const TAG_BOOL_SHIFT: i64 = (TAG_BOOL as i64) << 60;
@@ -9208,7 +9256,7 @@ fn emit_bin_op(
             // - otherwise String/String falls through to content comparison,
             // - all other unequal pairs are false.
             let (right_i64, left_i64) = require_scratch!(i64_scratch_base, "Eq");
-            let hs = require_scratch_state(helper_state, "BinOp::Eq")?;
+            let hs = require_scratch_state(scratch_state, "BinOp::Eq")?;
             let s_left_ptr = hs.i32_base + HS_TEXT_PTR;
             let s_left_len = hs.i32_base + HS_TEXT_LEN;
             let s_right_ptr = hs.i32_base + HS_SEP_PTR;
