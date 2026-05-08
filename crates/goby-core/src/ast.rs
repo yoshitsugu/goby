@@ -126,13 +126,23 @@ pub enum TypeDeclaration {
     },
     Union {
         name: String,
-        constructors: Vec<String>,
+        type_params: Vec<String>,
+        variants: Vec<UnionVariant>,
     },
     Record {
         name: String,
+        type_params: Vec<String>,
         constructor: String,
         fields: Vec<RecordField>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnionVariant {
+    pub ctor: String,
+    /// Positional arg type annotations as raw strings, mirroring `RecordField::type_annotation`.
+    /// Empty for nullary variants like `Nothing` / `Leaf`.
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,6 +215,29 @@ pub enum CasePattern {
         items: Vec<ListPatternItem>,
         tail: Option<ListPatternTail>,
     },
+    /// Constructor pattern: `Ctor`, `Ctor x`, `Ctor x y _`, plus the
+    /// type-qualified form `TypeName.Ctor`, `TypeName.Ctor x`.
+    /// For nullary variants, `args` is empty.
+    /// `type_qualifier` is `Some("TypeName")` when the source used the
+    /// qualified form, `None` for the bare form. The bare and qualified
+    /// forms are semantically equivalent; `type_qualifier` is preserved
+    /// only so that the typecheck-side name-resolution / ambiguity-
+    /// resolution rule can use the qualifier to disambiguate when both
+    /// forms are otherwise indistinguishable. Walkers that do not care
+    /// about resolution treat the two cases uniformly.
+    /// Nested constructor patterns are out of scope for now
+    /// (each `CtorPatternArg` is a binder or wildcard, not a sub-pattern).
+    Ctor {
+        type_qualifier: Option<String>,
+        ctor: String,
+        args: Vec<CtorPatternArg>,
+    },
+    Wildcard,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CtorPatternArg {
+    Bind(String),
     Wildcard,
 }
 

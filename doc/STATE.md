@@ -4,17 +4,19 @@ Last updated: 2026-05-09.
 
 ## Current Focus
 
-**Track GU (generic user-defined types) — spec freeze complete (GU-D1).**
-`doc/PLAN_GU.md` §3.8 surface text is now in `doc/LANGUAGE_SPEC.md`
-(commit `9c715e5`, 2026-05-08): the new union/record grammar (with type
-parameters and variant args) is documented in §2 alongside the alias
-form, and the constructor-pattern subsection (bare and `TypeName.Ctor`
-forms) is documented in §3 next to list patterns. `doc/PLAN_IR.md` WB-2B
-"Out of scope" note is updated to drop the now-incorrect "do not exist
-in the current language spec" claim. Next phase is **GU-S1: destructive
-AST swap** — `crates/goby-core/src/ast.rs` is reshaped to the §3.1/§3.2
-final form; the build is intentionally broken at the GU-S1 commit and
-GU-S2 walks the layers in dependency order to repair it.
+**Track GU (generic user-defined types) — destructive AST swap complete (GU-S1).**
+`crates/goby-core/src/ast.rs` is now reshaped to the `doc/PLAN_GU.md`
+§3.1/§3.2 final form: `TypeDeclaration::Union { name, type_params,
+variants: Vec<UnionVariant> }`, `TypeDeclaration::Record` carries
+`type_params`, `CasePattern::Ctor { type_qualifier, ctor, args:
+Vec<CtorPatternArg> }` exists alongside the existing list patterns,
+and the new `UnionVariant` / `CtorPatternArg` types are introduced.
+The build is intentionally broken in this commit; `cargo build -p
+goby-core` reports errors localised to six files (ast.rs, formatter.rs,
+ir_lower.rs, parser_top.rs, typecheck_build.rs, typecheck_types.rs),
+all within the §4 walk-list. Next phase is **GU-S2a: Parser layer**
+(`parser_top.rs`, `parser_pattern.rs`, `parser_util.rs`) — parse the
+new grammar (type params + variant args + constructor patterns).
 
 Track PC remains queued; it cannot start before GU-X2 (the closed-form
 green check). The earlier reference to `tmp/pc.md` is dropped — the
@@ -23,13 +25,22 @@ design lock is now carried by `doc/PLAN_PC.md` §2 and `doc/PLAN_GU.md`
 
 ## Known Red / Green State
 
-Green:
+Green (last measured before the GU-S1 destructive AST swap, baseline
+commit `df57c32`):
 
 - `cargo test -p goby-core --lib`: 917 passed / 2 ignored.
 - `cargo check --workspace`: warning-free.
 - `cargo test -p goby-lsp`: 56 passed / 0 failed.
 - `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`:
   the regular wasm suite passes (865 / 11 skipped after Track HF, 2026-05-09).
+
+**Currently broken (intentional, GU-S1 window only)**:
+
+- `cargo build -p goby-core` fails. Errors are localised to six §4
+  walk-list files (ast.rs, formatter.rs, ir_lower.rs, parser_top.rs,
+  typecheck_build.rs, typecheck_types.rs) and are repaired by GU-S2.
+  All other check commands (`-p goby-core --lib`, `-p goby-wasm`,
+  `-p goby-lsp`, `--workspace`) are blocked by this until GU-S2 ends.
 
 Red / ignored:
 
@@ -43,12 +54,15 @@ Red / ignored:
 
 **Primary (active):**
 
-- **Track GU (generic user-defined types) — GU-S1 next.** GU-D0 design
-  freeze and GU-D1 spec freeze complete (commits up to `9c715e5`,
-  2026-05-08). The next step is GU-S1 (destructive AST swap in
-  `crates/goby-core/src/ast.rs` to the §3.1/§3.2 final shape; the
-  build is intentionally broken at this phase and repaired layer by
-  layer in GU-S2). See `doc/PLAN_GU.md` §6 for the full phase list.
+- **Track GU (generic user-defined types) — GU-S2a next.** GU-D0 / GU-D1
+  / GU-S1 complete. The next step is GU-S2a (parser layer): update
+  `parser_top.rs`, `parser_pattern.rs`, `parser_util.rs` to parse the
+  new grammar — type params on union/record declarations, positional
+  variant args, and constructor patterns including the qualified form
+  `TypeName.Ctor`. Existing nullary unions and non-generic records
+  must continue to parse. The downstream layers (typecheck, IR, wasm)
+  remain broken until later GU-S2 sub-tasks land. See `doc/PLAN_GU.md`
+  §6 for the full phase list.
 
 **Queued behind GU:**
 
