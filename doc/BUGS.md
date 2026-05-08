@@ -183,6 +183,20 @@ Open bugs:
     above already fails before execution at the emit stage, which is the
     canonical form to debug against.
 
+  Fix scope (do not patch ad-hoc): the underlying defect is the
+  indirect-call lowering path resolving names in the wrapped function's
+  body against the wrong scope. The repro happens to surface through
+  `String -> Int` and `int.parse`'s `minimum_int` reference, but the
+  same shape will break for any function of the form
+  "`with <handler> in <call to a stdlib/other-module function whose body
+  references its own top-level bindings>`" once it is passed as a value
+  to a higher-order callback. The fix must restore correct scope
+  resolution for the indirect-call wrapper in general — i.e. it should
+  not special-case `int.parse`, `minimum_int`, or the `String -> Int`
+  signature, and the regression test should cover at least one
+  additional shape (different module, different effect, non-`Int`
+  return) to lock in the general behavior.
+
 - **2026-05-08.** `WasmBackendInstr::AllocFloatBox` and
   `WasmBackendInstr::AllocMutableCell` share two limitations that should
   be addressed together as a follow-up cell-allocation refactor (raised
