@@ -1001,6 +1001,148 @@ Acceptance criteria:
 - the initial message layer does not over-claim certainty where the engine only
   exposes an opaque trap.
 
+### 4.5a Track GU: Generic Union Types with Constructor Arguments
+
+Priority: **prerequisite for Track PC (§4.6)**.
+
+Goal: extend `type` declarations so that **both unions and records may
+carry type parameters**, and union constructors may carry arguments.
+Concretely: support `type Maybe a = Just(a) | Nothing`,
+`type Either a b = ...`, `type Tree a = Leaf | Node(a, Tree a, Tree a)`,
+`type Parser a = Parser(run: Unit -> a can Token, Fail)`, plus the
+corresponding `case` constructor patterns and field access on generic
+records.
+
+Why this matters:
+
+- `crates/goby-core/src/ast.rs::TypeDeclaration` currently models a
+  union as `constructors: Vec<String>` — a flat list of nullary
+  constructor names — with no type parameters and no per-variant
+  arguments. `CasePattern` has no constructor-pattern variant.
+  Together this means `type Maybe a = Just(a) | Nothing` cannot be
+  parsed, type-checked, or pattern-matched against.
+- Track PC (§4.6) cannot start until GU lands: the very first PC
+  milestone (PC-M0) introduces `stdlib/goby/maybe.gb` as exactly that
+  declaration. The parser-combinator library further depends on
+  `ParseResult a = Ok(a) | Err(ParseError)` and on `optional :
+  Parser a -> Parser (Maybe a)`. None of those are expressible today.
+- The feature is independently useful for any future user-defined ADT
+  (Result, AST nodes, etc.) and is the natural sibling of the existing
+  `effect E a b` parameter machinery.
+
+The detailed implementation plan, milestones, and acceptance criteria
+live in `doc/PLAN_GU.md`. The high-level shape:
+
+- Design freeze (GU-D0, GU-D1): final AST + spec text locked before
+  any code lands.
+- Destructive AST swap (GU-S1): old `TypeDeclaration::Union` and
+  `CasePattern` shapes removed in one commit; build breaks.
+- Layer-by-layer follow-up (GU-S2): walk a closed file list to
+  restore `cargo build` green.
+- New typecheck semantics (GU-S3): parametric unions and parametric
+  records get type-parameter unification, fresh constructor schemes,
+  and constructor-pattern type checking.
+- New lowering semantics (GU-S4): tagged-record allocation for
+  variants with args, tag-dispatch pattern matching.
+- Polish (GU-X0..X2): diagnostics, fixtures, spec sync.
+
+Track GU covers **both generic union types** (`type Maybe a = Just(a)
+| Nothing`) **and generic record types** (`type Parser a =
+Parser(run: ...)`) in the same rewrite, because both share the
+type-parameter machinery and PC depends on both.
+
+Blocking dependencies:
+
+- none — work is self-contained in the parser, AST, typecheck, and
+  lower layers.
+
+Track PC (§4.6) **hard-depends on GU-S3 (typecheck) + GU-S4
+(lowering)**, and operationally gates on GU-X2 (the closed-form
+green check). Track GU is independent of Track RP (§4.5b); either
+may land first.
+
+### 4.5b Track RP: Relative-Path Imports for Non-Stdlib Modules
+
+Priority: **prerequisite for Track PC (§4.6)**.
+
+Goal: allow a `.gb` source file outside `stdlib/` to import another
+`.gb` source file by relative or workspace-rooted path, so that
+multi-file libraries can live under `examples/` (or any future
+package-mechanism root) without being placed in `stdlib/`.
+
+Why this matters:
+
+- The current resolver `StdlibResolver` (`crates/goby-core/src/stdlib.rs`)
+  resolves `import a/b` strictly as `{stdlib_root}/a/b.gb`. The grammar's
+  `is_module_path` check (`crates/goby-core/src/parser_util.rs`) rejects
+  `./` and `../` prefixes outright. Together this means *any* multi-file
+  Goby library outside `stdlib/` is unimportable.
+- Track PC (§4.6) places the parser-combinator library under
+  `examples/parser/` deliberately — parser combinators are an application
+  of the effect system, not a language primitive. Without a way to import
+  across files inside `examples/parser/`, the library either has to be
+  collapsed into one giant file or wrongly relocated to `stdlib/`. Both
+  options compromise the long-term shape (Rubygems / Cargo-style external
+  package).
+- The same mechanism is what a future package mechanism will be built on.
+
+Scope to lock before coding:
+
+1. Surface form. Likely candidates:
+   - `import "./types"` / `import "../parser/core"` (string literal
+     path, anchored at the importing file).
+   - `import @workspace/parser/core` (sigil-rooted at the project root,
+     e.g. the directory containing `Cargo.toml` or an explicit marker).
+   - Hybrid: stdlib remains `import goby/string`; non-stdlib uses one of
+     the above forms.
+2. Resolution rules. Must specify file lookup, ambiguity (does
+   `goby/x` ever clash with a relative `./goby/x`?), normalization
+   (canonical paths, symlink behaviour), and error wording for
+   not-found.
+3. Cycle detection. Multi-file libraries inside `examples/` will have
+   internal cycles by accident. The existing stdlib resolver already
+   has cyclic-import detection; the relative path resolver must match.
+4. Sandboxing. Decide whether relative paths can escape the importing
+   file's directory tree (e.g. `../../etc/passwd.gb` reading arbitrary
+   files). At minimum, document the policy.
+
+Execution phases:
+
+1. **RP-0: Surface lock.** Pick one of the candidate forms, document
+   in `doc/LANGUAGE_SPEC.md` §1 imports. No code yet.
+2. **RP-1: Parser + grammar.** Extend `is_module_path` (or add a new
+   import-path classification) to accept the chosen form. Reject the
+   form when it appears in `stdlib/` sources to keep stdlib paths
+   canonical.
+3. **RP-2: Resolver.** Add a non-stdlib resolver path; thread through
+   the import-validation pipeline (`validate_imports` and friends).
+4. **RP-3: Acceptance fixtures.** A two-file fixture under
+   `examples/_rp_smoke/` where one file imports a type and an effect
+   from the other; `goby check` must pass and `goby run` (where
+   backend-supported) must produce expected output.
+5. **RP-4: Diagnostics.** Not-found / cyclic-import / sandbox-violation
+   errors carry the same quality as stdlib import errors.
+
+Acceptance criteria for the track:
+
+- a `.gb` file under `examples/` can import another `.gb` file under
+  `examples/` via the chosen surface form, both in `goby check` and (when
+  backend-supported) `goby run`.
+- the chosen form is documented in `doc/LANGUAGE_SPEC.md` §1.
+- `stdlib/` continues to use the canonical `import a/b` form
+  unchanged; no stdlib file needs to switch.
+- the cycle detection covers cross-file cycles inside the same
+  examples-rooted library.
+
+Blocking dependencies:
+
+- none — the work is self-contained in the parser, resolver, and
+  validator layers.
+
+Track PC (§4.6) **depends on RP-3**. PC-P0's pre-flight (§PLAN_PC §4.2)
+no longer needs to *probe* multi-file import; it consumes the answer
+RP-3 has already given.
+
 ### 4.6 Track PC: Parser Combinator on Algebraic Effects
 
 Priority: **active line (2026-05-07)**. With effect-row polymorphism
@@ -1054,12 +1196,24 @@ Scope to lock before coding:
      tokens with position).
    - reuse `goby/iterator` GraphemeState patterns for position tracking.
 
-Blocking dependencies (must land before PC-2 implementation):
+Blocking dependencies:
 
-- **§3.3 multi-shot classification + branch-local state surface.** `alt`
-  and `many` need either a sanctioned multi-shot path or an explicit
-  branch-local state construct to roll the cursor back without violating
-  ordinary-`mut` semantics. This is the only remaining hard PC-2 blocker.
+- **§4.5a Track GU (generic union types with constructor arguments)
+  must land before PC-M0.** PC-M0 introduces
+  `type Maybe a = Just(a) | Nothing` plus the corresponding `case`
+  pattern. Neither is expressible in the current `TypeDeclaration` /
+  `CasePattern` shapes. See `doc/PLAN_GU.md`.
+- **§4.5b Track RP (relative-path imports) must land before PC-P0.**
+  Without `examples/`-rooted multi-file imports, the
+  `examples/parser/` library layout is unreachable, and stdlib
+  placement is rejected by lock (`tmp/pc.md`). See `doc/PLAN_GU.md`
+  §7.2 for GU↔RP independence and §7.1 for GU↔PC ordering.
+- **§3.3 multi-shot classification + branch-local state surface must
+  land before PC-2 implementation.** `alt` and `many` need either a
+  sanctioned multi-shot path or an explicit branch-local state
+  construct to roll the cursor back without violating ordinary-`mut`
+  semantics. PC-1 (cursor-threaded MVP) does not depend on §3.3; only
+  PC-2 does.
 
 The §3.3 dependency has its priority raised by this track.
 
@@ -1076,7 +1230,10 @@ Execution phases:
    - implement the iterator-style variant: cursor is an operation argument,
      `alt` is restricted to non-backtracking / longest-prefix forms, or
      simulated by passing the remaining token list explicitly.
-   - lands as `stdlib/goby/parser.gb` plus `examples/parser_*.gb`.
+   - lands as `examples/parser/` (multi-file library, depends on Track RP)
+     plus top-level `examples/parser_*.gb` demos. **Stdlib placement is
+     rejected by lock** (see `tmp/pc.md`, `doc/PLAN_PC.md` §1).
+     `stdlib/goby/maybe.gb` is the only stdlib artifact this track adds.
    - acceptance: parses a small grammar end-to-end on `goby run` without
      relying on multi-shot resume or captured `mut`.
 
@@ -1101,9 +1258,9 @@ Acceptance criteria for the track:
   propagate via EP, not via per-combinator hand-written `can` clauses.
 - multi-shot `alt` does not require capturing ordinary `mut` (uses the
   branch-local state surface or explicit cursor threading).
-- the resulting `goby/parser` stdlib (or `examples/parser*.gb`) is small
-  enough to read in one sitting and serves as the canonical
-  algebraic-effects showcase for the language.
+- the resulting `examples/parser/` library plus top-level
+  `examples/parser_*.gb` demos are small enough to read in one sitting
+  and serve as the canonical algebraic-effects showcase for the language.
 
 Sketch (PC-1 cursor-threaded variant, illustrative — surface not yet locked):
 
