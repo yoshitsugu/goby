@@ -576,8 +576,12 @@ fn apply_binop_runtime_value_pure(
             goby_core::BinOpKind::Add => l.checked_add(r).map(RuntimeValue::Int),
             goby_core::BinOpKind::Sub => l.checked_sub(r).map(RuntimeValue::Int),
             goby_core::BinOpKind::Mul => l.checked_mul(r).map(RuntimeValue::Int),
-            goby_core::BinOpKind::Div => (r != 0).then_some(RuntimeValue::Int(l / r)),
-            goby_core::BinOpKind::Mod => (r != 0).then_some(RuntimeValue::Int(l % r)),
+            // checked_div / checked_rem return None for both r == 0 and the
+            // i64::MIN / -1 overflow case; the previous `(r != 0).then_some(l / r)`
+            // form would still panic on the overflow because the Int division is
+            // eagerly evaluated inside `then_some`.
+            goby_core::BinOpKind::Div => l.checked_div(r).map(RuntimeValue::Int),
+            goby_core::BinOpKind::Mod => l.checked_rem(r).map(RuntimeValue::Int),
             goby_core::BinOpKind::Lt => Some(RuntimeValue::Bool(l < r)),
             goby_core::BinOpKind::Gt => Some(RuntimeValue::Bool(l > r)),
             goby_core::BinOpKind::Le => Some(RuntimeValue::Bool(l <= r)),
@@ -728,5 +732,36 @@ mod tests {
             float(1.0),
             RuntimeValue::Int(1)
         )));
+    }
+
+    #[test]
+    fn int_div_and_mod_return_none_on_zero_divisor() {
+        // Division / modulo by zero must surface as None (later mapped to
+        // Unsupported / Abort) rather than panicking.
+        assert!(apply(BinOpKind::Div, RuntimeValue::Int(1), RuntimeValue::Int(0)).is_none());
+        assert!(apply(BinOpKind::Mod, RuntimeValue::Int(1), RuntimeValue::Int(0)).is_none());
+    }
+
+    #[test]
+    fn int_div_and_mod_return_none_on_min_over_neg_one_overflow() {
+        // i64::MIN / -1 overflows and used to panic via the eagerly-evaluated
+        // `(r != 0).then_some(l / r)` form. checked_div / checked_rem return
+        // None for the overflow case as well, keeping the runtime safe.
+        assert!(
+            apply(
+                BinOpKind::Div,
+                RuntimeValue::Int(i64::MIN),
+                RuntimeValue::Int(-1)
+            )
+            .is_none()
+        );
+        assert!(
+            apply(
+                BinOpKind::Mod,
+                RuntimeValue::Int(i64::MIN),
+                RuntimeValue::Int(-1)
+            )
+            .is_none()
+        );
     }
 }
