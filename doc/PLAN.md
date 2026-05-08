@@ -1275,6 +1275,78 @@ References:
 - Lindley, McBride & McLaughlin, "Do Be Do Be Do" (POPL 2017) — Frank's
   parser-style effect examples.
 
+### 4.7a Track HF: Cond/Scrutinee Top-Level Scope Fix in Wasm Lowering
+
+Goal: fix the bug recorded in `doc/BUGS.md` (2026-05-08) where passing a
+function whose body wraps a stdlib call inside an effect handler (e.g.
+`with invalid_integer ... in int.parse d`) to a higher-order callback
+(e.g. `list.map`) makes wasm emission fail with
+`gen_lower/emit: unknown local '<top-level binding>'`.
+
+Root cause (confirmed by IR-dump reading and a `LoadLocal` callsite
+backtrace):
+
+- `crates/goby-wasm/src/gen_lower/lower.rs:2688` lowers `CompExpr::If`'s
+  `cond` via `lower_value(cond)`, and `lower.rs:3373` lowers
+  `CompExpr::Case`'s `scrutinee` via `lower_value(scrutinee)`.
+- `lower_value` is a thin wrapper that calls `lower_value_ctx` with an
+  **empty** `known_decls` set and a default `ClosureBindingEnv`
+  (`lower.rs:3470`).
+- Therefore, when an `If` cond / `Case` scrutinee references a stdlib
+  top-level value declaration by bare name (e.g. `minimum_int_div_10` /
+  `minimum_int` inside `int.parse`), the `Var(name)` is lowered as
+  `LoadLocal { name }` instead of `DeclCall { decl_name }`, even though
+  the surrounding `lower_comp_inner` *did* receive a populated
+  `known_decls` (which includes stdlib value declarations).
+- emit (`gen_lower/emit.rs:667`) then fails to resolve the bogus local.
+
+Why "HOF + effect handler" is just one trigger, not the actual cause:
+the bug fires whenever a stdlib aux body containing such an `If`/`Case`
+gets lowered through the general-lowered path. HOF passing is one way
+to force that path; calling `to_i` directly via `v = to_i "42"` (so the
+program does not collapse to the static-output fast path) reproduces the
+same emit error.
+
+Fix scope:
+
+- Replace the two `lower_value(...)` calls inside `lower_comp_inner`
+  with `lower_value_ctx(..., aliases, bindings, known_decls)` so that
+  cond/scrutinee resolution uses the same scope rules as every other
+  expression position.
+- The fix must remain general — no name-, module-, or signature-specific
+  special cases. In particular, do not hardcode `int.parse`,
+  `minimum_int`, or `String -> Int`.
+
+Regression test plan (must lock in the general behaviour, not just the
+observed `int.parse` case):
+
+1. **Original `String -> Int` shape via `list.map`**: `to_i` from
+   `BUGS.md` 2026-05-08, passed to `list.map`.
+2. **`Case` scrutinee path**: a stdlib- or user-aux whose body matches
+   on a top-level binding (forces the `lower.rs:3373` site).
+3. **Different module / different effect / non-`Int` return**:
+   construct a wrapper around a non-`int` stdlib function with the same
+   shape and pass it as a HOF callback, to prove the fix is not
+   `int.parse`-specific.
+
+Acceptance:
+
+- `crates/goby-wasm` unit / integration tests for the three shapes
+  above pass.
+- `cargo nextest run -p goby-wasm` is green.
+- The original aoc-style program (`cat sample | goby run solve.gb`
+  from `doc/BUGS.md` 2026-05-08) at least progresses past wasm emit;
+  any remaining failure must come from a different code path.
+- `doc/BUGS.md` 2026-05-08 entry moves from "Open bugs" to "Resolved
+  bugs", with root-cause and fix references.
+
+Out of scope:
+
+- Other `lower_value` callsites that legitimately operate on closed
+  literal forms (e.g. lambda literal lowering helpers). Audit them as
+  part of the fix step but only widen the change if a concrete second
+  case is proven; do not preemptively rewrite.
+
 ### 4.8 Parking Lot (Needs Revalidation Before Implementation)
 
 - CLI `build` expansion details (`--target`, `--engine-compat`, verify modes).
