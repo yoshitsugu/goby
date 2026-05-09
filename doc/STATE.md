@@ -62,16 +62,29 @@ Red / ignored:
 
 **Primary (active):**
 
-- **Track GU (generic user-defined types) — GU-S3 next.** GU-D0 /
-  GU-D1 / GU-S1 / GU-S2 (a–h) all complete. The next step is GU-S3:
-  extract `freshen_type_scheme` (with the existing effect-side call
-  site migrated first), then route every constructor application,
-  constructor-pattern type-check, and generic-record field access
-  through the same helper. Constructor-name ambiguity resolution
-  (qualified > scrutinee-pinned > local-shadows-imported >
-  ambiguity diagnostic) and cross-module imports of generic unions
-  also land here. See `doc/PLAN_GU.md` §6 GU-S3 for the deliverable
-  list.
+- **Bug-fix interlude before GU-S3.** Track GU is paused while the
+  open BUGS.md entries that share the IR / wasm-lowering surface
+  area with GU's upcoming work get cleared, so a regression spotted
+  during GU-S3/S4 can be attributed to the new code rather than to
+  pre-existing layer noise. Order:
+  1. **2026-05-01 case-over-list-pattern function-result bug** —
+     `head_or [7, 8]` returns `0` instead of `7` (BUGS.md). Same
+     lowering surface that GU-S4's union-variant `case` arms will
+     touch; landing this first removes a confound for the upcoming
+     generic-union acceptance fixtures.
+  2. **2026-05-09 stdlib `int.parse` `minimum_int` literal range**
+     — language-side stdlib fix, scheduled after #1.
+  3. **2026-05-08 `AllocFloatBox` / `AllocMutableCell` shared
+     refactor** — pure refactor, lowest priority.
+- **Track GU resumes at GU-S3 once the bug-fix interlude is clear.**
+  The GU-S3 plan is unchanged: extract `freshen_type_scheme` (with
+  the existing effect-side call site migrated first), then route
+  every constructor application, constructor-pattern type-check,
+  and generic-record field access through the same helper.
+  Constructor-name ambiguity resolution (qualified > scrutinee-
+  pinned > local-shadows-imported > ambiguity diagnostic) and
+  cross-module imports of generic unions also land in GU-S3. See
+  `doc/PLAN_GU.md` §6 GU-S3 for the deliverable list.
 
 **Queued behind GU:**
 
