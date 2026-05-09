@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::ir::{
-    CompExpr, IrCasePattern, IrHandlerClause, IrListPatternItem, IrListPatternTail, ValueExpr,
+    CompExpr, IrCasePattern, IrCtorPatternArg, IrHandlerClause, IrListPatternItem,
+    IrListPatternTail, ValueExpr,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -699,6 +700,13 @@ fn bind_case_pattern(pattern: &IrCasePattern, bindings: &mut ClosureBindingEnv) 
         }
         if let Some(IrListPatternTail::Bind(name)) = tail {
             bindings.bind_outer_immutable(name.clone());
+        }
+    }
+    if let IrCasePattern::Ctor { args, .. } = pattern {
+        for arg in args {
+            if let IrCtorPatternArg::Bind(name) = arg {
+                bindings.bind_outer_immutable(name.clone());
+            }
         }
     }
 }

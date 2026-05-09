@@ -123,6 +123,10 @@ pub(crate) struct TypeEnv {
 }
 
 impl TypeEnv {
+    /// Construct an empty `TypeEnv`. Test helpers across the
+    /// typecheck modules use this (often via `..TypeEnv::empty()`)
+    /// to avoid threading every new field through every literal.
+    #[allow(dead_code)]
     pub(crate) fn empty() -> TypeEnv {
         TypeEnv {
             globals: HashMap::new(),

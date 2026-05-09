@@ -507,7 +507,7 @@ fn classify_case_pattern_bindings(
     pattern: &crate::ir::IrCasePattern,
     classes: &mut HashMap<String, OwnershipClass>,
 ) {
-    use crate::ir::{IrCasePattern, IrListPatternItem, IrListPatternTail};
+    use crate::ir::{IrCasePattern, IrCtorPatternArg, IrListPatternItem, IrListPatternTail};
     match pattern {
         IrCasePattern::ListPattern { items, tail } => {
             for item in items {
@@ -517,6 +517,13 @@ fn classify_case_pattern_bindings(
             }
             if let Some(IrListPatternTail::Bind(name)) = tail {
                 classes.insert(name.clone(), OwnershipClass::Owned);
+            }
+        }
+        IrCasePattern::Ctor { args, .. } => {
+            for arg in args {
+                if let IrCtorPatternArg::Bind(name) = arg {
+                    classes.insert(name.clone(), OwnershipClass::Owned);
+                }
             }
         }
         IrCasePattern::IntLit(_)
@@ -2033,7 +2040,7 @@ fn drop_insert_comp(
 
 /// Collect variable names bound by a case pattern.
 fn collect_pattern_bindings(pattern: &crate::ir::IrCasePattern) -> Vec<String> {
-    use crate::ir::{IrCasePattern, IrListPatternItem, IrListPatternTail};
+    use crate::ir::{IrCasePattern, IrCtorPatternArg, IrListPatternItem, IrListPatternTail};
     match pattern {
         IrCasePattern::ListPattern { items, tail } => {
             let mut names = Vec::new();
@@ -2047,6 +2054,13 @@ fn collect_pattern_bindings(pattern: &crate::ir::IrCasePattern) -> Vec<String> {
             }
             names
         }
+        IrCasePattern::Ctor { args, .. } => args
+            .iter()
+            .filter_map(|arg| match arg {
+                IrCtorPatternArg::Bind(name) => Some(name.clone()),
+                IrCtorPatternArg::Wildcard => None,
+            })
+            .collect(),
         _ => vec![],
     }
 }

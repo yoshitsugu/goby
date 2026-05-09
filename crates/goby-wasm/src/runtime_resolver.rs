@@ -966,6 +966,10 @@ impl<'m> RuntimeOutputResolver<'m> {
                             &mut arm_locals,
                         )
                 }
+                // Constructor patterns are not yet runtime-matchable in
+                // the interpreter fallback; the wider GU lowering path
+                // owns this once generic-union runtime layout lands.
+                (CasePattern::Ctor { .. }, _) => false,
                 _ => false,
             };
             if matched {

@@ -1,12 +1,12 @@
 use std::borrow::Cow;
 
 use goby_core::ast::{
-    BinOpKind, CaseArm, CasePattern, HandlerClause, InterpolatedPart, ListPatternItem,
-    ListPatternTail,
+    BinOpKind, CaseArm, CasePattern, CtorPatternArg, HandlerClause, InterpolatedPart,
+    ListPatternItem, ListPatternTail,
 };
 use goby_core::ir::{
-    CompExpr, IrBinOp, IrCaseArm, IrCasePattern, IrDecl, IrHandlerClause, IrListPatternItem,
-    IrListPatternTail, ValueExpr,
+    CompExpr, IrBinOp, IrCaseArm, IrCasePattern, IrCtorPatternArg, IrDecl, IrHandlerClause,
+    IrListPatternItem, IrListPatternTail, ValueExpr,
 };
 use goby_core::{Declaration, Expr, Module, Stmt, parse_body_stmts};
 
@@ -277,7 +277,19 @@ fn ir_case_pattern_to_ast(pattern: &IrCasePattern) -> CasePattern {
             items: items.iter().map(ir_list_pattern_item_to_ast).collect(),
             tail: tail.as_ref().map(ir_list_pattern_tail_to_ast),
         },
+        IrCasePattern::Ctor { ctor, args, .. } => CasePattern::Ctor {
+            type_qualifier: None,
+            ctor: ctor.clone(),
+            args: args.iter().map(ir_ctor_pattern_arg_to_ast).collect(),
+        },
         IrCasePattern::Wildcard => CasePattern::Wildcard,
+    }
+}
+
+fn ir_ctor_pattern_arg_to_ast(arg: &IrCtorPatternArg) -> CtorPatternArg {
+    match arg {
+        IrCtorPatternArg::Bind(name) => CtorPatternArg::Bind(name.clone()),
+        IrCtorPatternArg::Wildcard => CtorPatternArg::Wildcard,
     }
 }
 

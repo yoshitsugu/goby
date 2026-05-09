@@ -271,7 +271,8 @@ fn inject_imported_type_constructors(
                     let result = union_or_record_result_template(name, type_params);
                     // Same template-leakage hazard as the local
                     // generic-record path; defer the real signature to
-                    // GU-S3 by registering `Ty::Unknown` for now.
+                    // the freshening pass by registering `Ty::Unknown`
+                    // for now.
                     let ctor_ty = if is_generic {
                         Ty::Unknown
                     } else {
@@ -334,11 +335,11 @@ pub(crate) fn inject_type_constructors(
                         .collect();
                     // Generic union constructors carry `Ty::Var(...)`
                     // templates that must be freshened per use site.
-                    // The freshening helper only lands in GU-S3, so for
-                    // now register generic constructors as `Ty::Unknown`
-                    // to avoid the unfreshened template leaking into
-                    // unification (which would reject e.g. `Just 42`
-                    // against an expected `Maybe Int`). Non-generic
+                    // Until the freshening helper lands, register
+                    // generic constructors as `Ty::Unknown` to avoid the
+                    // unfreshened template leaking into unification
+                    // (which would reject e.g. `Just 42` against an
+                    // expected `Maybe Int`). Non-generic
                     // unions are unaffected and keep the previous
                     // direct-`Ty::Con` / `Ty::Fun` shapes.
                     let ctor_ty = if is_generic {
@@ -399,7 +400,8 @@ pub(crate) fn inject_type_constructors(
                 }
                 let result = union_or_record_result_template(name, type_params);
                 // Generic record constructors face the same template-leakage
-                // hazard as generic unions; defer real signatures to GU-S3.
+                // hazard as generic unions; defer real signatures to the
+                // freshening pass.
                 let ctor_ty = if is_generic {
                     Ty::Unknown
                 } else {

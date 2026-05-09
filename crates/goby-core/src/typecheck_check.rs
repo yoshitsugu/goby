@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use crate::ast::{BinOpKind, CasePattern, Expr, ListPatternItem, ListPatternTail, Stmt};
+use crate::ast::{
+    BinOpKind, CasePattern, CtorPatternArg, Expr, ListPatternItem, ListPatternTail, Stmt,
+};
 use crate::typecheck::TypecheckError;
 use crate::typecheck_env::{EffectRow, GlobalBinding, Ty, TypeEnv};
 use crate::typecheck_render::ty_name;
@@ -531,6 +533,22 @@ pub(crate) fn env_with_case_pattern_bindings(
             child
                 .locals
                 .insert(name.clone(), Ty::List(Box::new(item_ty)));
+        }
+    }
+    if let CasePattern::Ctor { args, .. } = pattern {
+        // The constructor's variant arg types are not yet propagated to
+        // pattern binders — that lands in the unification phase that
+        // turns the scrutinee's `Ty::Con { name, args }` into per-binder
+        // types. Until then, register every binder as `Ty::Unknown`
+        // so the body still type-checks (any expression is compatible
+        // with `Ty::Unknown`). Skip the `_` discard binder, mirroring
+        // the existing list-pattern behaviour.
+        for arg in args {
+            if let CtorPatternArg::Bind(name) = arg
+                && name != "_"
+            {
+                child.locals.insert(name.clone(), Ty::Unknown);
+            }
         }
     }
     child

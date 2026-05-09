@@ -13,7 +13,12 @@ pub(crate) fn is_supported_case_pattern(pattern: &CasePattern) -> bool {
         | CasePattern::StringLit(_)
         | CasePattern::BoolLit(_)
         | CasePattern::Wildcard => true,
-        CasePattern::EmptyList | CasePattern::ListPattern { .. } => false,
+        // Constructor patterns are not yet lowered natively; they
+        // route through the `UnsupportedCasePattern` fallback path
+        // until generic-union lowering lands.
+        CasePattern::EmptyList
+        | CasePattern::ListPattern { .. }
+        | CasePattern::Ctor { .. } => false,
     }
 }
 

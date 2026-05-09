@@ -6,8 +6,9 @@
 
 use crate::ast::{BinOpKind, Declaration, Module};
 use crate::ir::{
-    CompExpr, EffectOpId, IrBinOp, IrCaseArm, IrCasePattern, IrDecl, IrHandlerClause, IrInterpPart,
-    IrListPatternItem, IrListPatternTail, IrModule, IrType, ValueExpr,
+    CompExpr, EffectOpId, IrBinOp, IrCaseArm, IrCasePattern, IrCtorPatternArg, IrDecl,
+    IrHandlerClause, IrInterpPart, IrListPatternItem, IrListPatternTail, IrModule, IrType,
+    ValueExpr,
 };
 use crate::resolved::{
     ResolvedDeclaration, ResolvedExpr, ResolvedHandlerClause, ResolvedInterpolatedPart,
@@ -666,7 +667,27 @@ fn lower_case_pattern(pattern: &crate::ast::CasePattern) -> IrCasePattern {
             items: items.iter().map(lower_list_pattern_item).collect(),
             tail: tail.as_ref().map(lower_list_pattern_tail),
         },
+        crate::ast::CasePattern::Ctor { ctor, args, .. } => {
+            // type_name and variant_index are placeholder until the
+            // typecheck-side resolver threads which union owns this
+            // constructor; downstream lowerers must reject `Ctor`
+            // patterns whose `type_name` is empty rather than treat
+            // the placeholders as a real variant.
+            IrCasePattern::Ctor {
+                type_name: String::new(),
+                ctor: ctor.clone(),
+                variant_index: 0,
+                args: args.iter().map(lower_ctor_pattern_arg).collect(),
+            }
+        }
         crate::ast::CasePattern::Wildcard => IrCasePattern::Wildcard,
+    }
+}
+
+fn lower_ctor_pattern_arg(arg: &crate::ast::CtorPatternArg) -> IrCtorPatternArg {
+    match arg {
+        crate::ast::CtorPatternArg::Bind(name) => IrCtorPatternArg::Bind(name.clone()),
+        crate::ast::CtorPatternArg::Wildcard => IrCtorPatternArg::Wildcard,
     }
 }
 

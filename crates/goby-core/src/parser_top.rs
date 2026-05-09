@@ -1141,33 +1141,49 @@ fn parse_type_declaration_line(line: &str) -> Option<TypeDeclaration> {
     }
     let (name, type_params) = split_type_header(lhs)?;
 
-    // RHS is parsed as a list of pipe-separated candidates. With no pipe,
-    // there is exactly one candidate. If every candidate parses as a
-    // union variant (`Ctor` or `Ctor(t, ...)` with no top-level `:`),
-    // the declaration is a union. Otherwise — only when there is no
-    // pipe — fall through to record / alias parsing.
+    // RHS is parsed as a list of pipe-separated candidates. When two or
+    // more candidates exist, every one must parse as a union variant
+    // (`Ctor` or `Ctor(t, ...)` with no top-level `:`). When there is
+    // no pipe, a *single* candidate is only treated as a union when it
+    // carries an explicit `(...)` payload — otherwise the bare
+    // `type Name = OtherType` form keeps its long-standing alias
+    // meaning and never becomes a one-variant nullary union.
     let candidates = split_top_level_pipes(rhs).unwrap_or_else(|| vec![rhs]);
     let pipe_present = candidates.len() > 1;
 
-    let parsed_variants: Option<Vec<UnionVariant>> = candidates
-        .iter()
-        .map(|c| parse_union_variant_candidate(c.trim()))
-        .collect();
-    if let Some(variants) = parsed_variants {
-        if !variants.is_empty() {
-            return Some(TypeDeclaration::Union {
-                name,
-                type_params,
-                variants,
-            });
-        }
-    }
-
     if pipe_present {
+        let parsed_variants: Option<Vec<UnionVariant>> = candidates
+            .iter()
+            .map(|c| parse_union_variant_candidate(c.trim()))
+            .collect();
+        if let Some(variants) = parsed_variants {
+            if !variants.is_empty() {
+                return Some(TypeDeclaration::Union {
+                    name,
+                    type_params,
+                    variants,
+                });
+            }
+        }
         // Pipe present but at least one candidate is not a valid union
         // variant. Do not silently fall through to alias — the user
         // intended a union and the diagnostic should reflect that.
         return None;
+    }
+
+    // Single-candidate union: only accepted when the constructor body
+    // is explicit (`Ctor(...)`), so `type Wrapped = Maybe Int` and
+    // `type UserID = String` keep their alias meaning.
+    if rhs.contains('(') {
+        if let Some(variant) = parse_union_variant_candidate(rhs) {
+            if !variant.args.is_empty() {
+                return Some(TypeDeclaration::Union {
+                    name,
+                    type_params,
+                    variants: vec![variant],
+                });
+            }
+        }
     }
 
     if let Some((constructor, inner)) = split_record_constructor_shape(rhs) {
@@ -1214,7 +1230,7 @@ fn parse_union_variant_candidate(src: &str) -> Option<UnionVariant> {
         return None;
     }
     if let Some(open_idx) = src.find('(') {
-        if !src.ends_with(')') {
+        if !src.ends_with(')') || !has_balanced_delimiters(src) {
             return None;
         }
         let ctor = &src[..open_idx];

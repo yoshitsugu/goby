@@ -3401,6 +3401,17 @@ fn lower_case(
                     tail: backend_tail,
                 }
             }
+            IrCasePattern::Ctor { .. } => {
+                // Native lowering of constructor patterns is not yet
+                // implemented. The `support.rs` gate routes such cases
+                // through the AST fallback path before this point, so
+                // reaching `lower.rs` with a `Ctor` pattern is a
+                // logic error in the dispatch layer.
+                return Err(LowerError::UnsupportedForm {
+                    node: "constructor case pattern lowering is not yet implemented"
+                        .to_string(),
+                });
+            }
         };
         let mut arm_bindings = bindings.clone();
         if let IrCasePattern::ListPattern { items, tail } = &arm.pattern {

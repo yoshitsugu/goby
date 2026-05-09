@@ -898,11 +898,16 @@ main =
 
     #[test]
     fn rejects_malformed_generic_record_field_type() {
+        // The unbalanced `(` in `List (String` is now caught at parse
+        // time by the type-declaration RHS balance check, so the
+        // module fails before typecheck ever runs.
         let source = "type S = S(xs: List (String)\n";
-        let module = parse_module(source).expect("should parse");
-        let err = typecheck_module(&module).expect_err("malformed generic field type should fail");
-        assert_eq!(err.declaration.as_deref(), Some("S"));
-        assert!(err.message.contains("invalid field type"));
+        let err = parse_module(source).expect_err("unbalanced parens should fail to parse");
+        assert!(
+            err.message.contains("invalid type declaration"),
+            "expected parse error to mention type declaration, got `{}`",
+            err.message
+        );
     }
 
     #[test]

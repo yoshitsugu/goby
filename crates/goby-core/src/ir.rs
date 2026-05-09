@@ -333,6 +333,23 @@ pub enum IrCasePattern {
         items: Vec<IrListPatternItem>,
         tail: Option<IrListPatternTail>,
     },
+    /// Lowered constructor pattern. `type_name` and `variant_index`
+    /// are populated by `ir_lower` once typecheck has unified the
+    /// scrutinee; until that machinery lands, `type_name` is left
+    /// empty and `variant_index` is `0` so callers can detect the
+    /// unresolved state and decline to lower.
+    Ctor {
+        type_name: String,
+        ctor: String,
+        variant_index: u32,
+        args: Vec<IrCtorPatternArg>,
+    },
+    Wildcard,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IrCtorPatternArg {
+    Bind(String),
     Wildcard,
 }
 
@@ -847,6 +864,16 @@ fn fmt_case_pattern(out: &mut String, pattern: &IrCasePattern) {
             }
             out.push(']');
         }
+        IrCasePattern::Ctor { ctor, args, .. } => {
+            out.push_str(ctor);
+            for arg in args {
+                out.push(' ');
+                match arg {
+                    IrCtorPatternArg::Bind(name) => out.push_str(name),
+                    IrCtorPatternArg::Wildcard => out.push('_'),
+                }
+            }
+        }
         IrCasePattern::Wildcard => out.push('_'),
     }
 }
@@ -1172,6 +1199,7 @@ fn validate_case_pattern(pattern: &IrCasePattern, decl_name: &str) -> Result<(),
         | IrCasePattern::StringLit(_)
         | IrCasePattern::BoolLit(_)
         | IrCasePattern::EmptyList
+        | IrCasePattern::Ctor { .. }
         | IrCasePattern::Wildcard => Ok(()),
     }
 }
