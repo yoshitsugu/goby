@@ -275,10 +275,8 @@ mk =
         let mut type_aliases = HashMap::new();
         type_aliases.insert("UserID".to_string(), Ty::Str);
         let env = TypeEnv {
-            globals: HashMap::new(),
-            locals: HashMap::new(),
             type_aliases,
-            record_types: HashMap::new(),
+            ..TypeEnv::empty()
         };
         let expected = Ty::List(Box::new(Ty::Con {
             name: "UserID".to_string(),
@@ -4603,12 +4601,7 @@ main =
 
     #[test]
     fn infers_resume_binding_type_from_non_generic_resume_context() {
-        let env = TypeEnv {
-            globals: HashMap::new(),
-            locals: HashMap::new(),
-            type_aliases: HashMap::new(),
-            record_types: HashMap::new(),
-        };
+        let env = TypeEnv::empty();
         let value = Expr::Resume {
             value: Box::new(Expr::IntLit(1)),
         };
@@ -4621,12 +4614,7 @@ main =
 
     #[test]
     fn keeps_resume_binding_unknown_when_resume_context_is_generic() {
-        let env = TypeEnv {
-            globals: HashMap::new(),
-            locals: HashMap::new(),
-            type_aliases: HashMap::new(),
-            record_types: HashMap::new(),
-        };
+        let env = TypeEnv::empty();
         let value = Expr::Resume {
             value: Box::new(Expr::var("x")),
         };

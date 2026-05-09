@@ -684,12 +684,7 @@ mod infer_expr_effects_tests {
     use crate::typecheck_env::{GlobalBinding, Ty, TypeEnv};
 
     fn empty_env() -> TypeEnv {
-        TypeEnv {
-            globals: HashMap::new(),
-            locals: HashMap::new(),
-            type_aliases: HashMap::new(),
-            record_types: HashMap::new(),
-        }
+        TypeEnv::empty()
     }
 
     /// Mirror `build_op_to_effects` / `build_effect_map`: `op_to_effects` is

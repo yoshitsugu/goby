@@ -513,17 +513,10 @@ pub(crate) fn type_hole_conflict_note(expected: &Ty) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
 
     fn empty_env() -> TypeEnv {
-        TypeEnv {
-            globals: HashMap::new(),
-            locals: HashMap::new(),
-            type_aliases: HashMap::new(),
-            record_types: HashMap::new(),
-        }
+        TypeEnv::empty()
     }
 
     #[test]

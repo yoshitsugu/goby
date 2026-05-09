@@ -110,6 +110,7 @@ pub(crate) fn check_branch_type_consistency_in_expr(
                         locals: env.locals.clone(),
                         type_aliases: env.type_aliases.clone(),
                         record_types: env.record_types.clone(),
+                        union_types: env.union_types.clone(),
                     };
                     if let Some(first) = clause.params.first() {
                         child_env.locals.insert(first.clone(), Ty::Unknown);
@@ -126,6 +127,7 @@ pub(crate) fn check_branch_type_consistency_in_expr(
                 locals: env.locals.clone(),
                 type_aliases: env.type_aliases.clone(),
                 record_types: env.record_types.clone(),
+                union_types: env.union_types.clone(),
             };
             check_branch_type_consistency_in_stmts(body, &child_env, decl_name)
         }

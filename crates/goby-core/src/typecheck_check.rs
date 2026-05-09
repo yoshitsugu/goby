@@ -634,6 +634,8 @@ mod tests {
             "User".to_string(),
             RecordTypeInfo {
                 type_name: "User".to_string(),
+                type_params: Vec::new(),
+                constructor: "User".to_string(),
                 fields,
             },
         );
@@ -646,10 +648,10 @@ mod tests {
             },
         );
         let env = TypeEnv {
-            globals: HashMap::new(),
             locals,
             type_aliases,
             record_types,
+            ..TypeEnv::empty()
         };
         let expr = Expr::Qualified {
             receiver: "user".to_string(),
@@ -664,10 +666,8 @@ mod tests {
         let mut locals = HashMap::new();
         locals.insert("pair".to_string(), Ty::Tuple(vec![Ty::Bool, Ty::Int]));
         let env = TypeEnv {
-            globals: HashMap::new(),
             locals,
-            type_aliases: HashMap::new(),
-            record_types: HashMap::new(),
+            ..TypeEnv::empty()
         };
         let expr = Expr::Qualified {
             receiver: "pair".to_string(),
@@ -682,10 +682,8 @@ mod tests {
         let mut locals = HashMap::new();
         locals.insert("pair".to_string(), Ty::Tuple(vec![Ty::Bool]));
         let env = TypeEnv {
-            globals: HashMap::new(),
             locals,
-            type_aliases: HashMap::new(),
-            record_types: HashMap::new(),
+            ..TypeEnv::empty()
         };
         let expr = Expr::Qualified {
             receiver: "pair".to_string(),
@@ -854,12 +852,7 @@ main =
 
     #[test]
     fn check_expr_infers_addition() {
-        let env = TypeEnv {
-            globals: HashMap::new(),
-            locals: HashMap::new(),
-            type_aliases: HashMap::new(),
-            record_types: HashMap::new(),
-        };
+        let env = TypeEnv::empty();
         let expr = Expr::BinOp {
             op: crate::BinOpKind::Add,
             left: Box::new(Expr::IntLit(1)),

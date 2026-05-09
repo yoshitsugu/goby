@@ -318,6 +318,16 @@ pub struct RecordTypeInfo {
 `UnionTypeInfo` and the extended `RecordTypeInfo` live in the same
 `HashMap`-shaped environment.
 
+**Implementation deviation (GU-S2d, 2026-05-09)**:
+`RecordTypeInfo.fields` is implemented as `HashMap<String, Ty>`, not
+`Vec<(String, Ty)>`. Field-order information is preserved in
+`globals` via the constructor's `Ty::Fun.params` (which carries AST
+field order); freshening is param-name based and does not need
+positional fields. The `union_types` map on `TypeEnv` is keyed by
+**union type name** (not constructor name), so duplicate ctor names
+across unions are a resolver concern (§6 GU-S3 step 3) rather than a
+storage concern.
+
 **Fresh instantiation per use site.** Constructor schemes must be
 freshened on every lookup so that two different call sites
 (`Just 42` and `Just "hi"`, or two `Parser` constructions) get
@@ -636,16 +646,32 @@ are not allowed inside a layer that has cross-file pattern walkers
 - **GU-S2b — Formatter / re-export**: `formatter.rs`, `lib.rs`.
   Mechanical re-emission in the new shape; re-exports refreshed.
 - **GU-S2c — Resolved form**: `resolved.rs`. Resolved form follows new
-  AST. (See §3.3 for the resolved-pattern decision.)
+  AST. (See §3.3 for the resolved-pattern decision.) **Verified no
+  code change required (2026-05-09)**: `resolved.rs` re-exports
+  `CasePattern` as a struct field on `ResolvedCaseArm` and never
+  destructures `TypeDeclaration::Union` / `TypeDeclaration::Record`,
+  so the new `Ctor` variant and the reshaped declaration variants
+  flow through unchanged. Phase recorded as a no-op in `STATE.md`
+  and folded into the next-sub-task commit.
 - **GU-S2d — Typecheck layer (data only)**: `typecheck_types.rs`,
   `typecheck_build.rs`, `typecheck_env.rs`. Both `UnionTypeInfo` and
   the **extended `RecordTypeInfo` (with `type_params: Vec<String>`)**
-  are introduced here. `inject_type_constructors` and the imported
-  variants (`inject_imported_*`) register both shapes. Existing
+  are introduced here. `inject_type_constructors` registers local
+  union and record constructors in both shapes; the imported variant
+  (`inject_imported_type_constructors`) registers imported records
+  only — imported unions are intentionally deferred to GU-S3, where
+  they land alongside cross-module ambiguity resolution. Existing
   non-generic records keep working with `type_params: vec![]`.
   **At this point the env stores the new shapes but does no
   type-param unification yet** — that lands in GU-S3. Nullary unions
   and existing records continue to type-check exactly as today.
+  See §3.6 for the implementation deviation note (HashMap-shaped
+  `RecordTypeInfo.fields`, type-name-keyed `union_types`). For
+  generic constructors the global `Ty::Fun` / `Ty::Con` signature
+  registers as `Ty::Unknown` rather than a raw `Ty::Var(...)`
+  template, so that `Var` lookups returning unfreshened templates
+  cannot leak into unification before GU-S3 lands
+  `freshen_type_scheme`.
 - **GU-S2e — Typecheck layer (walkers)**: `typecheck_validate.rs`,
   `typecheck_call.rs`, `typecheck_check.rs`, `typecheck_branch.rs`,
   `typecheck_diag.rs`. All exhaustive `match` arms over `CasePattern`

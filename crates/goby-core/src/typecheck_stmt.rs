@@ -32,6 +32,7 @@ pub(crate) fn check_body_stmts(
         locals: env.locals.clone(),
         type_aliases: env.type_aliases.clone(),
         record_types: env.record_types.clone(),
+        union_types: env.union_types.clone(),
     };
     for (name, ty) in param_tys {
         local_env.locals.insert((*name).to_string(), ty.clone());

@@ -45,22 +45,44 @@ pub(crate) fn validate_type_declarations(
                 })?;
                 validate_type_expr_names(&parsed, &known_type_names, name)?;
             }
-            TypeDeclaration::Union { name, constructors } => {
+            TypeDeclaration::Union {
+                name,
+                type_params,
+                variants,
+            } => {
+                let local_known = known_with_type_params(&known_type_names, type_params);
                 let mut seen = HashSet::new();
-                for constructor in constructors {
-                    if !seen.insert(constructor.clone()) {
+                for variant in variants {
+                    if !seen.insert(variant.ctor.clone()) {
                         return Err(TypecheckError {
                             declaration: Some(name.clone()),
                             span: None, // expr span not yet available
                             message: format!(
                                 "duplicate constructor `{}` in type `{}`",
-                                constructor, name
+                                variant.ctor, name
                             ),
                         });
                     }
+                    for arg in &variant.args {
+                        let parsed = parse_type_expr(arg).ok_or_else(|| TypecheckError {
+                            declaration: Some(name.clone()),
+                            span: None, // expr span not yet available
+                            message: format!(
+                                "invalid argument type `{}` for constructor `{}`",
+                                arg, variant.ctor
+                            ),
+                        })?;
+                        validate_type_expr_names(&parsed, &local_known, name)?;
+                    }
                 }
             }
-            TypeDeclaration::Record { name, fields, .. } => {
+            TypeDeclaration::Record {
+                name,
+                type_params,
+                fields,
+                ..
+            } => {
+                let local_known = known_with_type_params(&known_type_names, type_params);
                 let mut seen = HashSet::new();
                 for field in fields {
                     if !seen.insert(field.name.clone()) {
@@ -76,13 +98,23 @@ pub(crate) fn validate_type_declarations(
                             span: None, // expr span not yet available
                             message: format!("invalid field type `{}`", field.type_annotation),
                         })?;
-                    validate_type_expr_names(&parsed, &known_type_names, name)?;
+                    validate_type_expr_names(&parsed, &local_known, name)?;
                 }
             }
         }
     }
 
     Ok(())
+}
+
+/// Return a fresh `HashSet` that extends `base` with the declaration's
+/// type parameters. The base set is unchanged. Used so that type
+/// parameters are accepted as known names while validating constructor
+/// arg types and record field types.
+fn known_with_type_params(base: &HashSet<String>, type_params: &[String]) -> HashSet<String> {
+    let mut local = base.clone();
+    local.extend(type_params.iter().cloned());
+    local
 }
 
 fn validate_type_expr_names(

@@ -8,7 +8,10 @@ use crate::{
     typecheck::TypecheckError,
     typecheck_annotation::strip_effect_clause,
     typecheck_diag::err_name_ambiguous,
-    typecheck_env::{EffectRow, GlobalBinding, ImportedEffectDecl, RecordTypeInfo, Ty, TypeEnv},
+    typecheck_env::{
+        EffectRow, GlobalBinding, ImportedEffectDecl, RecordTypeInfo, Ty, TypeEnv, UnionTypeInfo,
+        UnionVariantInfo,
+    },
     typecheck_types::{ty_from_annotation, ty_from_type_expr},
     typecheck_validate::{
         collect_imported_effect_declarations, effective_imports, inject_imported_symbols,
@@ -20,6 +23,7 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
     let mut globals = HashMap::new();
     let mut type_aliases = HashMap::new();
     let mut record_types = HashMap::new();
+    let mut union_types = HashMap::new();
     for decl in &module.declarations {
         if let Some(annotation) = decl.type_annotation.as_deref() {
             let base = strip_effect_clause(annotation);
@@ -130,7 +134,13 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
         &mut globals,
     );
     inject_imported_type_constructors(module, &mut globals, &mut record_types, stdlib_root);
-    inject_type_constructors(module, &mut globals, &mut type_aliases, &mut record_types);
+    inject_type_constructors(
+        module,
+        &mut globals,
+        &mut type_aliases,
+        &mut record_types,
+        &mut union_types,
+    );
     inject_effect_symbols(module, &mut globals);
 
     TypeEnv {
@@ -138,6 +148,7 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
         locals: HashMap::new(),
         type_aliases,
         record_types,
+        union_types,
     }
 }
 
@@ -240,10 +251,12 @@ fn inject_imported_type_constructors(
                     crate::ImportKind::Selective(names),
                     TypeDeclaration::Record {
                         name,
+                        type_params,
                         constructor,
                         fields,
                     },
                 ) if names.iter().any(|selected| selected == name) => {
+                    let is_generic = !type_params.is_empty();
                     let mut field_map = HashMap::new();
                     let params: Vec<Ty> = fields
                         .iter()
@@ -255,18 +268,23 @@ fn inject_imported_type_constructors(
                     {
                         field_map.insert(field_name.clone(), field_ty);
                     }
-                    let result = Ty::Con {
-                        name: name.clone(),
-                        args: Vec::new(),
-                    };
-                    insert_global_symbol(
-                        globals,
-                        constructor.clone(),
+                    let result = union_or_record_result_template(name, type_params);
+                    // Same template-leakage hazard as the local
+                    // generic-record path; defer the real signature to
+                    // GU-S3 by registering `Ty::Unknown` for now.
+                    let ctor_ty = if is_generic {
+                        Ty::Unknown
+                    } else {
                         Ty::Fun {
                             params,
                             result: Box::new(result),
                             effects: EffectRow::closed_empty(),
-                        },
+                        }
+                    };
+                    insert_global_symbol(
+                        globals,
+                        constructor.clone(),
+                        ctor_ty,
                         format!(
                             "import type `{}` ({}) from `{}`",
                             name, constructor, import.module_path
@@ -276,6 +294,8 @@ fn inject_imported_type_constructors(
                         constructor.clone(),
                         RecordTypeInfo {
                             type_name: name.clone(),
+                            type_params: type_params.clone(),
+                            constructor: constructor.clone(),
                             fields: field_map,
                         },
                     );
@@ -291,30 +311,81 @@ pub(crate) fn inject_type_constructors(
     globals: &mut HashMap<String, GlobalBinding>,
     type_aliases: &mut HashMap<String, Ty>,
     record_types: &mut HashMap<String, RecordTypeInfo>,
+    union_types: &mut HashMap<String, UnionTypeInfo>,
 ) {
     for ty_decl in &module.type_declarations {
         match ty_decl {
             TypeDeclaration::Alias { name, target } => {
                 type_aliases.insert(name.clone(), ty_from_annotation(target));
             }
-            TypeDeclaration::Union { name, constructors } => {
-                for constructor in constructors {
+            TypeDeclaration::Union {
+                name,
+                type_params,
+                variants,
+            } => {
+                let is_generic = !type_params.is_empty();
+                let result_template = union_or_record_result_template(name, type_params);
+                let mut variant_infos = Vec::with_capacity(variants.len());
+                for (idx, variant) in variants.iter().enumerate() {
+                    let arg_types: Vec<Ty> = variant
+                        .args
+                        .iter()
+                        .map(|annotation| ty_from_annotation(annotation))
+                        .collect();
+                    // Generic union constructors carry `Ty::Var(...)`
+                    // templates that must be freshened per use site.
+                    // The freshening helper only lands in GU-S3, so for
+                    // now register generic constructors as `Ty::Unknown`
+                    // to avoid the unfreshened template leaking into
+                    // unification (which would reject e.g. `Just 42`
+                    // against an expected `Maybe Int`). Non-generic
+                    // unions are unaffected and keep the previous
+                    // direct-`Ty::Con` / `Ty::Fun` shapes.
+                    let ctor_ty = if is_generic {
+                        Ty::Unknown
+                    } else if arg_types.is_empty() {
+                        result_template.clone()
+                    } else {
+                        Ty::Fun {
+                            params: arg_types.clone(),
+                            result: Box::new(result_template.clone()),
+                            effects: EffectRow::closed_empty(),
+                        }
+                    };
                     insert_global_symbol(
                         globals,
-                        format!("{}.{}", name, constructor),
-                        Ty::Con {
-                            name: name.clone(),
-                            args: Vec::new(),
-                        },
+                        variant.ctor.clone(),
+                        ctor_ty.clone(),
                         format!("type `{}` constructor", name),
                     );
+                    insert_global_symbol(
+                        globals,
+                        format!("{}.{}", name, variant.ctor),
+                        ctor_ty,
+                        format!("type `{}` constructor", name),
+                    );
+                    variant_infos.push(UnionVariantInfo {
+                        ctor: variant.ctor.clone(),
+                        variant_index: idx as u32,
+                        arg_types,
+                    });
                 }
+                union_types.insert(
+                    name.clone(),
+                    UnionTypeInfo {
+                        type_name: name.clone(),
+                        type_params: type_params.clone(),
+                        variants: variant_infos,
+                    },
+                );
             }
             TypeDeclaration::Record {
                 name,
+                type_params,
                 constructor,
                 fields,
             } => {
+                let is_generic = !type_params.is_empty();
                 let mut field_map = HashMap::new();
                 let params: Vec<Ty> = fields
                     .iter()
@@ -326,14 +397,17 @@ pub(crate) fn inject_type_constructors(
                 {
                     field_map.insert(field_name.clone(), field_ty);
                 }
-                let result = Ty::Con {
-                    name: name.clone(),
-                    args: Vec::new(),
-                };
-                let ctor_ty = Ty::Fun {
-                    params,
-                    result: Box::new(result),
-                    effects: EffectRow::closed_empty(),
+                let result = union_or_record_result_template(name, type_params);
+                // Generic record constructors face the same template-leakage
+                // hazard as generic unions; defer real signatures to GU-S3.
+                let ctor_ty = if is_generic {
+                    Ty::Unknown
+                } else {
+                    Ty::Fun {
+                        params,
+                        result: Box::new(result),
+                        effects: EffectRow::closed_empty(),
+                    }
                 };
                 insert_global_symbol(
                     globals,
@@ -351,11 +425,28 @@ pub(crate) fn inject_type_constructors(
                     constructor.clone(),
                     RecordTypeInfo {
                         type_name: name.clone(),
+                        type_params: type_params.clone(),
+                        constructor: constructor.clone(),
                         fields: field_map,
                     },
                 );
             }
         }
+    }
+}
+
+/// Build the `Ty::Con { name, args }` template that a union/record
+/// constructor returns. Type parameters appear as `Ty::Var(name)`
+/// templates; `freshen_type_scheme` later substitutes fresh inference
+/// variables per use site.
+fn union_or_record_result_template(name: &str, type_params: &[String]) -> Ty {
+    let args = type_params
+        .iter()
+        .map(|p| Ty::Var(p.clone()))
+        .collect();
+    Ty::Con {
+        name: name.to_string(),
+        args,
     }
 }
 

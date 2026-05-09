@@ -27,6 +27,7 @@ pub(crate) fn check_resume_in_stmts(
             .collect(),
         type_aliases: env.type_aliases.clone(),
         record_types: env.record_types.clone(),
+        union_types: env.union_types.clone(),
     };
     check_resume_in_stmts_with_local_env(stmts, &mut local_env, decl_name, resume_ctx)
 }
@@ -167,6 +168,7 @@ fn check_resume_in_expr(
                     locals: env.locals.clone(),
                     type_aliases: env.type_aliases.clone(),
                     record_types: env.record_types.clone(),
+                    union_types: env.union_types.clone(),
                 };
                 let expected_arg_ty = instantiated.as_ref().map(|(_, result)| result.clone());
                 if let Some((param_tys, _)) = instantiated.as_ref() {
@@ -199,6 +201,7 @@ fn check_resume_in_expr(
                 locals: env.locals.clone(),
                 type_aliases: env.type_aliases.clone(),
                 record_types: env.record_types.clone(),
+                union_types: env.union_types.clone(),
             };
             check_resume_in_stmts_with_local_env(body, &mut child_env, decl_name, resume_ctx)
         }
@@ -263,6 +266,7 @@ fn check_resume_in_expr(
                 locals: env.locals.clone(),
                 type_aliases: env.type_aliases.clone(),
                 record_types: env.record_types.clone(),
+                union_types: env.union_types.clone(),
             };
             check_resume_in_stmts_with_local_env(stmts, &mut child_env, decl_name, resume_ctx)
         }

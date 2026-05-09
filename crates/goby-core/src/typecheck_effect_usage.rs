@@ -750,12 +750,7 @@ mod tests {
                 },
             ],
         };
-        let env = TypeEnv {
-            globals: HashMap::new(),
-            locals: HashMap::new(),
-            type_aliases: HashMap::new(),
-            record_types: HashMap::new(),
-        };
+        let env = TypeEnv::empty();
 
         let err = infer_handler_covered_ops_strict(&handler_expr, &env, &effect_map, "my_decl")
             .expect_err("should be duplicate");

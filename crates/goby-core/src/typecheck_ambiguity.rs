@@ -326,9 +326,7 @@ mod tests {
         );
         TypeEnv {
             globals,
-            locals: HashMap::new(),
-            type_aliases: HashMap::new(),
-            record_types: HashMap::new(),
+            ..TypeEnv::empty()
         }
     }
 
@@ -336,10 +334,8 @@ mod tests {
         let mut locals = HashMap::new();
         locals.insert(name.to_string(), Ty::Tuple(items));
         TypeEnv {
-            globals: HashMap::new(),
             locals,
-            type_aliases: HashMap::new(),
-            record_types: HashMap::new(),
+            ..TypeEnv::empty()
         }
     }
 

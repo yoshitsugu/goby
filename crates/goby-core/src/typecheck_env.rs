@@ -114,6 +114,24 @@ pub(crate) struct TypeEnv {
     pub(crate) locals: HashMap<String, Ty>,
     pub(crate) type_aliases: HashMap<String, Ty>,
     pub(crate) record_types: HashMap<String, RecordTypeInfo>,
+    /// Generic and non-generic union declarations indexed by **union
+    /// type name**. Keying on the type name (not on a constructor
+    /// name) keeps the storage unambiguous when two unions share a
+    /// constructor name; resolving such ambiguity is the typecheck-
+    /// side resolver's job.
+    pub(crate) union_types: HashMap<String, UnionTypeInfo>,
+}
+
+impl TypeEnv {
+    pub(crate) fn empty() -> TypeEnv {
+        TypeEnv {
+            globals: HashMap::new(),
+            locals: HashMap::new(),
+            type_aliases: HashMap::new(),
+            record_types: HashMap::new(),
+            union_types: HashMap::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,7 +143,29 @@ pub(crate) enum GlobalBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RecordTypeInfo {
     pub(crate) type_name: String,
+    /// Declared type parameters; empty for non-generic records.
+    /// Field type templates carry these as `Ty::Var(name)`.
+    pub(crate) type_params: Vec<String>,
+    pub(crate) constructor: String,
     pub(crate) fields: HashMap<String, Ty>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnionTypeInfo {
+    pub(crate) type_name: String,
+    /// Declared type parameters; empty for non-generic unions.
+    /// Variant arg type templates carry these as `Ty::Var(name)`.
+    pub(crate) type_params: Vec<String>,
+    pub(crate) variants: Vec<UnionVariantInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnionVariantInfo {
+    pub(crate) ctor: String,
+    /// Position of the variant in the declaration's variant list,
+    /// used as the runtime tag value during lowering.
+    pub(crate) variant_index: u32,
+    pub(crate) arg_types: Vec<Ty>,
 }
 
 #[derive(Debug, Clone)]
@@ -178,6 +218,7 @@ impl TypeEnv {
             locals,
             type_aliases: self.type_aliases.clone(),
             record_types: self.record_types.clone(),
+            union_types: self.union_types.clone(),
         }
     }
 

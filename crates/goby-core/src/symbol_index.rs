@@ -124,6 +124,7 @@ pub fn infer_local_bindings(decl: &Declaration) -> Vec<LocalBindingSymbol> {
             .collect(),
         type_aliases: HashMap::new(),
         record_types: HashMap::new(),
+        union_types: HashMap::new(),
     };
 
     let mut result = Vec::new();

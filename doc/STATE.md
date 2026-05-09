@@ -4,21 +4,29 @@ Last updated: 2026-05-09.
 
 ## Current Focus
 
-**Track GU (generic user-defined types) — formatter + re-exports complete (GU-S2b).**
-`crates/goby-core/src/formatter.rs::format_type_declaration` now
-emits the new generic-union/record header (`type Name a b = ...`)
-and union variants in the `Ctor(t1, ...)` shape, and
-`format_pattern` carries the new `CasePattern::Ctor` arm
-(bare/qualified head, space-separated `binder | _` args), with a
-formatter↔parser round-trip test pinning the contract.
-`crates/goby-core/src/lib.rs` re-exports `UnionVariant` and
-`CtorPatternArg` alongside the existing AST surface. `cargo build -p
-goby-core` still fails — errors are now localised to three files
-(typecheck_types.rs, typecheck_build.rs, ir_lower.rs; ast.rs only by
-hint), all within the §4 walk-list. Next phase is **GU-S2c: resolved-form repair** — `crates/goby-core/src/resolved.rs` mechanically
-carries the new AST through (per `doc/PLAN_GU.md` §3.3 the resolved
-form gains no new pattern type; the constructor-pattern flows
-through unchanged).
+**Track GU (generic user-defined types) — typecheck data layer complete (GU-S2c+S2d).**
+GU-S2c (`resolved.rs`) was verified as a no-op: the resolved form
+holds `CasePattern` as a struct field and never destructures
+`TypeDeclaration::Union/Record`, so the new shapes flow through
+unchanged. GU-S2d extended `RecordTypeInfo` with `type_params` and
+`constructor`, introduced `UnionTypeInfo` / `UnionVariantInfo`,
+added a `union_types` field on `TypeEnv` (keyed by **union type name**
+to keep storage unambiguous when ctor names overlap) plus a
+`TypeEnv::empty()` helper, and rewrote `inject_type_constructors`
+and `validate_type_declarations` to walk the new shapes. Generic
+constructors register their global symbols as `Ty::Unknown` so
+unfreshened `Ty::Var(...)` templates cannot leak into unification
+before GU-S3 lands `freshen_type_scheme`; non-generic unions and
+records keep their previous direct `Ty::Con` / `Ty::Fun` signatures.
+`cargo build -p goby-core` (lib + tests) is green except for one
+remaining error in `ir_lower.rs:660` (`CasePattern::Ctor`
+non-exhaustive), which is GU-S2f's responsibility. Next phase is
+**GU-S2e: typecheck walkers** — extend the exhaustive `match` arms
+over `CasePattern` and the record / ctor lookup paths in
+`typecheck_validate.rs`, `typecheck_call.rs`, `typecheck_check.rs`,
+`typecheck_branch.rs`, `typecheck_diag.rs` to recognise the new
+`Ctor` variant and the extended `RecordTypeInfo` shape (data only;
+no fresh-instantiation yet).
 
 Track PC remains queued; it cannot start before GU-X2 (the closed-form
 green check). The earlier reference to `tmp/pc.md` is dropped — the
@@ -36,13 +44,14 @@ commit `df57c32`):
 - `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`:
   the regular wasm suite passes (865 / 11 skipped after Track HF, 2026-05-09).
 
-**Currently broken (intentional, GU-S1 window only)**:
+**Currently broken (intentional, GU-S2 window)**:
 
-- `cargo build -p goby-core` fails. Errors are localised to six §4
-  walk-list files (ast.rs, formatter.rs, ir_lower.rs, parser_top.rs,
-  typecheck_build.rs, typecheck_types.rs) and are repaired by GU-S2.
+- `cargo build -p goby-core` (lib + tests) reports one remaining
+  error: `ir_lower.rs:660` — `CasePattern::Ctor` non-exhaustive. This
+  is GU-S2f (IR layer) territory and is repaired before GU-S2 closes.
   All other check commands (`-p goby-core --lib`, `-p goby-wasm`,
-  `-p goby-lsp`, `--workspace`) are blocked by this until GU-S2 ends.
+  `-p goby-lsp`, `--workspace`) remain blocked by this single
+  compile error until GU-S2f lands.
 
 Red / ignored:
 
@@ -56,15 +65,17 @@ Red / ignored:
 
 **Primary (active):**
 
-- **Track GU (generic user-defined types) — GU-S2c next.** GU-D0 / GU-D1
-  / GU-S1 / GU-S2a / GU-S2b complete. The next step is GU-S2c:
-  mechanically thread the new `TypeDeclaration::Union` /
-  `TypeDeclaration::Record` and `CasePattern::Ctor` shapes through
-  `crates/goby-core/src/resolved.rs`. Per `doc/PLAN_GU.md` §3.3 the
-  resolved form gains no new pattern type — constructor-to-type
-  association is decided in typecheck and IR lowering. Downstream
-  typecheck / IR / wasm layers remain broken until later GU-S2
-  sub-tasks land. See `doc/PLAN_GU.md` §6 for the full phase list.
+- **Track GU (generic user-defined types) — GU-S2e next.** GU-D0 / GU-D1
+  / GU-S1 / GU-S2a / GU-S2b / GU-S2c (no-op) / GU-S2d complete. The
+  next step is GU-S2e: walker-side typecheck repair across
+  `typecheck_validate.rs`, `typecheck_call.rs`, `typecheck_check.rs`,
+  `typecheck_branch.rs`, `typecheck_diag.rs` — every exhaustive
+  `match` over `CasePattern` recognises the new `Ctor` variant, and
+  every record constructor / field-access call site reads from the
+  extended `RecordTypeInfo` (treating `type_params` as empty for
+  existing records, no freshening yet). Downstream IR layer
+  (ir_lower.rs E0004) is still broken and is GU-S2f's responsibility.
+  See `doc/PLAN_GU.md` §6 for the full phase list.
 
 **Queued behind GU:**
 
