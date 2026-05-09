@@ -23,7 +23,8 @@
 //! correct column offsets.
 
 use crate::ast::{
-    BinOpKind, CaseArm, CasePattern, Declaration, EffectDecl, EmbedDecl, Expr, HandlerClause,
+    BinOpKind, CaseArm, CasePattern, CtorPatternArg, Declaration, EffectDecl, EmbedDecl, Expr,
+    HandlerClause,
     ImportDecl, ImportKind, InterpolatedPart, ListPatternItem, ListPatternTail, Module,
     RecordField, Stmt, TypeDeclaration, UnaryOpKind,
 };
@@ -497,6 +498,28 @@ fn format_pattern(pat: &CasePattern) -> String {
             }
             format!("[{}]", parts.join(", "))
         }
+        CasePattern::Ctor {
+            type_qualifier,
+            ctor,
+            args,
+        } => {
+            let head = match type_qualifier {
+                Some(q) => format!("{}.{}", q, ctor),
+                None => ctor.clone(),
+            };
+            if args.is_empty() {
+                head
+            } else {
+                let arg_strs: Vec<String> = args
+                    .iter()
+                    .map(|arg| match arg {
+                        CtorPatternArg::Bind(name) => name.clone(),
+                        CtorPatternArg::Wildcard => "_".to_string(),
+                    })
+                    .collect();
+                format!("{} {}", head, arg_strs.join(" "))
+            }
+        }
         CasePattern::Wildcard => "_".to_string(),
     }
 }
@@ -707,14 +730,26 @@ pub(crate) fn format_type_declaration(td: &TypeDeclaration) -> String {
         TypeDeclaration::Alias { name, target } => {
             format!("type {} = {}", name, target)
         }
-        TypeDeclaration::Union { name, constructors } => {
-            format!("type {} = {}", name, constructors.join(" | "))
+        TypeDeclaration::Union {
+            name,
+            type_params,
+            variants,
+        } => {
+            let header = format_type_header(name, type_params);
+            let body = variants
+                .iter()
+                .map(format_union_variant)
+                .collect::<Vec<_>>()
+                .join(" | ");
+            format!("type {} = {}", header, body)
         }
         TypeDeclaration::Record {
             name,
+            type_params,
             constructor,
             fields,
         } => {
+            let header = format_type_header(name, type_params);
             let field_strs: Vec<String> = fields
                 .iter()
                 .map(
@@ -724,8 +759,29 @@ pub(crate) fn format_type_declaration(td: &TypeDeclaration) -> String {
                      }| { format!("{}: {}", fname, type_annotation) },
                 )
                 .collect();
-            format!("type {} = {}({})", name, constructor, field_strs.join(", "))
+            format!(
+                "type {} = {}({})",
+                header,
+                constructor,
+                field_strs.join(", ")
+            )
         }
+    }
+}
+
+fn format_type_header(name: &str, type_params: &[String]) -> String {
+    if type_params.is_empty() {
+        name.to_string()
+    } else {
+        format!("{} {}", name, type_params.join(" "))
+    }
+}
+
+fn format_union_variant(variant: &crate::ast::UnionVariant) -> String {
+    if variant.args.is_empty() {
+        variant.ctor.clone()
+    } else {
+        format!("{}({})", variant.ctor, variant.args.join(", "))
     }
 }
 
@@ -1189,7 +1245,17 @@ mod tests {
     fn format_type_union() {
         let td = TypeDeclaration::Union {
             name: "UserStatus".to_string(),
-            constructors: vec!["Activated".to_string(), "Deactivated".to_string()],
+            type_params: Vec::new(),
+            variants: vec![
+                crate::ast::UnionVariant {
+                    ctor: "Activated".to_string(),
+                    args: Vec::new(),
+                },
+                crate::ast::UnionVariant {
+                    ctor: "Deactivated".to_string(),
+                    args: Vec::new(),
+                },
+            ],
         };
         assert_eq!(
             format_type_declaration(&td),
@@ -1202,6 +1268,7 @@ mod tests {
         use crate::ast::RecordField;
         let td = TypeDeclaration::Record {
             name: "User".to_string(),
+            type_params: Vec::new(),
             constructor: "User".to_string(),
             fields: vec![
                 RecordField {
@@ -1218,6 +1285,119 @@ mod tests {
             format_type_declaration(&td),
             "type User = User(id: UserID, name: String)"
         );
+    }
+
+    #[test]
+    fn format_generic_union_with_args() {
+        let td = TypeDeclaration::Union {
+            name: "Maybe".to_string(),
+            type_params: vec!["a".to_string()],
+            variants: vec![
+                crate::ast::UnionVariant {
+                    ctor: "Just".to_string(),
+                    args: vec!["a".to_string()],
+                },
+                crate::ast::UnionVariant {
+                    ctor: "Nothing".to_string(),
+                    args: Vec::new(),
+                },
+            ],
+        };
+        assert_eq!(
+            format_type_declaration(&td),
+            "type Maybe a = Just(a) | Nothing"
+        );
+    }
+
+    #[test]
+    fn format_generic_record() {
+        use crate::ast::RecordField;
+        let td = TypeDeclaration::Record {
+            name: "Box".to_string(),
+            type_params: vec!["a".to_string()],
+            constructor: "Box".to_string(),
+            fields: vec![RecordField {
+                name: "value".to_string(),
+                type_annotation: "a".to_string(),
+            }],
+        };
+        assert_eq!(
+            format_type_declaration(&td),
+            "type Box a = Box(value: a)"
+        );
+    }
+
+    #[test]
+    fn format_nullary_ctor_pattern() {
+        let pat = CasePattern::Ctor {
+            type_qualifier: None,
+            ctor: "Nothing".to_string(),
+            args: Vec::new(),
+        };
+        assert_eq!(format_pattern(&pat), "Nothing");
+    }
+
+    #[test]
+    fn format_ctor_pattern_with_args() {
+        use crate::ast::CtorPatternArg;
+        let pat = CasePattern::Ctor {
+            type_qualifier: None,
+            ctor: "Cons".to_string(),
+            args: vec![
+                CtorPatternArg::Bind("head".to_string()),
+                CtorPatternArg::Wildcard,
+            ],
+        };
+        assert_eq!(format_pattern(&pat), "Cons head _");
+    }
+
+    #[test]
+    fn format_qualified_ctor_pattern() {
+        use crate::ast::CtorPatternArg;
+        let pat = CasePattern::Ctor {
+            type_qualifier: Some("Maybe".to_string()),
+            ctor: "Just".to_string(),
+            args: vec![CtorPatternArg::Bind("x".to_string())],
+        };
+        assert_eq!(format_pattern(&pat), "Maybe.Just x");
+    }
+
+    #[test]
+    fn ctor_pattern_round_trip_through_parser() {
+        use crate::ast::CtorPatternArg;
+        use crate::parser_pattern::parse_case_pattern;
+
+        let cases = [
+            CasePattern::Ctor {
+                type_qualifier: None,
+                ctor: "Nothing".to_string(),
+                args: Vec::new(),
+            },
+            CasePattern::Ctor {
+                type_qualifier: None,
+                ctor: "Cons".to_string(),
+                args: vec![
+                    CtorPatternArg::Bind("head".to_string()),
+                    CtorPatternArg::Wildcard,
+                ],
+            },
+            CasePattern::Ctor {
+                type_qualifier: Some("Maybe".to_string()),
+                ctor: "Just".to_string(),
+                args: vec![CtorPatternArg::Bind("x".to_string())],
+            },
+            CasePattern::Ctor {
+                type_qualifier: None,
+                ctor: "Cons".to_string(),
+                args: vec![CtorPatternArg::Wildcard, CtorPatternArg::Wildcard],
+            },
+        ];
+        for original in cases {
+            let formatted = format_pattern(&original);
+            let reparsed = parse_case_pattern(&formatted)
+                .unwrap_or_else(|| panic!("re-parse failed for {formatted:?}"));
+            assert_eq!(reparsed, original, "round-trip mismatch for {formatted:?}");
+        }
     }
 
     #[test]

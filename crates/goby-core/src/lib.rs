@@ -52,9 +52,9 @@ pub mod types;
 
 pub use analysis::resolve_print_text;
 pub use ast::{
-    BinOpKind, CaseArm, CasePattern, Declaration, EmbedDecl, Expr, HandlerClause, ImportDecl,
-    ImportKind, ImportKindSpan, ListPatternItem, ListPatternTail, Module, RecordField, Span, Stmt,
-    TypeDeclaration,
+    BinOpKind, CaseArm, CasePattern, CtorPatternArg, Declaration, EmbedDecl, Expr, HandlerClause,
+    ImportDecl, ImportKind, ImportKindSpan, ListPatternItem, ListPatternTail, Module, RecordField,
+    Span, Stmt, TypeDeclaration, UnionVariant,
 };
 pub use diagnostic::{Diagnostic, Severity};
 pub use formatter::format_module;
