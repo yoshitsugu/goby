@@ -2229,3 +2229,232 @@ fn memory64_flag_hello_gb_executes_correctly() {
         "hello.gb output must match under memory64 config"
     );
 }
+
+/// Regression for BUGS.md 2026-05-01 follow-up: a function whose body is a
+/// `case` over a `List String` and whose matching arm returns a list-pattern
+/// binder (e.g. `[x, ..rest] -> x`) returned the head element with broken
+/// length / refcount metadata. The literal returned value rendered correctly
+/// in isolation (`println v` -> `a`), but using it in a string interpolation
+/// in the caller corrupted adjacent literal characters:
+///   `println "v:${v}"` printed `va` (the `:` between literal and binder was
+///   lost), `println "X${v}Y"` printed `Xa` (trailing `Y` lost), and a
+///   `println "before"` immediately preceding the interpolation also printed
+///   blank.
+///
+/// The Int-typed analogue (`head_or : List Int -> Int` returning `7`) was
+/// fine, isolating the defect to the String / borrowed-list-element-return
+/// path. We pin three end-to-end shapes here.
+#[test]
+fn head_or_string_list_pattern_binder_return_preserves_interpolation_literals() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/stdio
+
+head_or : List String -> String
+head_or xs =
+  case xs
+    [] -> ""
+    [x, ..rest] -> x
+
+main : Unit -> Unit can Print
+main =
+  v = head_or ["a", "b"]
+  println "v:${v}"
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = execute_runtime_module_with_stdin(&module, None)
+        .expect("head_or string program should execute")
+        .expect("head_or string program should emit output");
+    assert_eq!(
+        output, "v:a\n",
+        "literal `:` between prefix and interpolated head element must survive"
+    );
+}
+
+#[test]
+fn head_or_string_list_pattern_binder_return_preserves_prefix_and_suffix_literals() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/stdio
+
+head_or : List String -> String
+head_or xs =
+  case xs
+    [] -> ""
+    [x, ..rest] -> x
+
+main : Unit -> Unit can Print
+main =
+  v = head_or ["a", "b"]
+  println "p:${v}:s"
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = execute_runtime_module_with_stdin(&module, None)
+        .expect("head_or prefix/suffix program should execute")
+        .expect("head_or prefix/suffix program should emit output");
+    assert_eq!(
+        output, "p:a:s\n",
+        "literal characters on both sides of an interpolated head element must survive"
+    );
+}
+
+/// Borrowed-escape probe (Codex pass-1 concern, BUGS.md 2026-05-01 stop-gap):
+/// returning a list-pattern head Bind from `head_or` while the source list
+/// is a *local temporary* of the wrapper function. The wrapper drops the
+/// local list as part of its tail-call cleanup; the returned binder is a
+/// projection borrow into that list. We pin the currently-observable
+/// behaviour: with the `Borrowed`-classification stop-gap landed in this
+/// fix, the value still prints correctly across every probe we ran. If a
+/// future change makes any of these cases regress, the test will fail and
+/// the regression will surface immediately rather than silently corrupting
+/// downstream output. PLAN.md §4.5d Track LB tracks the principled fix.
+#[test]
+fn head_or_string_list_pattern_binder_return_survives_local_temporary_source_list() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/stdio
+
+head_or : List String -> String
+head_or xs =
+  case xs
+    [] -> ""
+    [x, ..rest] -> x
+
+build_dyn : Int -> String
+build_dyn n = "${n}"
+
+from_local_dyn : Unit -> String
+from_local_dyn =
+  a = build_dyn 1
+  b = build_dyn 2
+  xs = [a, b]
+  head_or xs
+
+main : Unit -> Unit can Print
+main =
+  v = from_local_dyn()
+  println "v:${v}"
+  println "after:${v}"
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = execute_runtime_module_with_stdin(&module, None)
+        .expect("from_local_dyn program should execute")
+        .expect("from_local_dyn program should emit output");
+    assert_eq!(
+        output, "v:1\nafter:1\n",
+        "head Bind returned from a function whose source list is a local \
+         temporary must survive past the wrapper's drop and stay legible \
+         across two interpolations"
+    );
+}
+
+/// Closure-capture probe (Codex pass-2 concern): a returned closure
+/// captures a list-pattern head Bind and the call site invokes the
+/// closure *after* the source-list let-frame has gone out of scope.
+/// `make_head` is `Owned`-returning (the closure is a fresh owned
+/// value), but the closure's environment slot for `x` is a borrowed
+/// projection into the source list. Today this prints correctly on
+/// every probe we ran; if a refactor later breaks the implicit
+/// keep-alive that makes this work, the test catches the regression.
+/// PLAN.md §4.5d Track LB acceptance includes this shape.
+#[test]
+fn closure_capturing_list_pattern_head_bind_prints_correctly_when_invoked() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/stdio
+
+make_head : List String -> (Unit -> String)
+make_head xs =
+  case xs
+    [] -> fn _ -> ""
+    [x, ..rest] -> fn _ -> x
+
+main : Unit -> Unit can Print
+main =
+  f = make_head ["a", "b"]
+  s = f()
+  println "v:${s}"
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = execute_runtime_module_with_stdin(&module, None)
+        .expect("closure-capture program should execute")
+        .expect("closure-capture program should emit output");
+    assert_eq!(
+        output, "v:a\n",
+        "closure capturing a list-pattern head Bind must still produce \
+         the correct head element when invoked after make_head returns"
+    );
+}
+
+/// Tail-Bind escape probe: `[x, ..rest] -> rest` returns the freshly
+/// allocated chunked sub-list. Even though `emit_case_bind_tail_list`
+/// builds a fresh container, the elements inside are still borrowed
+/// from the scrutinee chunks (no per-element `__goby_dup`). The current
+/// stop-gap classifies tail Binds `Borrowed` for symmetry with head
+/// Binds, so the caller does not Drop the returned tail container —
+/// which means the fresh container leaks if it is unused, but the
+/// elements stay live for as long as the scrutinee does. We pin a
+/// successful path: tail of `["a", "b"]` is `["b"]`, printable.
+///
+/// The `read()` call routes the program through the
+/// `GeneralLowered` runtime path so `execute_runtime_module_with_stdin`
+/// returns a captured stdout (otherwise the helper returns `Ok(None)`).
+#[test]
+fn tail_bind_return_from_list_pattern_prints_correctly() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/stdio
+import goby/list (length)
+
+tail_or : List String -> List String
+tail_or xs =
+  case xs
+    [] -> []
+    [_x, ..rest] -> rest
+
+main : Unit -> Unit can Print, Read
+main =
+  _ = read()
+  ys = tail_or ["a", "b"]
+  n = length ys
+  println "len:${n}"
+  println "ys:${ys}"
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = execute_runtime_module_with_stdin(&module, Some("x\n".to_string()))
+        .expect("tail_or program should execute")
+        .expect("tail_or program should emit output");
+    assert_eq!(
+        output, "len:1\nys:[\"b\"]\n",
+        "tail Bind returned from a list-pattern arm must produce a \
+         legible single-element sub-list"
+    );
+}
+
+#[test]
+fn head_or_string_list_pattern_binder_return_does_not_corrupt_earlier_println() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/stdio
+
+head_or : List String -> String
+head_or xs =
+  case xs
+    [] -> ""
+    [x, ..rest] -> x
+
+main : Unit -> Unit can Print
+main =
+  s = head_or ["a", "b"]
+  println "before"
+  println "v:${s}"
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let output = execute_runtime_module_with_stdin(&module, None)
+        .expect("multi-stmt head_or program should execute")
+        .expect("multi-stmt head_or program should emit output");
+    assert_eq!(
+        output, "before\nv:a\n",
+        "earlier println must not be clobbered by a later head_or interpolation"
+    );
+}

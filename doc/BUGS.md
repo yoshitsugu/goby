@@ -4,120 +4,6 @@ This document tracks confirmed, reproducible bugs in the current Goby toolchain.
 
 Open bugs:
 
-- **2026-05-01.** A function whose result is a `case` over a list pattern can
-  return `Unit` or the empty-list-arm result instead of evaluating the matching
-  non-empty list arm on the current `goby run` path.
-
-  Confirmed repro:
-
-  Save the following complete program as `solve.gb`:
-
-  ```goby
-  import goby/list (push)
-  import goby/stdio
-
-  parse_inner : List String -> List String -> List String -> Bool -> (List String, List String) can Print
-  parse_inner lines ranges ids ranges_end =
-    println "l2:${lines}"
-    case lines
-      [] -> (ranges, ids)
-      [x, ...xs] ->
-        if x == ""
-          parse_inner xs ranges ids True
-        else
-          if ranges_end
-            new_ids = push ids x
-            parse_inner xs ranges new_ids ranges_end
-          else
-            new_ranges = push ranges x
-            parse_inner xs new_ranges ids ranges_end
-
-  parse : List String -> (List String, List String) can Print
-  parse lines =
-    println "l:${lines}"
-    parse_inner lines [] [] False
-
-  main : Unit -> Unit can Print, Read
-  main =
-    lines = read_lines ()
-    ranges_and_ids = parse(lines)
-    println "a:${ranges_and_ids}"
-  ```
-
-  Run it with this stdin:
-
-  ```text
-  3-5
-  10-14
-  16-20
-  12-18
-
-  1
-  5
-  8
-  11
-  17
-  32
-  ```
-
-  Command:
-
-  ```sh
-  cat sample | goby run solve.gb
-  ```
-
-  Observed output:
-
-  ```text
-  parsed and typechecked 3 declarations from solve.gb
-  l:["3-5", "10-14", "16-20", "12-18", "", "1", "5", "8", "11", "17", "32"]
-  a:Unit
-  ```
-
-  Expected behavior:
-
-  - `parse_inner` should execute, so at least one `l2:...` line should be
-    printed.
-  - `ranges_and_ids` should be the tuple returned by `parse_inner`, not `Unit`.
-
-  Smaller reduction:
-
-  ```goby
-  import goby/stdio
-
-  head_or : List Int -> Int
-  head_or xs =
-    case xs
-      [] -> 0
-      [x, ...rest] -> x
-
-  main : Unit -> Unit can Print
-  main =
-    v = head_or [7, 8]
-    println "v:${v}"
-  ```
-
-  Observed:
-
-  ```text
-  v:0
-  ```
-
-  Expected:
-
-  ```text
-  v:7
-  ```
-
-  Notes:
-
-  - The original `solve.gb` also had an extra discarded recursive call before
-    the `if` in the `[x, ...xs]` arm. Removing that call is correct, but it is
-    not the root cause of this bug.
-  - Inline `case` examples such as `examples/list_case.gb` still pass, so the
-    current failure appears to involve list-pattern `case` inside a called
-    function returning a value.
-
 - **2026-05-08.** `WasmBackendInstr::AllocFloatBox` and
   `WasmBackendInstr::AllocMutableCell` share two limitations that should
   be addressed together as a follow-up cell-allocation refactor (raised
@@ -230,6 +116,145 @@ Open bugs:
   it is intentionally out of scope for Track HF.
 
 Resolved bugs:
+
+- **2026-05-01.** A function whose body is a `case` over a `List` pattern
+  that returns the head-element binder corrupted later string operations in
+  the caller.
+
+  Status of the original repro: the literal program in the historical
+  entry used the old `...rest` spread syntax, which is a parse error
+  under the current parser. With the corrected `..rest` syntax, the
+  Int reduction (`head_or [7, 8] -> 7`) and the full `solve.gb`
+  driver both pass on the pre-fix `0146b47` baseline, so the
+  literal `Unit`-return symptom is no longer reproducible.
+
+  However, triage surfaced a closely-related defect on the same code
+  path:
+
+  ```goby
+  import goby/stdio
+
+  head_or : List String -> String
+  head_or xs =
+    case xs
+      [] -> ""
+      [x, ..rest] -> x
+
+  main : Unit -> Unit can Print
+  main =
+    v = head_or ["a", "b"]
+    println "v:${v}"
+  ```
+
+  Pre-fix observed: `va` (the literal `:` between prefix and binder is
+  lost). Variants:
+
+  - `println "p:${v}:s"` printed `p:a9s` (interior literal mangled).
+  - A `println "before"; println "v:${s}"` pair printed
+    `\nv:a` (the earlier `before` line was clobbered).
+
+  Int-typed analogue (`head_or : List Int -> Int`) was unaffected,
+  because Int values are 60-bit unboxed and not refcounted. Inline
+  `case ["a","b"] [...] [x, y] -> x` directly in `main` (not via a
+  callee function) was also unaffected.
+
+  Root cause: in `crates/goby-core/src/perceus.rs`,
+  `classify_case_pattern_bindings` and the `Case` arm of
+  `return_ownership_comp` classified every list-pattern `Bind`
+  binder as `OwnershipClass::Owned`. The wasm backend
+  (`crates/goby-wasm/src/gen_lower/emit.rs`,
+  `BackendCasePattern::ListPattern` arm) lowers a head
+  `BackendListPatternItem::Bind(name)` via
+  `emit_chunked_load_const + LocalSet`, with no `__goby_dup` — so
+  the binder is actually a *projection borrow* into the scrutinee
+  cons-cell. The `Owned` classification had two consequences:
+  (a) `drop_unused_pattern_bindings` emitted a `Drop` for an
+  unused binder (e.g. `[x, ..rest] -> x` ⇒ `Drop(rest)`), which
+  decremented the scrutinee's projected refcount and corrupted the
+  source list; (b) the surrounding decl was classified as
+  `Owned`-returning, so the caller treated the returned binder as a
+  fresh allocation and inserted Drops at use sites that broke the
+  string-builder concat path.
+
+  Fix: list-pattern `Bind` binders (head and tail) are classified
+  `OwnershipClass::Borrowed` in both
+  `classify_case_pattern_bindings` and the new
+  `collect_pattern_bindings_with_class_for_return` helper consumed by
+  `return_ownership_comp::Case`. Ctor pattern args remain `Owned`.
+
+  This is a stop-gap. The longer-term direction is to materialise
+  list-pattern Binds as truly-owned references (either via emit-side
+  `__goby_dup` after `LocalSet`, or via an IR-level
+  `ProjectAndOwn` primitive). See `doc/PLAN.md` §4.5d Track LB for
+  the deferred refactor and its acceptance criteria. An attempt to
+  prepend an arm-entry `Dup` in Perceus during this fix produced a
+  runtime trap on `head_or ["a", "b"]` even after sequencing the
+  Dups after the unused-binder Drop calculation; that interaction
+  (likely with `balance_case_branch_drops` or scrutinee-side
+  accounting) needs investigation when Track LB opens.
+
+  Regression coverage:
+
+  - `crates/goby-wasm/src/runtime_output_tests.rs`:
+    - `head_or_string_list_pattern_binder_return_preserves_interpolation_literals`
+      — pins `"v:${v}"` ⇒ `"v:a\n"`.
+    - `head_or_string_list_pattern_binder_return_preserves_prefix_and_suffix_literals`
+      — pins `"p:${v}:s"` ⇒ `"p:a:s\n"`.
+    - `head_or_string_list_pattern_binder_return_does_not_corrupt_earlier_println`
+      — pins that a leading `println "before"` is not clobbered.
+    - `head_or_string_list_pattern_binder_return_survives_local_temporary_source_list`
+      — borrowed-escape probe (Codex pass-1 concern): the source
+      list is a local temporary in the wrapper function and the
+      returned head Bind survives the wrapper's drop. Currently
+      green; if a future change makes this regress we want to know
+      immediately. Track LB will fix the underlying soundness.
+    - `tail_bind_return_from_list_pattern_prints_correctly` —
+      `[_x, ..rest] -> rest` returns the freshly chunked sub-list
+      and prints `["b"]` from `["a", "b"]`. Documents that the
+      stop-gap leaks the fresh tail container (no Drop emitted, see
+      §4.5d Track LB) but the elements remain legible.
+    - `closure_capturing_list_pattern_head_bind_prints_correctly_when_invoked`
+      — closure-capture probe (Codex pass-2 concern):
+      `make_head xs = case xs [] -> fn _ -> "" [x, ..rest] -> fn _ -> x`
+      returns an owned closure capturing a borrowed head Bind, and
+      the closure is invoked from main after `make_head` returns.
+      Currently green; pinned so any regression surfaces immediately.
+  - `crates/goby-core/src/perceus.rs::tests`:
+    - `case_list_pattern_bind_binders_classified_as_borrowed_no_drop_inserted`
+      — pins that `case xs { [] -> 0 ; [x, ..rest] -> x }` produces
+      neither `drop x` nor `drop rest` in the lowered IR. Replaces
+      the old `case_heap_bound_pattern_drops_unused_bindings`, whose
+      "expect drop rest" assertion was the unsound pattern this fix
+      removes.
+
+  Known stop-gap limitations (deferred to PLAN.md §4.5d Track LB):
+
+  - Returning a list-pattern Bind makes the surrounding decl
+    `Borrowed`-returning. The probe above
+    (`..._survives_local_temporary_source_list`) shows current
+    code paths happen to keep the source-list refcounts high
+    enough to avoid an observable dangling read, but the type
+    system does not enforce this. A future call shape that drops
+    the source list eagerly while the borrowed projection is
+    still in use could regress; Track LB lifts this to a real
+    soundness guarantee.
+  - Tail Binds returned from a list-pattern arm are now classified
+    `Borrowed`, so the freshly-chunked tail container produced by
+    `emit_case_bind_tail_list` is not Drop-eligible at the call
+    site. This leaks the container header (and chunk header) until
+    the surrounding allocation arena is reset. Acceptable for the
+    immediate fix; Track LB will materialise tail Binds as truly
+    owned and remove the leak.
+  - A returned closure / lambda that captures a list-pattern head
+    Bind is `Owned`-returning at the decl level (the closure is a
+    fresh owned value), but the closure's environment slot for the
+    binder is still a projection borrow into the source list. The
+    closure-capture probe in the regression suite currently passes
+    on every shape exercised, but the soundness still rides on the
+    same implicit keep-alive of the source list that the direct
+    return case relies on. Track LB acceptance therefore explicitly
+    includes "binder captured into a returned closure / HOF
+    callback remains valid after source-list cleanup".
 
 - **2026-05-08.** Passing a function whose body referenced a top-level
   binding inside an `If` cond / `Case` scrutinee / non-trivial HOF call

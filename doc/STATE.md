@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-09.
+Last updated: 2026-05-09 (post bug-fix interlude entry #1).
 
 ## Current Focus
 
@@ -68,16 +68,19 @@ Red / ignored:
   the new code rather than to pre-existing layer noise. Each fix
   ships with a regression test (unit, integration, or fixture as
   appropriate); the interlude is "done" only when BUGS.md's open
-  list is empty and all three regressions are pinned. Order:
+  list is empty and the regressions are pinned. Status:
   1. **2026-05-01 case-over-list-pattern function-result bug** —
-     `head_or [7, 8]` returns `0` instead of `7` (BUGS.md). Same
-     lowering surface that GU-S4's union-variant `case` arms will
-     touch; landing this first removes a confound for the upcoming
-     generic-union acceptance fixtures.
+     **CLOSED 2026-05-09** as a stop-gap that classifies list-
+     pattern Bind binders as `Borrowed` in Perceus. Three end-to-
+     end regressions pinned in `runtime_output_tests.rs` plus a
+     layer-level pin in `perceus::tests`. Long-term refactor
+     tracked under PLAN.md §4.5d Track LB (truly-owned binders via
+     emit-side or IR-level `Dup`).
   2. **2026-05-09 stdlib `int.parse` `minimum_int` literal range**
-     — language-side stdlib fix, scheduled after #1.
+     — open. Language-side stdlib fix, next in the queue.
   3. **2026-05-08 `AllocFloatBox` / `AllocMutableCell` shared
-     refactor** — wasm allocator refactor, last in the interlude.
+     refactor** — open. Wasm allocator refactor, last in the
+     interlude.
 - **Track GU resumes at GU-S3 once the bug-fix interlude is clear.**
   The GU-S3 plan is unchanged: extract `freshen_type_scheme` (with
   the existing effect-side call site migrated first), then route
@@ -108,6 +111,12 @@ Red / ignored:
 
 **Other queued tracks (lower priority):**
 
+- Track LB: list-pattern Bind binders as truly-owned references
+  (`doc/PLAN.md` §4.5d). New track locked 2026-05-09 as the long-
+  term follow-up to the BUGS.md 2026-05-01 stop-gap. Independent
+  of GU/EX/PC; can land whenever bandwidth allows. Acceptance
+  reverts the `Borrowed`-classification stop-gap once head/tail
+  Binds are materialised as truly owned references.
 - Track OOB (out-of-bounds handling polish; `doc/PLAN.md` §4.5).
 - Track D D5/D6 follow-ups (`goby lint`; `doc/PLAN.md` §4.1).
 - Track RR-6 limit tuning (`doc/PLAN.md` §4.5 RR).

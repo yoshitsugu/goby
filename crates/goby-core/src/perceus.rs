@@ -510,13 +510,27 @@ fn classify_case_pattern_bindings(
     use crate::ir::{IrCasePattern, IrCtorPatternArg, IrListPatternItem, IrListPatternTail};
     match pattern {
         IrCasePattern::ListPattern { items, tail } => {
+            // List-pattern Bind binders are *projection borrows* into the
+            // scrutinee in the wasm backend (see `emit_case_match` in
+            // `goby-wasm/src/gen_lower/emit.rs`), not freshly-owned
+            // references. Classifying them as `Owned` here previously caused
+            // unused-binder Drops and Owned-returning decl classification
+            // to corrupt the source list (BUGS.md 2026-05-01 follow-up).
+            //
+            // Tail Bind binders are *also* classified `Borrowed` for now
+            // even though `emit_case_bind_tail_list` allocates a fresh
+            // chunked sub-list at emit time, because Perceus has no Dup
+            // counterpart wired up for the head items and treating only
+            // tail as Owned introduces an asymmetry that the planned
+            // long-term refactor (PLAN.md §4.5d (Track LB)) will resolve at the IR
+            // level. Until then, *all* list-pattern Binds are Borrowed.
             for item in items {
                 if let IrListPatternItem::Bind(name) = item {
-                    classes.insert(name.clone(), OwnershipClass::Owned);
+                    classes.insert(name.clone(), OwnershipClass::Borrowed);
                 }
             }
             if let Some(IrListPatternTail::Bind(name)) = tail {
-                classes.insert(name.clone(), OwnershipClass::Owned);
+                classes.insert(name.clone(), OwnershipClass::Borrowed);
             }
         }
         IrCasePattern::Ctor { args, .. } => {
@@ -1174,13 +1188,18 @@ fn return_ownership_comp(
             }
             let mut acc = OwnershipClass::Owned;
             for arm in arms {
-                // Pattern-bound names own the projected sub-parts.
-                let pattern_binders = collect_pattern_bindings(&arm.pattern);
+                // List-pattern Bind binders are *projection borrows* in the
+                // wasm backend (see `classify_case_pattern_bindings` for the
+                // matching analysis-side decision). Returning such a binder
+                // makes the surrounding decl `Borrowed`-returning, not
+                // `Owned`. Ctor pattern args are still freshly owned, so we
+                // bind them as `Owned`.
+                let pattern_binders = collect_pattern_bindings_with_class_for_return(&arm.pattern);
                 let mut shadowed: Vec<(String, Option<ReturnBinding>)> = Vec::new();
-                for name in &pattern_binders {
+                for (name, ownership) in &pattern_binders {
                     let prev = env.insert(
                         name.clone(),
-                        ReturnBinding::new(OwnershipClass::Owned, ReturnBindingKind::ImmutableLet),
+                        ReturnBinding::new(*ownership, ReturnBindingKind::ImmutableLet),
                     );
                     shadowed.push((name.clone(), prev));
                 }
@@ -2058,6 +2077,39 @@ fn collect_pattern_bindings(pattern: &crate::ir::IrCasePattern) -> Vec<String> {
             .iter()
             .filter_map(|arg| match arg {
                 IrCtorPatternArg::Bind(name) => Some(name.clone()),
+                IrCtorPatternArg::Wildcard => None,
+            })
+            .collect(),
+        _ => vec![],
+    }
+}
+
+/// Pattern-bound names paired with the `OwnershipClass` they should bind
+/// in `return_ownership_comp::Case`'s environment. Mirrors the analysis-
+/// side decision in `classify_case_pattern_bindings`: list-pattern Binds
+/// are projection borrows (`Borrowed`), Ctor pattern args are freshly
+/// owned (`Owned`).
+fn collect_pattern_bindings_with_class_for_return(
+    pattern: &crate::ir::IrCasePattern,
+) -> Vec<(String, OwnershipClass)> {
+    use crate::ir::{IrCasePattern, IrCtorPatternArg, IrListPatternItem, IrListPatternTail};
+    match pattern {
+        IrCasePattern::ListPattern { items, tail } => {
+            let mut out: Vec<(String, OwnershipClass)> = Vec::new();
+            for item in items {
+                if let IrListPatternItem::Bind(name) = item {
+                    out.push((name.clone(), OwnershipClass::Borrowed));
+                }
+            }
+            if let Some(IrListPatternTail::Bind(name)) = tail {
+                out.push((name.clone(), OwnershipClass::Borrowed));
+            }
+            out
+        }
+        IrCasePattern::Ctor { args, .. } => args
+            .iter()
+            .filter_map(|arg| match arg {
+                IrCtorPatternArg::Bind(name) => Some((name.clone(), OwnershipClass::Owned)),
                 IrCtorPatternArg::Wildcard => None,
             })
             .collect(),
@@ -3424,19 +3476,22 @@ mod tests {
         );
     }
 
-    /// `case xs { [] -> 0 ; [x, ..rest] -> x }` where `rest` is unused in the arm body.
-    /// Branch balancing: the empty-list arm should drop `xs`; the list arm should drop `rest`.
+    /// BUGS.md 2026-05-01 follow-up: `case xs { [] -> 0 ; [x, ..rest] -> x }`
+    /// must NOT emit `Drop(rest)` in the list arm. List-pattern Bind binders
+    /// are projection borrows of the scrutinee in the wasm backend (the
+    /// emitter loads the chunk slot via `LocalSet` without an accompanying
+    /// `Dup`). Treating them as `Owned` and dropping the unused tail used
+    /// to corrupt the source list and clobber later string interpolations
+    /// in the caller (see runtime_output_tests for the end-to-end repros).
+    ///
+    /// PLAN.md §4.5d (Track LB) tracks the long-term refactor that promotes list-
+    /// pattern Binds to truly owned references via emit-side / IR-level
+    /// `Dup` so the asymmetry with Ctor pattern args is removed; until then
+    /// these Binds are classified `Borrowed` and no Drop is emitted.
     #[test]
-    fn case_heap_bound_pattern_drops_unused_bindings() {
+    fn case_list_pattern_bind_binders_classified_as_borrowed_no_drop_inserted() {
         use crate::ir::{IrCaseArm, IrCasePattern, IrListPatternItem, IrListPatternTail};
 
-        // decl main(xs: List) =
-        //   case xs
-        //     [] -> 0
-        //     [x, ..rest] -> x
-        //
-        // xs is Owned (param). In the [] arm, xs is NOT in the arm body vars (just `0`).
-        // In the [x,..rest] arm, x is used but rest is not.
         let module = IrModule {
             decls: vec![IrDecl {
                 name: "main".to_string(),
@@ -3465,14 +3520,15 @@ mod tests {
 
         let rewritten = run_perceus_passes(&module);
         let ir_str = fmt_ir(&rewritten);
-        // In the second arm, `rest` is bound but unused → Drop(rest) should appear.
-        // NOTE: `x` is returned from the arm so no Drop(x).
-        // NOTE: `xs` is the scrutinee — whether it needs a Drop depends on the
-        //       branch-balancing pass seeing xs in one arm but not the other.
-        //       For now assert rest is dropped.
         assert!(
-            ir_str.contains("drop rest"),
-            "expected Drop(rest) in list arm; got:\n{ir_str}"
+            !ir_str.contains("drop rest"),
+            "list-pattern tail Bind `rest` is a projection borrow; \
+             must not be dropped (would corrupt scrutinee). got:\n{ir_str}"
+        );
+        assert!(
+            !ir_str.contains("drop x"),
+            "list-pattern head Bind `x` is a projection borrow; \
+             must not be dropped (would corrupt scrutinee). got:\n{ir_str}"
         );
     }
 

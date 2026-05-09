@@ -1084,6 +1084,126 @@ gate for PC is "GU-X2 closed AND EX-S1 closed". PC's milestone
 table (`doc/PLAN_PC.md` §6) is updated to reflect this when EX
 opens.
 
+### 4.5d Track LB: List-Pattern Binders as Truly-Owned References
+
+Priority: **deferred refactor**. Locked 2026-05-09 as the long-term
+follow-up to the BUGS.md 2026-05-01 fix (the immediate
+`Borrowed`-classification stop-gap landed in the bug-fix interlude
+preceding GU-S3).
+
+Goal: make `case` arms over `List a` produce *independently owned*
+bindings for every `Bind` slot in a `ListPattern`, removing the
+current asymmetry where head-item Binds are projection borrows but
+ownership analysis treated them as `Owned`. This is the root cause
+of the BUGS.md 2026-05-01 family of corruption bugs.
+
+Background (snapshot of state on 2026-05-09 fix commit):
+
+- The wasm emitter (`crates/goby-wasm/src/gen_lower/emit.rs`,
+  `BackendCasePattern::ListPattern` arm) lowers each
+  `BackendListPatternItem::Bind(name)` by calling
+  `emit_chunked_load_const` to load the chunk slot into the binder's
+  local — no `__goby_dup` is emitted, so the binder shares the
+  scrutinee's refcount.
+- The IR / Perceus side previously classified those binders
+  `Owned` in `classify_case_pattern_bindings` *and* in
+  `return_ownership_comp::Case`. When the binder was unused
+  (`[x, ..rest] -> x` with `rest` unreferenced) Perceus emitted a
+  `Drop(rest)` that decremented the scrutinee's projected slot,
+  corrupting later string ops in the caller. When the binder *was*
+  returned, the surrounding decl was classified `Owned`-returning
+  even though the value the caller received was a borrow into the
+  caller-supplied list literal.
+- The 2026-05-09 fix downgrades list-pattern `Bind` binders (head
+  *and* tail) to `OwnershipClass::Borrowed` in both spots
+  (`perceus.rs` `classify_case_pattern_bindings` /
+  `collect_pattern_bindings_with_class_for_return`). This stops the
+  Drop and stops the Owned-return classification, which clears the
+  observed corruption (regression tests in
+  `crates/goby-wasm/src/runtime_output_tests.rs`:
+  `head_or_string_list_pattern_binder_return_*`). It is a stop-gap.
+
+Why a long-term refactor is still needed:
+
+1. Returning a list-pattern Bind makes the surrounding decl
+   `Borrowed`-returning. This is sound only because the call sites
+   we currently exercise pass a list whose lifetime extends past
+   the call (literal, parameter, let-bound) — but the typing rule
+   does not enforce that. A future call site that forwards a
+   freshly-allocated list as the argument and immediately drops it
+   will leave the returned binder dangling. Today no test triggers
+   this, but a proper fix should not depend on the property "the
+   caller happens to keep the source list alive".
+2. The `Borrowed`-classification asymmetry between list-pattern
+   Binds and Ctor-pattern args (which are still `Owned`) is
+   surprising and contributes to bug-finding cost. Future generic-
+   union / record work (Track GU GU-S3+) will run into the same
+   modelling decision and a consistent answer is preferable.
+3. `emit_case_bind_tail_list` already builds a fresh tail header
+   and chunk(s), but it copies the i64 element values without
+   per-element `__goby_dup`. The result is a fresh *container*
+   whose *elements are still borrowed projections* of the
+   scrutinee. Dropping it as a normal owned list would deep-drop
+   those borrowed elements and corrupt the source. The current
+   `Borrowed` classification therefore avoids element corruption
+   at the cost of leaking the freshly allocated container until
+   the arena is reset. Track LB must promote the elements to true
+   `Dup` ownership before flipping the tail Bind back to `Owned`.
+
+Two viable shapes for the refactor:
+
+(A) **Backend-side `Dup` insertion.** Extend the wasm emitter to
+    issue a `__goby_dup` on every `BackendListPatternItem::Bind`
+    immediately after `LocalSet`. Then list-pattern Binds become
+    truly owned at the runtime level and Perceus can revert to
+    classifying them `Owned`. This is the minimal change to the
+    runtime contract, but it bakes the dup into every list-pattern
+    arm regardless of subsequent usage.
+
+(B) **IR-level `ProjectAndOwn` (or arm-entry `Dup`) primitive.**
+    Add an explicit IR node that signals "load chunk slot and
+    increment refcount of the loaded value", and have ir_lower /
+    Perceus place it at arm entry only when subsequent analysis
+    proves it is needed. This is more invasive but localises the
+    cost and integrates cleanly with future peephole work that
+    cancels `Dup; Drop` pairs.
+
+Note: an attempted on-2026-05-09 IR-level prepend of a `Dup` for
+each head Bind in `drop_insert_comp::Case` produced a runtime trap
+on `head_or ["a", "b"]` even after sequencing the Dups *after* the
+Drop calculation. That suggests a hidden interaction with
+`balance_case_branch_drops` or with the scrutinee-side accounting,
+not just a refcount-balance mismatch. The refactor must investigate
+this trap before committing to (B); see
+`/home/yoshitsugu/.claude/workspaces/home_yoshitsugu_src_github.com_yoshitsugu_goby/progress-log.md`
+for the trace.
+
+Acceptance criteria for closing Track LB:
+
+- The 2026-05-09 stop-gap (`OwnershipClass::Borrowed` in
+  `classify_case_pattern_bindings` and
+  `collect_pattern_bindings_with_class_for_return` for list-pattern
+  Binds) is reverted in favour of `Owned` classification, restoring
+  symmetry with Ctor pattern args.
+- A function returning a `case`-arm list-pattern Bind compiles to
+  wasm whose return value is independent of the input list's
+  refcount (verifiable via `--debug-alloc-stats` showing the
+  expected dup, or by a regression test that drops the input list
+  and then uses the returned binder).
+- All three `head_or_string_list_pattern_binder_return_*` tests in
+  `runtime_output_tests.rs` continue to pass.
+- A new acceptance test exercises a function whose returned binder
+  outlives the input list (e.g. the input is a let-bound temporary
+  built immediately before the call).
+- A returned closure / lambda that captures a list-pattern Bind
+  remains valid after the source-list activation goes out of scope.
+  Today this is a probe-only test (Codex pass-2 raised the concern
+  on 2026-05-09); Track LB must promote it from probe to
+  soundness-guaranteed.
+
+Out of scope for Track LB: peephole optimisation that elides
+`Dup; Drop` pairs at the same scope. That is its own follow-up.
+
 ### 4.6 Track PC: Parser Combinator on Algebraic Effects
 
 Priority: **active line (2026-05-07)**. With effect-row polymorphism
