@@ -2,15 +2,16 @@ use std::collections::HashSet;
 
 use crate::ast::{
     EffectDecl, EffectMember, EmbedDecl, ImportDecl, ImportKind, ImportKindSpan, Span,
-    TypeDeclaration,
+    TypeDeclaration, UnionVariant,
 };
 use crate::parser::ParseError;
 use crate::parser_util::{
-    collect_indented_body, is_camel_case_identifier, is_identifier, is_indented,
-    is_lowercase_start_identifier, is_module_path, is_non_reserved_identifier, is_reserved_keyword,
+    collect_indented_body, contains_top_level_colon, has_balanced_delimiters,
+    is_camel_case_identifier, is_identifier, is_indented, is_lowercase_start_identifier,
+    is_module_path, is_non_reserved_identifier, is_reserved_keyword,
     is_type_parameter_identifier, parse_record_field, skip_blank_and_comment_lines,
     split_record_constructor_shape, split_top_level_definition, split_top_level_pipes,
-    split_top_level_type, starts_with_keyword_token, strip_line_comment,
+    split_top_level_type, split_type_header, starts_with_keyword_token, strip_line_comment,
 };
 use crate::str_util::split_top_level_commas;
 
@@ -567,13 +568,24 @@ main = 1
             module.type_declarations[1],
             TypeDeclaration::Union {
                 name: "UserStatus".to_string(),
-                constructors: vec!["Activated".to_string(), "Deactivated".to_string()],
+                type_params: Vec::new(),
+                variants: vec![
+                    crate::ast::UnionVariant {
+                        ctor: "Activated".to_string(),
+                        args: Vec::new(),
+                    },
+                    crate::ast::UnionVariant {
+                        ctor: "Deactivated".to_string(),
+                        args: Vec::new(),
+                    },
+                ],
             }
         );
         assert_eq!(
             module.type_declarations[2],
             TypeDeclaration::Record {
                 name: "User".to_string(),
+                type_params: Vec::new(),
                 constructor: "User".to_string(),
                 fields: vec![
                     crate::ast::RecordField {
@@ -786,6 +798,183 @@ main = 1
         };
         assert_eq!(spans[0].line, 3);
     }
+
+    #[test]
+    fn parses_generic_union_with_args() {
+        let source = "type Maybe a = Just(a) | Nothing\nmain = 1\n";
+        let module = parse_module(source).expect("generic union should parse");
+        assert_eq!(
+            module.type_declarations[0],
+            TypeDeclaration::Union {
+                name: "Maybe".to_string(),
+                type_params: vec!["a".to_string()],
+                variants: vec![
+                    crate::ast::UnionVariant {
+                        ctor: "Just".to_string(),
+                        args: vec!["a".to_string()],
+                    },
+                    crate::ast::UnionVariant {
+                        ctor: "Nothing".to_string(),
+                        args: Vec::new(),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_generic_record() {
+        let source = "type Box a = Box(value: a)\nmain = 1\n";
+        let module = parse_module(source).expect("generic record should parse");
+        assert_eq!(
+            module.type_declarations[0],
+            TypeDeclaration::Record {
+                name: "Box".to_string(),
+                type_params: vec!["a".to_string()],
+                constructor: "Box".to_string(),
+                fields: vec![crate::ast::RecordField {
+                    name: "value".to_string(),
+                    type_annotation: "a".to_string(),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_multi_arg_variant_with_nested_type() {
+        let source = "type Tree a = Node(a, Tree a, Tree a) | Leaf\nmain = 1\n";
+        let module = parse_module(source).expect("tree union should parse");
+        assert_eq!(
+            module.type_declarations[0],
+            TypeDeclaration::Union {
+                name: "Tree".to_string(),
+                type_params: vec!["a".to_string()],
+                variants: vec![
+                    crate::ast::UnionVariant {
+                        ctor: "Node".to_string(),
+                        args: vec![
+                            "a".to_string(),
+                            "Tree a".to_string(),
+                            "Tree a".to_string(),
+                        ],
+                    },
+                    crate::ast::UnionVariant {
+                        ctor: "Leaf".to_string(),
+                        args: Vec::new(),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_single_variant_generic_union_without_pipe() {
+        let source = "type Box a = Box(a)\nmain = 1\n";
+        let module = parse_module(source).expect("single-variant union should parse");
+        assert_eq!(
+            module.type_declarations[0],
+            TypeDeclaration::Union {
+                name: "Box".to_string(),
+                type_params: vec!["a".to_string()],
+                variants: vec![crate::ast::UnionVariant {
+                    ctor: "Box".to_string(),
+                    args: vec!["a".to_string()],
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn parses_alias_with_nested_paren_args() {
+        let source = "type Wrap = Maybe (A | B)\nmain = 1\n";
+        let module = parse_module(source).expect("alias with nested paren args should parse");
+        assert_eq!(
+            module.type_declarations[0],
+            TypeDeclaration::Alias {
+                name: "Wrap".to_string(),
+                target: "Maybe (A | B)".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_uppercase_type_parameter() {
+        let source = "type Foo A = Bar(A)\nmain = 1\n";
+        assert!(
+            parse_module(source).is_err(),
+            "uppercase type-parameter must be rejected"
+        );
+    }
+
+    #[test]
+    fn rejects_empty_arg_variant_in_union_position() {
+        // `Bar()` is not a legal union variant; the pipe forces union
+        // parsing, which then fails. The whole declaration is rejected.
+        let source = "type Foo = Bar() | Baz\nmain = 1\n";
+        assert!(
+            parse_module(source).is_err(),
+            "empty-arg union variant must be rejected"
+        );
+    }
+
+    #[test]
+    fn empty_record_constructor_remains_record() {
+        // No pipe, single `Bar()` candidate: the union path rejects the
+        // empty positional list, but the record fallback accepts an
+        // empty field list, matching the existing zero-field record
+        // grammar.
+        let source = "type Foo = Bar()\nmain = 1\n";
+        let module = parse_module(source).expect("zero-field record should parse");
+        assert_eq!(
+            module.type_declarations[0],
+            TypeDeclaration::Record {
+                name: "Foo".to_string(),
+                type_params: Vec::new(),
+                constructor: "Bar".to_string(),
+                fields: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_top_level_colon_in_union_variant_args() {
+        // `Bad(a: Int)` looks like record-style fields inside a union
+        // variant; reject as a union variant candidate.
+        let source = "type Foo = Bad(a: Int) | Other\nmain = 1\n";
+        assert!(
+            parse_module(source).is_err(),
+            "union variants must not carry record-style `field: type` args"
+        );
+    }
+
+    #[test]
+    fn rejects_unmatched_open_paren_in_variant() {
+        // Unbalanced parens in a variant candidate must not silently
+        // succeed; the declaration is rejected.
+        let source = "type Foo = Just((a) | Other\nmain = 1\n";
+        assert!(
+            parse_module(source).is_err(),
+            "unmatched `(` in variant args must be rejected"
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_type_parameter_on_union() {
+        let source = "type Foo a a = Bar(a)\nmain = 1\n";
+        assert!(
+            parse_module(source).is_err(),
+            "duplicate type parameters must be rejected"
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_type_parameter_on_record() {
+        let source = "type Pair a a = Pair(fst: a, snd: a)\nmain = 1\n";
+        assert!(
+            parse_module(source).is_err(),
+            "duplicate type parameters must be rejected on records"
+        );
+    }
 }
 
 fn parse_import_line(line: &str, line_no: usize) -> Option<ImportDecl> {
@@ -941,27 +1130,44 @@ fn parse_embed_line(line: &str) -> Result<(String, String), String> {
 
 fn parse_type_declaration_line(line: &str) -> Option<TypeDeclaration> {
     let rest = line.strip_prefix("type ")?.trim();
-    let (name, rhs) = rest.split_once('=')?;
-    let name = name.trim();
+    let (lhs, rhs) = rest.split_once('=')?;
+    let lhs = lhs.trim();
     let rhs = rhs.trim();
-    if !is_camel_case_identifier(name) || rhs.is_empty() {
+    if rhs.is_empty() {
         return None;
     }
+    if !has_balanced_delimiters(rhs) {
+        return None;
+    }
+    let (name, type_params) = split_type_header(lhs)?;
 
-    if let Some(parts) = split_top_level_pipes(rhs) {
-        let constructors: Option<Vec<String>> = parts
-            .into_iter()
-            .map(str::trim)
-            .map(|ctor| is_camel_case_identifier(ctor).then(|| ctor.to_string()))
-            .collect();
-        let constructors = constructors?;
-        if constructors.is_empty() {
-            return None;
+    // RHS is parsed as a list of pipe-separated candidates. With no pipe,
+    // there is exactly one candidate. If every candidate parses as a
+    // union variant (`Ctor` or `Ctor(t, ...)` with no top-level `:`),
+    // the declaration is a union. Otherwise — only when there is no
+    // pipe — fall through to record / alias parsing.
+    let candidates = split_top_level_pipes(rhs).unwrap_or_else(|| vec![rhs]);
+    let pipe_present = candidates.len() > 1;
+
+    let parsed_variants: Option<Vec<UnionVariant>> = candidates
+        .iter()
+        .map(|c| parse_union_variant_candidate(c.trim()))
+        .collect();
+    if let Some(variants) = parsed_variants {
+        if !variants.is_empty() {
+            return Some(TypeDeclaration::Union {
+                name,
+                type_params,
+                variants,
+            });
         }
-        return Some(TypeDeclaration::Union {
-            name: name.to_string(),
-            constructors,
-        });
+    }
+
+    if pipe_present {
+        // Pipe present but at least one candidate is not a valid union
+        // variant. Do not silently fall through to alias — the user
+        // intended a union and the diagnostic should reflect that.
+        return None;
     }
 
     if let Some((constructor, inner)) = split_record_constructor_shape(rhs) {
@@ -979,14 +1185,73 @@ fn parse_type_declaration_line(line: &str) -> Option<TypeDeclaration> {
             parsed_fields?
         };
         return Some(TypeDeclaration::Record {
-            name: name.to_string(),
+            name,
+            type_params,
             constructor: constructor.to_string(),
             fields,
         });
     }
 
+    if !type_params.is_empty() {
+        // Type aliases do not (yet) support type parameters; reject
+        // `type StrMap a = ...` rather than silently producing an
+        // alias whose `type_params` cannot be carried.
+        return None;
+    }
     Some(TypeDeclaration::Alias {
-        name: name.to_string(),
+        name,
         target: rhs.to_string(),
     })
+}
+
+/// Parse a single union-variant candidate: bare `Ctor` (nullary) or
+/// `Ctor(t1, t2, ...)` with one or more positional argument type
+/// annotations. A constructor body containing a top-level `:` is
+/// rejected (it is the record-style `field: type` form).
+fn parse_union_variant_candidate(src: &str) -> Option<UnionVariant> {
+    let src = src.trim();
+    if src.is_empty() {
+        return None;
+    }
+    if let Some(open_idx) = src.find('(') {
+        if !src.ends_with(')') {
+            return None;
+        }
+        let ctor = &src[..open_idx];
+        // Constructor application requires the `(` immediately after the
+        // ctor name with no whitespace, so `Maybe (A | B)` is not a
+        // single-arg variant `Maybe("A | B")` — it stays a type alias.
+        if open_idx != ctor.len() || !is_camel_case_identifier(ctor) {
+            return None;
+        }
+        let inner = src[open_idx + 1..src.len() - 1].trim();
+        if inner.is_empty() {
+            // `Ctor()` is not a valid union variant; an empty positional
+            // arg list has no use case under the spec.
+            return None;
+        }
+        if contains_top_level_colon(inner) {
+            return None;
+        }
+        let parts = split_top_level_commas(inner);
+        let mut args = Vec::with_capacity(parts.len());
+        for part in parts {
+            let trimmed = part.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            args.push(trimmed.to_string());
+        }
+        Some(UnionVariant {
+            ctor: ctor.to_string(),
+            args,
+        })
+    } else if is_camel_case_identifier(src) {
+        Some(UnionVariant {
+            ctor: src.to_string(),
+            args: Vec::new(),
+        })
+    } else {
+        None
+    }
 }

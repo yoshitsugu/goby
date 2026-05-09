@@ -77,6 +77,106 @@ pub(crate) fn is_type_parameter_identifier(s: &str) -> bool {
             .is_some_and(|c| c.is_ascii_lowercase() || c == '_')
 }
 
+/// True if `(` and `[` are correctly matched in `s`, ignoring contents
+/// of double-quoted strings. Returns `false` for unmatched opens or
+/// any close without a matching open. Used as a balance gate before
+/// the type-declaration parser walks the RHS, so an input like
+/// `Just((a) | Other` is rejected up front rather than silently
+/// producing a malformed alias.
+pub(crate) fn has_balanced_delimiters(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => {
+                depth -= 1;
+                if depth < 0 {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    depth == 0 && !in_string
+}
+
+/// True if `s` contains a `:` that is at depth 0 with respect to `(` /
+/// `[` and outside of double-quoted string literals. Used to disambiguate
+/// a union variant `Just(a)` (no top-level `:`) from a record-style
+/// constructor body `Box(value: a)`.
+pub(crate) fn contains_top_level_colon(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut depth: usize = 0;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth = depth.saturating_sub(1),
+            b':' if depth == 0 => return true,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Split a type-declaration LHS like `Maybe a b` into the type name and
+/// its (zero-or-more) type-parameter identifiers. The name must be a
+/// CamelCase identifier; each parameter must be a lowercase-start
+/// identifier per the language spec.
+pub(crate) fn split_type_header(src: &str) -> Option<(String, Vec<String>)> {
+    let mut tokens = src.split_whitespace();
+    let name = tokens.next()?;
+    if !is_camel_case_identifier(name) {
+        return None;
+    }
+    let mut params = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for token in tokens {
+        if !is_type_parameter_identifier(token) {
+            return None;
+        }
+        if !seen.insert(token.to_string()) {
+            return None;
+        }
+        params.push(token.to_string());
+    }
+    Some((name.to_string(), params))
+}
+
 pub(crate) fn is_module_path(s: &str) -> bool {
     if s.is_empty() || s.starts_with('/') || s.ends_with('/') || s.contains("//") {
         return false;

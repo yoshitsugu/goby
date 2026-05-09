@@ -4,19 +4,23 @@ Last updated: 2026-05-09.
 
 ## Current Focus
 
-**Track GU (generic user-defined types) — destructive AST swap complete (GU-S1).**
-`crates/goby-core/src/ast.rs` is now reshaped to the `doc/PLAN_GU.md`
-§3.1/§3.2 final form: `TypeDeclaration::Union { name, type_params,
-variants: Vec<UnionVariant> }`, `TypeDeclaration::Record` carries
-`type_params`, `CasePattern::Ctor { type_qualifier, ctor, args:
-Vec<CtorPatternArg> }` exists alongside the existing list patterns,
-and the new `UnionVariant` / `CtorPatternArg` types are introduced.
-The build is intentionally broken in this commit; `cargo build -p
-goby-core` reports errors localised to six files (ast.rs, formatter.rs,
-ir_lower.rs, parser_top.rs, typecheck_build.rs, typecheck_types.rs),
-all within the §4 walk-list. Next phase is **GU-S2a: Parser layer**
-(`parser_top.rs`, `parser_pattern.rs`, `parser_util.rs`) — parse the
-new grammar (type params + variant args + constructor patterns).
+**Track GU (generic user-defined types) — parser layer complete (GU-S2a).**
+`parser_top.rs::parse_type_declaration_line` now parses the new
+generic-type grammar from `doc/PLAN_GU.md` §3.8 (type parameters on
+union/record declarations, positional union variant args including
+nested type applications such as `Cons(a, List a)`), with
+disambiguation between `Box(a)` (single-variant union, no pipe) and
+`Box(value: a)` (record). `parser_pattern.rs::parse_case_pattern`
+recognises bare and qualified constructor patterns
+(`Ctor`, `Ctor x _`, `TypeName.Ctor x`) with binder identifier rules
+that match existing list-pattern conventions. `parser_util.rs` adds
+`split_type_header`, `contains_top_level_colon`, and
+`has_balanced_delimiters`. `cargo build -p goby-core` still fails,
+with errors now localised to five files (ast.rs is only mentioned by
+hint, plus formatter.rs, ir_lower.rs, typecheck_build.rs,
+typecheck_types.rs). Next phase is **GU-S2b: formatter + lib.rs
+re-exports** — re-emit type declarations and constructor patterns in
+the new shape and refresh re-exports.
 
 Track PC remains queued; it cannot start before GU-X2 (the closed-form
 green check). The earlier reference to `tmp/pc.md` is dropped — the
@@ -54,15 +58,14 @@ Red / ignored:
 
 **Primary (active):**
 
-- **Track GU (generic user-defined types) — GU-S2a next.** GU-D0 / GU-D1
-  / GU-S1 complete. The next step is GU-S2a (parser layer): update
-  `parser_top.rs`, `parser_pattern.rs`, `parser_util.rs` to parse the
-  new grammar — type params on union/record declarations, positional
-  variant args, and constructor patterns including the qualified form
-  `TypeName.Ctor`. Existing nullary unions and non-generic records
-  must continue to parse. The downstream layers (typecheck, IR, wasm)
-  remain broken until later GU-S2 sub-tasks land. See `doc/PLAN_GU.md`
-  §6 for the full phase list.
+- **Track GU (generic user-defined types) — GU-S2b next.** GU-D0 / GU-D1
+  / GU-S1 / GU-S2a complete. The next step is GU-S2b: re-emit type
+  declarations and constructor patterns in `crates/goby-core/src/formatter.rs`
+  to match the new shape, and refresh re-exports in
+  `crates/goby-core/src/lib.rs` (notably `UnionVariant` /
+  `CtorPatternArg`). Downstream typecheck / IR / wasm layers remain
+  broken until later GU-S2 sub-tasks land. See `doc/PLAN_GU.md` §6
+  for the full phase list.
 
 **Queued behind GU:**
 
