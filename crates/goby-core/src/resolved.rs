@@ -629,6 +629,32 @@ impl ResolverMetadata {
         let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
         let mut metadata = Self::default();
 
+        // The module's own `effect` declarations are visible inside the
+        // module by both bare and qualified-by-effect-name forms. Without
+        // this, a sibling stdlib decl such as `int.parse` whose body uses
+        // `invalid_integer value` (the bare op of `effect StringParseError`
+        // declared in the same `int.gb`) would resolve `invalid_integer`
+        // as a `ValueName`, lower as `Call(Var(...))` rather than
+        // `PerformEffect`, and break wasm emission downstream.
+        for own_effect in &module.effect_declarations {
+            let ops: HashSet<String> = own_effect
+                .members
+                .iter()
+                .map(|member| member.name.clone())
+                .collect();
+            metadata
+                .qualified_effect_ops
+                .entry(own_effect.name.clone())
+                .or_default()
+                .extend(ops.iter().cloned());
+            for op in &ops {
+                metadata
+                    .bare_effect_ops
+                    .entry(op.clone())
+                    .or_insert_with(|| own_effect.name.clone());
+            }
+        }
+
         for import in effective_imports(module, &resolver) {
             let Ok(resolved) = resolver.resolve_module(&import.module_path) else {
                 continue;

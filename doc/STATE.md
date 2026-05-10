@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-10 (post bug-fix interlude entry #2).
+Last updated: 2026-05-10 (post bug-fix interlude entry #3 partial close).
 
 ## Current Focus
 
@@ -40,14 +40,14 @@ commit `df57c32`):
 - `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`:
   the regular wasm suite passes (865 / 11 skipped after Track HF, 2026-05-09).
 
-**All-green (post bug-fix interlude #2 close, 2026-05-10)**:
+**All-green (post bug-fix interlude #3 partial close, 2026-05-10)**:
 
 - `cargo test -p goby-core --lib`: 942 passed / 2 ignored.
 - `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`:
-  872 passed / 12 skipped (up from 864 thanks to the
-  list-pattern Bind regression suite added during interlude #1 and
-  the two `int.parse` compiled-wasm regressions added during
-  interlude #2).
+  872 passed / 13 skipped (up from 12 thanks to the new
+  `hof_callback_int_parse_invalid_integer_executes_via_compiled_wasm`
+  ignored regression that pins the codegen-side follow-up tracked
+  under BUGS.md 2026-05-10).
 - `cargo test -p goby-lsp`: 56 passed.
 - `cargo check --workspace`: warning-free.
 
@@ -91,10 +91,26 @@ Red / ignored:
      `unknown local 'invalid_integer'` HOF-callback effect-handler
      scoping defect, captured as the new BUGS.md 2026-05-10 entry.
   3. **2026-05-10 HOF-callback `int.parse` `unknown local
-     'invalid_integer'`** — open. Surfaced while pinning regression
-     coverage for #2; effect-operation name not resolved in HOF
-     callback frame (`list.map xs to_i`). Next in the queue, but a
-     non-trivial wasm-lowering fix.
+     'invalid_integer'`** — **PARTIAL: resolver-side fix landed
+     2026-05-10**. Two changes: (a) `goby-wasm` stdlib decl loading
+     now resolves each decl in its full owning-module context via
+     `lower_stdlib_decl_via_module`, and (b) `goby-core::resolved`
+     registers a module's own `effect_declarations` into
+     `bare_effect_ops` / `qualified_effect_ops`. Together these
+     turn `invalid_integer value` inside stdlib `parse` into a
+     proper `PerformEffect{StringParseError, invalid_integer, …}`
+     instead of the `Call(Var("invalid_integer"), …)` that produced
+     the original `unknown local` error. A side fix in
+     `effect_handler_lowering.rs` pads `Unit -> _` effect calls
+     whose ir-level args were stripped of Unit so handler clauses
+     keep their declared arity. Codegen-side follow-up (handler
+     scope propagation across HOF callee boundary into stdlib
+     decls) remains open and is tracked as the BUGS.md 2026-05-10
+     entry's "codegen-side gap" with the staged decl-clone pass
+     described there. The HOF regression is pinned as
+     `hof_callback_int_parse_invalid_integer_executes_via_compiled_wasm`
+     with `#[ignore]`; the acceptance signal is removing that
+     `#[ignore]`.
   4. **2026-05-08 `AllocFloatBox` / `AllocMutableCell` shared
      refactor** — open. Wasm allocator refactor, last in the
      interlude.

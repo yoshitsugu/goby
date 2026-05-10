@@ -2542,3 +2542,59 @@ main =
          through invalid_integer and resume 0"
     );
 }
+
+// BUGS.md 2026-05-10 regression: passing `to_i` (a function whose body
+// installs a `with invalid_integer ... in int.parse d` handler) as a HOF
+// callback to `list.map` previously failed wasm emission with
+// `gen_lower/emit: unknown local 'invalid_integer'`. After the resolver
+// + stdlib-loading fix in the same BUGS.md entry, `invalid_integer value`
+// now lowers as `PerformEffect{StringParseError, invalid_integer, ..}`,
+// but the wasm emit path does not yet handle a non-builtin
+// `PerformEffect` reaching it from a HOF-invoked stdlib body. The
+// follow-up — handler-aware decl specialization that substitutes the
+// caller's clause body into the stdlib callee before Perceus — is
+// drafted but not yet correct against parse's mutable-state +
+// nested-yield-handler shape, so this regression stays `#[ignore]`d
+// while the codegen-side gap is tracked. See the BUGS.md 2026-05-10
+// entry for the staged design.
+//
+// The direct-call shape
+// (`stdlib_int_parse_direct_call_executes_via_compiled_wasm`) succeeds
+// because the static-output / native-fallback path bypasses general
+// lowering. This regression specifically exercises the HOF /
+// general-lowered path; element 0 is "1" → 1, element 1 is "x" →
+// handler resumes -1.
+#[test]
+#[ignore = "BUGS.md 2026-05-10: HOF-callback handler scope propagation through stdlib decl bodies — codegen follow-up"]
+fn hof_callback_int_parse_invalid_integer_executes_via_compiled_wasm() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/list (map, push)
+import goby/int as int
+import goby/stdio
+
+to_i : String -> Int
+to_i d =
+  with
+    invalid_integer i -> resume -1
+  in
+    int.parse d
+
+main : Unit -> Unit can Print
+main =
+  xs = push (push [] "1") "x"
+  ys = map xs to_i
+  println (int.to_string ys[0])
+  println (int.to_string ys[1])
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let wasm = crate::compile_module(&module)
+        .expect("HOF-callback int.parse should compile after handler-specialization fix");
+    let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+        .expect("HOF-callback int.parse wasm should execute");
+    assert_eq!(
+        output, "1\n-1\n",
+        "list.map applies to_i to each element; '1' parses to 1, 'x' falls through \
+         the StringParseError handler and resumes -1"
+    );
+}

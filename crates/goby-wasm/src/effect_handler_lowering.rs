@@ -470,7 +470,17 @@ fn rewrite_handled_op_invocation(
         Some(k),
         names,
     )?;
-    if clause.params.len() != args.len() {
+    // `lower_effect_call` strips a sole Unit arg (`tick ()` → 0 IR args)
+    // because builtin effect ops like `read()` are encoded with no args
+    // on the wasm operand stack. User-defined effect ops typed as
+    // `Unit -> _` carry a 1-arity clause body, so when the IR has 0 args
+    // but the clause has 1 param, pad with synthetic Units. The reverse
+    // (1 arg, 0 params) cannot occur from this lowering path.
+    let mut rewritten_args = rewrite_values(args, names)?;
+    if rewritten_args.is_empty() && !clause.params.is_empty() {
+        rewritten_args.extend(std::iter::repeat(ValueExpr::Unit).take(clause.params.len()));
+    }
+    if clause.params.len() != rewritten_args.len() {
         let call_head = match effect_name {
             Some(effect) => format!("{effect}.{op_name}"),
             None => op_name.to_string(),
@@ -480,11 +490,11 @@ fn rewrite_handled_op_invocation(
                 "handler lowering arity mismatch for '{}': expected {}, got {}",
                 call_head,
                 clause.params.len(),
-                args.len()
+                rewritten_args.len()
             ),
         });
     }
-    for (param, arg) in clause.params.iter().zip(rewrite_values(args, names)?).rev() {
+    for (param, arg) in clause.params.iter().zip(rewritten_args).rev() {
         rewritten = CompExpr::Let {
             name: param.clone(),
             ty: IrType::Unknown,

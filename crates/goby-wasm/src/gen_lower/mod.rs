@@ -702,6 +702,41 @@ fn resolve_stdlib_root() -> std::path::PathBuf {
         })
 }
 
+/// Lower a stdlib declaration to IR using the **full** owning module's
+/// resolved view, so sibling `effect` declarations are visible to the
+/// resolver. This is important for stdlib functions like `int.parse`
+/// whose body invokes a sibling effect operation by bare name (e.g.
+/// `invalid_integer value`): without the surrounding module context,
+/// the resolver classifies the bare name as a `ValueName` and the IR
+/// emits a regular `Call(Var(...))` instead of a `PerformEffect`. The
+/// wasm lowerer then mistakes the operation name for a local variable.
+///
+/// `resolved_modules_cache` memoises the per-path `ResolvedModule` so a
+/// single fixpoint pass over the stdlib closure does not re-resolve the
+/// same module for every exported decl.
+fn lower_stdlib_decl_via_module(
+    decl_name: &str,
+    module_path: &str,
+    resolver: &StdlibResolver,
+    stdlib_root: &std::path::Path,
+    resolved_modules_cache: &mut HashMap<String, goby_core::resolved::ResolvedModule>,
+) -> Option<goby_core::ir::IrDecl> {
+    if !resolved_modules_cache.contains_key(module_path) {
+        let stdlib_module = resolver.resolve_module(module_path).ok()?;
+        let rm = goby_core::resolved::resolve_module_with_stdlib(
+            &stdlib_module.module,
+            stdlib_root,
+        );
+        resolved_modules_cache.insert(module_path.to_string(), rm);
+    }
+    let resolved_module = resolved_modules_cache.get(module_path)?;
+    let resolved_decl = resolved_module
+        .declarations
+        .iter()
+        .find(|d| d.name == decl_name)?;
+    goby_core::ir_lower::lower_resolved_declaration(resolved_decl).ok()
+}
+
 fn has_runtime_read_effect(comp: &CompExpr) -> bool {
     match comp {
         CompExpr::PerformEffect { effect, .. } => effect == "Read",
@@ -1592,7 +1627,8 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
     assert_general_lower_perceus_pipeline();
     let handler_legality = analyze_module_handler_legality(module)?;
     let allow_safe_handler_lowering = handler_legality.all_one_shot_tail_resumptive();
-    let stdlib_resolver = StdlibResolver::new(resolve_stdlib_root());
+    let stdlib_root = resolve_stdlib_root();
+    let stdlib_resolver = StdlibResolver::new(stdlib_root.clone());
     let stdlib_export_map = build_stdlib_export_map(module, &stdlib_resolver);
 
     let ir_module = match goby_core::ir_lower::lower_module(module) {
@@ -1614,9 +1650,20 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
         .iter()
         .map(|decl| decl.name.clone())
         .collect();
+    // Cache the per-stdlib-module ResolvedModule so each owning module is
+    // resolved at most once across both the perceus_input population and
+    // the later fixpoint loop's miss path.
+    let mut resolved_modules_cache: HashMap<String, goby_core::resolved::ResolvedModule> =
+        HashMap::new();
     let mut perceus_input = ir_module.clone();
-    for (_, goby_decl) in stdlib_export_map.values() {
-        if let Ok(aux_ir_decl) = goby_core::ir_lower::lower_declaration(goby_decl) {
+    for (path, goby_decl) in stdlib_export_map.values() {
+        if let Some(aux_ir_decl) = lower_stdlib_decl_via_module(
+            &goby_decl.name,
+            path,
+            &stdlib_resolver,
+            &stdlib_root,
+            &mut resolved_modules_cache,
+        ) {
             perceus_input.decls.push(aux_ir_decl);
         }
     }
@@ -1821,26 +1868,32 @@ pub(crate) fn lower_module_to_instrs(module: &Module) -> Result<LowerModuleResul
 
             let mut added_any = false;
             for name in &unresolved {
-                let Some((_, goby_decl)) = export_map.get(name) else {
+                let Some((path, goby_decl)) = export_map.get(name) else {
                     aux_added.insert(name.clone());
                     continue;
                 };
                 let aux_ir_decl = match perceus_stdlib_decls.get(name) {
                     Some(decl) => decl.clone(),
-                    None => match goby_core::ir_lower::lower_declaration(goby_decl) {
-                        Ok(d) => goby_core::perceus::run_perceus_passes(&goby_core::ir::IrModule {
+                    None => {
+                        let Some(d) = lower_stdlib_decl_via_module(
+                            &goby_decl.name,
+                            path,
+                            &stdlib_resolver,
+                            &stdlib_root,
+                            &mut resolved_modules_cache,
+                        ) else {
+                            return Ok(Err(
+                                GeneralLowerUnsupportedReason::StdlibDeclIrLoweringFailed,
+                            ));
+                        };
+                        goby_core::perceus::run_perceus_passes(&goby_core::ir::IrModule {
                             decls: vec![d],
                         })
                         .decls
                         .into_iter()
                         .next()
-                        .expect("single-decl perceus rewrite must preserve decl"),
-                        Err(_) => {
-                            return Ok(Err(
-                                GeneralLowerUnsupportedReason::StdlibDeclIrLoweringFailed,
-                            ));
-                        }
-                    },
+                        .expect("single-decl perceus rewrite must preserve decl")
+                    }
                 };
                 if let Some(shape) = fold_prepend_callback_shape(&aux_ir_decl) {
                     fold_prepend_callback_shapes.insert(aux_ir_decl.name.clone(), shape);
