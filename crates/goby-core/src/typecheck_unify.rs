@@ -414,6 +414,41 @@ pub(crate) fn instantiate_ty_with_fresh_type_vars_for_call_site(
     instantiate_ty_with_fresh_type_vars(ty, &mut ty_mapping, &mut row_mapping, next_id)
 }
 
+/// Freshen a "type scheme" — a slice of declaration-side `Ty` templates that
+/// share one type-parameter / row-variable scope — into a fresh instantiation.
+///
+/// All `Ty::Var(name)` occurrences with the same name across `templates` map to
+/// the same fresh variable; ditto for row-variable tails. Different calls (with
+/// the caller's `next_id` continuing to advance) yield disjoint fresh names.
+///
+/// Inputs are expected to be declaration-side templates — `Ty::Var(...)` stands
+/// for a *declared* type parameter (e.g. `a` in `Maybe a`), not for an existing
+/// inference variable. Passing a `Ty` that already contains inference variables
+/// will rename those, which is almost certainly a bug at the caller.
+///
+/// Used by:
+/// - effect-member instantiation (one handler clause's params + result share
+///   the same type-parameter scope), and
+/// - (forthcoming, GU-S3) generic union / record constructor instantiation and
+///   generic-record field access — one constructor's arg-types + result
+///   `Ty::Con` share the same scope, as do a record-field template + its
+///   receiver `Ty::Con`.
+pub(crate) fn freshen_type_scheme(templates: &[Ty], next_id: &mut usize) -> Vec<Ty> {
+    let mut ty_mapping = HashMap::new();
+    let mut row_mapping: HashMap<RowVarId, RowVarId> = HashMap::new();
+    templates
+        .iter()
+        .map(|template| {
+            instantiate_ty_with_fresh_type_vars(
+                template,
+                &mut ty_mapping,
+                &mut row_mapping,
+                next_id,
+            )
+        })
+        .collect()
+}
+
 pub(crate) fn match_function_argument_type(
     required: &Ty,
     actual: &Ty,
@@ -454,17 +489,13 @@ pub(crate) fn instantiate_handler_clause_signature(
     else {
         return None;
     };
-    let mut ty_mapping = HashMap::new();
-    let mut row_mapping: HashMap<RowVarId, RowVarId> = HashMap::new();
-    let params = params
-        .iter()
-        .map(|param| {
-            instantiate_ty_with_fresh_type_vars(param, &mut ty_mapping, &mut row_mapping, next_id)
-        })
-        .collect();
-    let result =
-        instantiate_ty_with_fresh_type_vars(&result, &mut ty_mapping, &mut row_mapping, next_id);
-    Some((params, result))
+    let mut scheme = params;
+    scheme.push(*result);
+    let mut freshened = freshen_type_scheme(&scheme, next_id);
+    let result = freshened
+        .pop()
+        .expect("handler clause scheme always contains a result template");
+    Some((freshened, result))
 }
 
 pub(crate) fn ty_contains_type_var(ty: &Ty) -> bool {
@@ -1012,6 +1043,205 @@ mod effect_rows_unify_tests {
         assert_eq!(
             outer.tail, callback_effects.tail,
             "shared `{{e}}` must map to the same fresh tail"
+        );
+    }
+
+    // GU-S3 D-6: `freshen_type_scheme` is the shared declaration-side scheme
+    // freshener that effect-member instantiation (and forthcoming union /
+    // record constructor instantiation) routes through. The contract these
+    // tests pin is what GU-S3 will rely on when wiring constructor schemes.
+
+    #[test]
+    fn freshen_type_scheme_shares_mapping_across_templates() {
+        // Templates: [a, a -> b]
+        // Expectation: the `Ty::Var("a")` in the first slot and the param
+        // `Ty::Var("a")` in the second slot map to the same fresh name; `b`
+        // gets a distinct fresh name.
+        let templates = vec![
+            Ty::Var("a".to_string()),
+            Ty::Fun {
+                params: vec![Ty::Var("a".to_string())],
+                result: Box::new(Ty::Var("b".to_string())),
+                effects: closed(&[]),
+            },
+        ];
+        let mut next_id = 0usize;
+        let out = freshen_type_scheme(&templates, &mut next_id);
+        let fresh_a_outer = match &out[0] {
+            Ty::Var(name) => name.clone(),
+            _ => panic!("expected Ty::Var at slot 0"),
+        };
+        let (fresh_a_inner, fresh_b) = match &out[1] {
+            Ty::Fun { params, result, .. } => {
+                let a = match &params[0] {
+                    Ty::Var(name) => name.clone(),
+                    _ => panic!("expected Ty::Var inside params"),
+                };
+                let b = match result.as_ref() {
+                    Ty::Var(name) => name.clone(),
+                    _ => panic!("expected Ty::Var as result"),
+                };
+                (a, b)
+            }
+            _ => panic!("expected Ty::Fun at slot 1"),
+        };
+        assert_eq!(
+            fresh_a_outer, fresh_a_inner,
+            "same `a` across templates must share the same fresh name"
+        );
+        assert_ne!(
+            fresh_a_outer, fresh_b,
+            "distinct template vars must receive distinct fresh names"
+        );
+        assert!(fresh_a_outer.starts_with("__goby_fresh_ty_"));
+        assert!(fresh_b.starts_with("__goby_fresh_ty_"));
+    }
+
+    #[test]
+    fn freshen_type_scheme_shares_row_var_across_templates() {
+        // Templates: two `Ty::Fun` values that both carry an open row tail `e`.
+        // Expectation: both row tails resolve to the same fresh row var.
+        let template_one = Ty::Fun {
+            params: vec![Ty::Int],
+            result: Box::new(Ty::Int),
+            effects: open(&[], "e"),
+        };
+        let template_two = Ty::Fun {
+            params: vec![Ty::Str],
+            result: Box::new(Ty::Str),
+            effects: open(&[], "e"),
+        };
+        let mut next_id = 0usize;
+        let out = freshen_type_scheme(&[template_one, template_two], &mut next_id);
+        let tail_one = match &out[0] {
+            Ty::Fun { effects, .. } => effects.tail.clone().expect("fresh tail must be set"),
+            _ => panic!("expected Ty::Fun"),
+        };
+        let tail_two = match &out[1] {
+            Ty::Fun { effects, .. } => effects.tail.clone().expect("fresh tail must be set"),
+            _ => panic!("expected Ty::Fun"),
+        };
+        assert_eq!(
+            tail_one, tail_two,
+            "shared row tail `e` must map to the same fresh row var across templates"
+        );
+        assert!(tail_one.0.starts_with("__goby_fresh_row_"));
+    }
+
+    #[test]
+    fn freshen_type_scheme_distinct_calls_yield_disjoint_fresh_names() {
+        // Two successive calls with a continuing `next_id` produce disjoint
+        // fresh names — i.e. the per-call mapping is local, not memoised.
+        let templates = vec![Ty::Var("a".to_string())];
+        let mut next_id = 0usize;
+        let first = freshen_type_scheme(&templates, &mut next_id);
+        let second = freshen_type_scheme(&templates, &mut next_id);
+        let first_name = match &first[0] {
+            Ty::Var(name) => name.clone(),
+            _ => panic!("expected Ty::Var"),
+        };
+        let second_name = match &second[0] {
+            Ty::Var(name) => name.clone(),
+            _ => panic!("expected Ty::Var"),
+        };
+        assert_ne!(
+            first_name, second_name,
+            "successive calls must produce distinct fresh names"
+        );
+    }
+
+    #[test]
+    fn freshen_type_scheme_advances_next_id_once_per_unique_var() {
+        // Templates: [a, a, b]
+        // Two distinct template names (`a`, `b`) should each consume exactly
+        // one fresh id. Duplicate occurrences of `a` reuse the same fresh
+        // name and must not bump `next_id` again.
+        let templates = vec![
+            Ty::Var("a".to_string()),
+            Ty::Var("a".to_string()),
+            Ty::Var("b".to_string()),
+        ];
+        let mut next_id = 0usize;
+        let _ = freshen_type_scheme(&templates, &mut next_id);
+        assert_eq!(
+            next_id, 2,
+            "next_id must advance exactly once per unique template var"
+        );
+    }
+
+    // GU-S3 D-6: pin the `instantiate_handler_clause_signature` rewrite that
+    // routes through `freshen_type_scheme`. The two cases below are the ones
+    // Codex pass-1 flagged as worth covering directly so future edits cannot
+    // silently break the shared-mapping / nullary-op contracts.
+
+    fn env_with_handler_op(op_name: &str, op_ty: Ty) -> TypeEnv {
+        // The real handler-clause lookup goes through
+        // `effect_candidates_for_operation`, which inspects the global
+        // binding's `source` to learn which effect declares `op_name`.
+        // When exactly one effect is identified, the helper looks up the
+        // qualified name `Eff.op` instead of the bare op. Register both
+        // entries so the test path mirrors the real resolver output.
+        let mut env = TypeEnv::empty();
+        let binding = crate::typecheck_env::GlobalBinding::Resolved {
+            ty: op_ty,
+            source: "effect `TestEff` member".to_string(),
+        };
+        env.globals.insert(op_name.to_string(), binding.clone());
+        env.globals.insert(format!("TestEff.{}", op_name), binding);
+        env
+    }
+
+    #[test]
+    fn instantiate_handler_clause_signature_shares_var_between_param_and_result() {
+        // Operation type: `a -> a can {}` (declared parametric).
+        // The freshened scheme must use the same fresh name for both the
+        // param and the result so the typechecker can later unify them.
+        let op_ty = Ty::Fun {
+            params: vec![Ty::Var("a".to_string())],
+            result: Box::new(Ty::Var("a".to_string())),
+            effects: closed(&[]),
+        };
+        let env = env_with_handler_op("op", op_ty);
+        let mut next_id = 0usize;
+        let (params, result) = instantiate_handler_clause_signature(&env, "op", &mut next_id)
+            .expect("op declared as Ty::Fun must yield a freshened signature");
+        let fresh_param = match &params[0] {
+            Ty::Var(name) => name.clone(),
+            _ => panic!("expected Ty::Var in params[0]"),
+        };
+        let fresh_result = match &result {
+            Ty::Var(name) => name.clone(),
+            _ => panic!("expected Ty::Var in result"),
+        };
+        assert_eq!(
+            fresh_param, fresh_result,
+            "shared `a` between param and result must map to a single fresh name"
+        );
+        assert!(fresh_param.starts_with("__goby_fresh_ty_"));
+    }
+
+    #[test]
+    fn instantiate_handler_clause_signature_handles_nullary_op() {
+        // Operation type: `() -> Int can {}` (no params, concrete result).
+        // The freshened scheme must come back with empty params and an
+        // unchanged result; no fresh ids are consumed.
+        let op_ty = Ty::Fun {
+            params: vec![],
+            result: Box::new(Ty::Int),
+            effects: closed(&[]),
+        };
+        let env = env_with_handler_op("op", op_ty);
+        let mut next_id = 0usize;
+        let (params, result) = instantiate_handler_clause_signature(&env, "op", &mut next_id)
+            .expect("op declared as Ty::Fun must yield a freshened signature");
+        assert!(
+            params.is_empty(),
+            "nullary op must come back with no params"
+        );
+        assert_eq!(result, Ty::Int);
+        assert_eq!(
+            next_id, 0,
+            "a fully-concrete nullary op must not consume any fresh ids"
         );
     }
 }

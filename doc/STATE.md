@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-10 (bug-fix interlude complete — BUGS.md open list empty).
+Last updated: 2026-05-11 (Track GU-S3 D-6 `freshen_type_scheme` extraction complete; effect-side call site migrated, behaviour unchanged).
 
 ## Current Focus
 
@@ -40,12 +40,13 @@ commit `df57c32`):
 - `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`:
   the regular wasm suite passes (865 / 11 skipped after Track HF, 2026-05-09).
 
-**All-green (post bug-fix interlude complete, 2026-05-10)**:
+**All-green (post GU-S3 D-6 `freshen_type_scheme` extraction, 2026-05-11)**:
 
-- `cargo test -p goby-core --lib`: 942 passed / 2 ignored.
-- `cargo nextest run -p goby-wasm`: 876 passed / 11 skipped (up from
-  874 thanks to two new spill-count unit tests pinning the
-  AllocMutableCell / AllocFloatBox refactor).
+- `cargo test -p goby-core --lib`: 948 passed / 2 ignored (up from 942
+  thanks to four helper-contract tests and two
+  `instantiate_handler_clause_signature` direct tests).
+- `cargo nextest run -p goby-wasm`: 876 passed / 11 skipped (unchanged
+  from the 2026-05-10 baseline; the D-6 refactor does not touch wasm).
 - `cargo test -p goby-lsp`: 56 passed.
 - `cargo check --workspace`: warning-free.
 
@@ -61,13 +62,32 @@ Red / ignored:
 
 **Primary (active):**
 
-- **Bug-fix interlude before GU-S3.** Track GU is paused until
-  every open BUGS.md entry is fixed and covered by a regression
-  test, so a failure spotted during GU-S3/S4 can be attributed to
-  the new code rather than to pre-existing layer noise. Each fix
-  ships with a regression test (unit, integration, or fixture as
-  appropriate); the interlude is "done" only when BUGS.md's open
-  list is empty and the regressions are pinned. Status:
+- **Track GU-S3 in progress.** Bug-fix interlude closed 2026-05-10
+  (BUGS.md open list empty). The first GU-S3 sub-task — D-6 (extract
+  `freshen_type_scheme` and migrate the existing effect-side
+  `instantiate_handler_clause_signature` to use it, behaviour
+  unchanged) — landed 2026-05-11. The shared helper lives in
+  `crates/goby-core/src/typecheck_unify.rs` and is the single
+  declaration-side template freshener that the remaining GU-S3
+  sub-tasks (union ctor application, ctor-pattern type checking,
+  generic-record ctor application, generic-record field access,
+  cross-module imports of generic types) route through. Next pick is
+  **union constructor application** through `freshen_type_scheme`
+  (`typecheck_call.rs` ctor lookup path); see `doc/PLAN_GU.md` §6
+  GU-S3 for the deliverable list.
+
+  An adjacent existing-behaviour quirk surfaced during Pass 2: when
+  `clause_name` is already qualified (`Eff.op`),
+  `instantiate_handler_clause_signature` will perform an
+  `Eff.Eff.op` lookup. Not a D-6 regression; flagged here so a
+  later GU-S3 / resume-typing sub-task can address it deliberately
+  rather than as a drive-by.
+
+- **Bug-fix interlude (history).** Track GU was paused before GU-S3
+  until every open BUGS.md entry was fixed and covered by a
+  regression test, so a failure spotted during GU-S3/S4 could be
+  attributed to the new code rather than to pre-existing layer
+  noise. Status (now closed):
   1. **2026-05-01 case-over-list-pattern function-result bug** —
      **CLOSED 2026-05-09** as a stop-gap that classifies list-
      pattern Bind binders as `Borrowed` in Perceus. Three end-to-
@@ -111,15 +131,16 @@ Red / ignored:
      returns `1 + child` for both arms to match. Two unit tests in
      `gen_lower::emit::tests` pin the spill-count contract.
 
-- **Track GU resumes at GU-S3 once the bug-fix interlude is clear.**
-  The GU-S3 plan is unchanged: extract `freshen_type_scheme` (with
-  the existing effect-side call site migrated first), then route
-  every constructor application, constructor-pattern type-check,
-  and generic-record field access through the same helper.
-  Constructor-name ambiguity resolution (qualified > scrutinee-
-  pinned > local-shadows-imported > ambiguity diagnostic) and
-  cross-module imports of generic unions also land in GU-S3. See
-  `doc/PLAN_GU.md` §6 GU-S3 for the deliverable list.
+- **Track GU-S3 sub-task ordering (post D-6).** D-6
+  `freshen_type_scheme` extraction is the only completed sub-task;
+  the rest of GU-S3 is still ahead. Route every union constructor
+  application, constructor-pattern type-check, generic-record
+  constructor application, and generic-record field access through
+  the shared helper. Constructor-name ambiguity resolution
+  (qualified > scrutinee-pinned > local-shadows-imported >
+  ambiguity diagnostic) and cross-module imports of generic unions
+  also land in GU-S3. See `doc/PLAN_GU.md` §6 GU-S3 for the
+  deliverable list.
 
 **Queued behind GU:**
 
