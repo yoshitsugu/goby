@@ -24,9 +24,8 @@
 
 use crate::ast::{
     BinOpKind, CaseArm, CasePattern, CtorPatternArg, Declaration, EffectDecl, EmbedDecl, Expr,
-    HandlerClause,
-    ImportDecl, ImportKind, InterpolatedPart, ListPatternItem, ListPatternTail, Module,
-    RecordField, Stmt, TypeDeclaration, UnaryOpKind,
+    HandlerClause, ImportDecl, ImportKind, InterpolatedPart, ListPatternItem, ListPatternTail,
+    Module, RecordField, Stmt, TypeDeclaration, UnaryOpKind,
 };
 
 const INDENT: &str = "  ";
@@ -1321,10 +1320,7 @@ mod tests {
                 type_annotation: "a".to_string(),
             }],
         };
-        assert_eq!(
-            format_type_declaration(&td),
-            "type Box a = Box(value: a)"
-        );
+        assert_eq!(format_type_declaration(&td), "type Box a = Box(value: a)");
     }
 
     #[test]

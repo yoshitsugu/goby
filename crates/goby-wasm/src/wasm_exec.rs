@@ -38,9 +38,9 @@ use wasmtime_wasi::p2::pipe::{MemoryInputPipe, MemoryOutputPipe};
 
 use crate::gen_lower::emit::CHUNK_SIZE;
 use crate::gen_lower::value::{
-    TAG_BOOL, TAG_FLOAT, TAG_INT, TAG_LIST, TAG_RECORD, TAG_STRING, TAG_TUPLE, TAG_UNIT,
-    decode_payload_int, decode_payload_ptr, decode_tag, encode_int, encode_list_ptr,
-    encode_string_ptr, format_float, i64_to_float_bits,
+    INT_MAX, INT_MIN, TAG_BOOL, TAG_FLOAT, TAG_INT, TAG_LIST, TAG_RECORD, TAG_STRING, TAG_TUPLE,
+    TAG_UNIT, decode_payload_int, decode_payload_ptr, decode_tag, encode_int, encode_list_ptr,
+    encode_string_ptr, encode_unit, format_float, i64_to_float_bits,
 };
 use crate::grapheme_semantics::collect_extended_grapheme_spans;
 use crate::host_runtime::HostIntrinsicImport;
@@ -284,6 +284,16 @@ fn run_wasm_bytes_with_stdin_and_config_captured(
         )
         .map_err(|e| format!("linker register split_lines: {e}"))?;
 
+    linker
+        .func_wrap(
+            module_name,
+            HostIntrinsicImport::IntParseMaybe.name(),
+            |caller: Caller<'_, WasiP1Ctx>, tagged_str: i64| -> i64 {
+                int_parse_maybe_host(caller, tagged_str)
+            },
+        )
+        .map_err(|e| format!("linker register int_parse_maybe: {e}"))?;
+
     let instance = linker
         .instantiate(&mut store, &module)
         .map_err(|e| format!("instantiate: {e}"))?;
@@ -348,6 +358,42 @@ fn grapheme_count_host(mut caller: Caller<'_, WasiP1Ctx>, tagged_str: i64) -> i6
     };
     let count = collect_extended_grapheme_spans(&str_slice).len() as i64;
     encode_int(count).unwrap_or(0)
+}
+
+fn int_parse_maybe_host(mut caller: Caller<'_, WasiP1Ctx>, tagged_str: i64) -> i64 {
+    let Ok(text) = read_wasm_string(&mut caller, tagged_str) else {
+        return encode_unit();
+    };
+    let bytes = text.as_bytes();
+    if bytes.is_empty() {
+        return encode_unit();
+    }
+
+    let negative = bytes[0] == b'-';
+    let digits = if negative { &bytes[1..] } else { bytes };
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return encode_unit();
+    }
+
+    let mut magnitude: i128 = 0;
+    for digit in digits {
+        magnitude = magnitude * 10 + i128::from(digit - b'0');
+        let limit = if negative {
+            -(INT_MIN as i128)
+        } else {
+            INT_MAX as i128
+        };
+        if magnitude > limit {
+            return encode_unit();
+        }
+    }
+
+    let value = if negative {
+        (magnitude as i64).wrapping_neg()
+    } else {
+        magnitude as i64
+    };
+    encode_int(value).unwrap_or_else(|_| encode_unit())
 }
 
 /// Host implementation: return the grapheme at index `idx_tagged` as a tagged string.

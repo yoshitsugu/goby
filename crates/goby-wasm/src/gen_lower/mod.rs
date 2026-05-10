@@ -723,10 +723,8 @@ fn lower_stdlib_decl_via_module(
 ) -> Option<goby_core::ir::IrDecl> {
     if !resolved_modules_cache.contains_key(module_path) {
         let stdlib_module = resolver.resolve_module(module_path).ok()?;
-        let rm = goby_core::resolved::resolve_module_with_stdlib(
-            &stdlib_module.module,
-            stdlib_root,
-        );
+        let rm =
+            goby_core::resolved::resolve_module_with_stdlib(&stdlib_module.module, stdlib_root);
         resolved_modules_cache.insert(module_path.to_string(), rm);
     }
     let resolved_module = resolved_modules_cache.get(module_path)?;

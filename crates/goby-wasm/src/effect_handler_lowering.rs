@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use goby_core::ir::{CompExpr, IrHandlerClause, IrInterpPart, IrType, ValueExpr};
+use goby_core::ir::{CompExpr, IrBinOp, IrHandlerClause, IrInterpPart, IrType, ValueExpr};
 
 use crate::CodegenError;
 
@@ -160,6 +160,41 @@ fn rewrite_comp(
             )?),
         }),
         CompExpr::Call { callee, args, .. } => {
+            if is_int_parse_call(callee, args)
+                && find_matching_handler_clause(handler_scopes, "invalid_integer").is_some()
+            {
+                let arg = rewrite_value(&args[0], names)?;
+                let result_name = names.fresh("int_parse_result");
+                let invalid_branch = rewrite_handled_op_invocation(
+                    Some("StringParseError"),
+                    "invalid_integer",
+                    std::slice::from_ref(&arg),
+                    handler_aliases,
+                    handler_scopes,
+                    k.clone(),
+                    names,
+                )?
+                .expect("matching invalid_integer handler was checked above");
+                let valid_branch = k(ValueExpr::Var(result_name.clone()), names)?;
+                return Ok(CompExpr::Let {
+                    name: result_name.clone(),
+                    ty: IrType::Unknown,
+                    value: Box::new(CompExpr::Call {
+                        callee: Box::new(ValueExpr::Var("__goby_int_parse_maybe".to_string())),
+                        args: vec![arg],
+                        reuse_token: None,
+                    }),
+                    body: Box::new(CompExpr::If {
+                        cond: Box::new(ValueExpr::BinOp {
+                            op: IrBinOp::Eq,
+                            left: Box::new(ValueExpr::Var(result_name)),
+                            right: Box::new(ValueExpr::Unit),
+                        }),
+                        then_: Box::new(invalid_branch),
+                        else_: Box::new(valid_branch),
+                    }),
+                });
+            }
             if let ValueExpr::Var(op_name) = callee.as_ref()
                 && let Some(rewritten) = rewrite_handled_op_invocation(
                     None,
@@ -312,6 +347,14 @@ fn rewrite_comp(
             message: "effect handler lowering: AssignIndex not yet implemented (LM3c)".to_string(),
         }),
     }
+}
+
+fn is_int_parse_call(callee: &ValueExpr, args: &[ValueExpr]) -> bool {
+    args.len() == 1
+        && matches!(
+            callee,
+            ValueExpr::GlobalRef { module, name } if module == "int" && name == "parse"
+        )
 }
 
 fn rewrite_seq(

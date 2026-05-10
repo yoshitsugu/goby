@@ -3770,6 +3770,9 @@ fn assert_host_heap_floor_clamped_before_host_intrinsic(source: &str, stdin: &st
             0
         })
         .expect("register split_lines");
+    linker
+        .func_wrap(module_name, "__goby_int_parse_maybe", |_: i64| -> i64 { 0 })
+        .expect("register int_parse_maybe");
 
     let saw_host_intrinsic_for_graphemes = Arc::clone(&saw_host_intrinsic);
     let saw_regressed_floor_for_host = Arc::clone(&saw_regressed_floor);
@@ -4004,6 +4007,9 @@ main =
             |_: i64, _: i64| -> i64 { 0 },
         )
         .ok();
+    linker
+        .func_wrap(module_name, "__goby_int_parse_maybe", |_: i64| -> i64 { 0 })
+        .ok();
 
     let instance = linker
         .instantiate(&mut store, &wasm_module)
@@ -4178,6 +4184,9 @@ main =
             0
         })
         .ok();
+    linker
+        .func_wrap(module_name, "__goby_int_parse_maybe", |_: i64| -> i64 { 0 })
+        .ok();
 
     let instance = linker
         .instantiate(&mut store, &wasm_module)
@@ -4313,6 +4322,7 @@ main =
         "__goby_string_each_grapheme_count",
         "__goby_string_graphemes_list",
         "__goby_string_split_lines",
+        "__goby_int_parse_maybe",
     ] {
         linker
             .func_wrap(module_name, name, |_: i64| -> i64 { 0 })

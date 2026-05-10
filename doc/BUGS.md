@@ -40,134 +40,37 @@ Open bugs:
   - `crates/goby-wasm/src/gen_lower/value.rs` (TAG_FLOAT free-list
     accounting in `__goby_drop`).
 
-- **2026-05-10.** Calling stdlib `int.parse` indirectly through a
-  HOF callback (e.g. `list.map xs to_i` where `to_i` is a top-level
-  decl whose body is `with invalid_integer ... in int.parse d`)
-  fails wasm emission. The original report is the
-  `gen_lower/emit: unknown local 'invalid_integer'` error; the fix
-  in this entry closes the resolver-side gap that made the operation
-  name look like a local variable, and the codegen-side gap that
-  remains is described below.
-
-  Confirmed repro:
-
-  ```goby
-  import goby/list (map, push)
-  import goby/int as int
-  import goby/stdio
-
-  to_i : String -> Int
-  to_i d =
-    with
-      invalid_integer i -> resume -1
-    in
-      int.parse d
-
-  main : Unit -> Unit can Print
-  main =
-    xs = push (push [] "1") "x"
-    ys = map xs to_i
-    println (int.to_string ys[0])
-    println (int.to_string ys[1])
-  ```
-
-  Resolver-side root cause and partial fix (2026-05-10):
-
-  - `goby_core::resolved::ResolverMetadata::collect` only registered
-    effect operations from imported modules; the module's own
-    `effect` declarations were not added to `bare_effect_ops` /
-    `qualified_effect_ops`. As a result, when `crates/goby-wasm/src/
-    gen_lower/mod.rs::lower_module_to_instrs` lowered stdlib `parse`
-    (in `int.gb`) via `goby_core::ir_lower::lower_declaration`, the
-    `invalid_integer value` call was resolved as a plain `ValueName`
-    and emitted as `Call(Var("invalid_integer"), …)`. The wasm
-    lowerer then mistook the operation name for a local variable and
-    surfaced the original `unknown local 'invalid_integer'` error.
-  - Two-part fix:
-    1. `gen_lower/mod.rs` now lowers stdlib decls through a new
-       helper `lower_stdlib_decl_via_module` that calls
-       `StdlibResolver::resolve_module(path)` →
-       `goby_core::resolved::resolve_module_with_stdlib` →
-       `lower_resolved_declaration`, so each stdlib decl is resolved
-       in its full owning-module context (cached per path). Both
-       code paths that previously called `lower_declaration` directly
-       (the initial `perceus_input` population and the post-Perceus
-       fixpoint miss path) now route through the helper.
-    2. `goby_core::resolved::ResolverMetadata::collect` registers
-       the module's own `effect_declarations` into
-       `bare_effect_ops` / `qualified_effect_ops` so sibling effect
-       operations resolve as `EffectOp` rather than `ValueName` even
-       inside the module that declares them.
-  - Side effect that needed addressing in the same change:
-    `lower_effect_call` in `goby-core/src/ir_lower.rs` strips a sole
-    Unit arg from effect-call lowering because builtin `read()` is
-    encoded as a no-arg `EffectOp`. Once own-module effects are
-    visible to the resolver, user-declared `Unit -> _` ops (e.g.
-    `tick: Unit -> Unit`) hit that filter, which used to be
-    invisible because `tick` was resolving as a local Var. The
-    `effect_handler_lowering.rs` rewrite now pads the call site with
-    synthetic `ValueExpr::Unit` args when the IR has zero args but
-    the matching clause has positive arity, so a user `with tick _ ->
-    …` clause continues to receive a Unit value.
-
-  Codegen-side gap (still open, ignored regression):
-
-  - Even with the resolver fixed, when `to_i` is invoked as a HOF
-    callback through `list.map`, the user's `with invalid_integer i
-    -> resume -1` handler scope is not propagated into stdlib
-    `parse`'s body during per-decl handler rewrite. A staged
-    Perceus-prior decl-specialization pass that would clone the
-    callee with the user's clause body substituted into matching
-    `PerformEffect` sites was drafted (and unit-tested in isolation)
-    but produced a wasm body that fails downstream validation
-    because cloning `int.parse` interacts with its mutable-state
-    locals, the inner `yield` handler, and the BinOp::Eq emit shape
-    in ways that need their own design pass. The clone + substitute
-    approach is documented in
-    `~/.claude/workspaces/home_yoshitsugu_src_github_com_yoshitsugu_goby/implementation-plan.md`
-    for the next pass.
-  - The HOF regression is pinned as
-    `runtime_output_tests::hof_callback_int_parse_invalid_integer_executes_via_compiled_wasm`
-    in `crates/goby-wasm/src/runtime_output_tests.rs` with
-    `#[ignore]`. Removing the `#[ignore]` is the acceptance signal
-    for the codegen follow-up.
-
-  Regression coverage for the resolver / stdlib-loading half:
-
-  - `crates/goby-core/src/resolved.rs::ResolverMetadata::collect`
-    now registers own-module effects; the existing typecheck / IR
-    test suites green-rolled through this change without behavioural
-    regressions.
-  - `crates/goby-wasm/src/effect_handler_lowering.rs` arity-check
-    site pads zero-arg / one-param mismatches with `ValueExpr::Unit`,
-    keeping the existing
-    `gen_lower::tests::safe_handler_only_main_is_a_general_lower_candidate`
-    green (`tick: Unit -> Unit` exercise).
-  - Direct-call regressions
-    (`stdlib_int_parse_direct_call_executes_via_compiled_wasm`,
-    `stdlib_int_parse_boundaries_execute_via_compiled_wasm`) remain
-    green via the static-output / native-fallback path.
-
-  Triage notes (kept for the codegen follow-up):
-
-  - Track HF (BUGS.md 2026-05-08, fixed 2026-05-09) routed four
-    `lower_value`/`lower_value_as_arg` callsites through the context-
-    aware variant so a bare `Var(top-level)` resolves to a
-    `DeclCall`. Track HF did not re-examine how an effect-operation
-    name reaches the function body when that body is reached as a
-    HOF callback. The resolver fix here addresses the operation-
-    resolution side; the remaining gap is in handler scope
-    propagation across the call boundary.
-  - Direct calls to `to_i` (e.g.
-    `println (int.to_string (to_i "42"))`) compile and run correctly,
-    so the effect-handler scope is set up properly when the program
-    fits the static-output / native-fallback path. The defect
-    appears only when `to_i` is passed as a callback and invoked
-    indirectly via `IndirectCall`/`PushFuncHandle` through
-    `list.map`, which forces general lowering and the un-handled
-    `PerformEffect` reaches wasm emit.
-
 Resolved bugs:
+
+- **2026-05-10.** Calling stdlib `int.parse` indirectly through a HOF
+  callback (for example `list.map xs to_i`, where `to_i` handles
+  `invalid_integer` around `int.parse d`) failed wasm emission.
+
+  Root cause: the original resolver path loaded stdlib decls outside
+  their owning module, so `invalid_integer value` in `stdlib/goby/int.gb`
+  was classified as a local call instead of
+  `PerformEffect{StringParseError, invalid_integer, ...}`. After that
+  resolver-side gap was fixed, the remaining codegen gap was that the
+  per-decl handler rewrite could not propagate a caller's
+  `invalid_integer` handler scope into the stdlib `parse` decl when
+  `to_i` was invoked indirectly through `list.map`.
+
+  Fix: stdlib decl loading now resolves each decl in its full module
+  context, own-module effect declarations are registered during
+  resolver metadata collection, and handled `int.parse` calls are
+  lowered locally in `effect_handler_lowering.rs`. The lowering routes
+  the parse attempt through the internal `__goby_int_parse_maybe`
+  backend/host intrinsic, then invokes the user's `invalid_integer`
+  handler clause only when the intrinsic returns tagged `Unit`.
+
+  Regression coverage:
+
+  - `crates/goby-wasm/src/runtime_output_tests.rs`:
+    `hof_callback_int_parse_invalid_integer_executes_via_compiled_wasm`
+    is no longer ignored and pins `"1"` / `"x"` through `list.map` to
+    `1` / `-1` on the compiled-wasm path.
+  - Existing direct-call and boundary regressions for `int.parse`
+    remain green.
 
 - **2026-05-09.** Stdlib `int.parse` could not be compiled because its
   `minimum_int : Int` constant declared the i64 boundary value

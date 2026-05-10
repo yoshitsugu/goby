@@ -3408,8 +3408,7 @@ fn lower_case(
                 // reaching `lower.rs` with a `Ctor` pattern is a
                 // logic error in the dispatch layer.
                 return Err(LowerError::UnsupportedForm {
-                    node: "constructor case pattern lowering is not yet implemented"
-                        .to_string(),
+                    node: "constructor case pattern lowering is not yet implemented".to_string(),
                 });
             }
         };
@@ -4183,6 +4182,7 @@ fn backend_intrinsic_for_bare(name: &str, arg_count: usize) -> Option<BackendInt
         "__goby_list_push_string" => Some(BackendIntrinsic::ListPushString),
         "__goby_list_join_string" if arg_count == 2 => Some(BackendIntrinsic::ListJoinString),
         "__goby_string_length" => Some(BackendIntrinsic::StringLength),
+        "__goby_int_parse_maybe" if arg_count == 1 => Some(BackendIntrinsic::IntParseMaybe),
         "__goby_list_length" => Some(BackendIntrinsic::ListLength),
         "__goby_list_fold" if arg_count == 3 => Some(BackendIntrinsic::ListFold),
         "__goby_list_map" if arg_count == 2 => Some(BackendIntrinsic::ListMap),

@@ -2532,8 +2532,7 @@ main =
   println (int.to_string (parse_or_zero "-576460752303423489"))
 "#;
     let module = parse_module(source).expect("parse should work");
-    let wasm =
-        crate::compile_module(&module).expect("int.parse boundary program should compile");
+    let wasm = crate::compile_module(&module).expect("int.parse boundary program should compile");
     let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
         .expect("int.parse boundary wasm should execute");
     assert_eq!(
@@ -2545,18 +2544,12 @@ main =
 
 // BUGS.md 2026-05-10 regression: passing `to_i` (a function whose body
 // installs a `with invalid_integer ... in int.parse d` handler) as a HOF
-// callback to `list.map` previously failed wasm emission with
-// `gen_lower/emit: unknown local 'invalid_integer'`. After the resolver
-// + stdlib-loading fix in the same BUGS.md entry, `invalid_integer value`
-// now lowers as `PerformEffect{StringParseError, invalid_integer, ..}`,
-// but the wasm emit path does not yet handle a non-builtin
-// `PerformEffect` reaching it from a HOF-invoked stdlib body. The
-// follow-up — handler-aware decl specialization that substitutes the
-// caller's clause body into the stdlib callee before Perceus — is
-// drafted but not yet correct against parse's mutable-state +
-// nested-yield-handler shape, so this regression stays `#[ignore]`d
-// while the codegen-side gap is tracked. See the BUGS.md 2026-05-10
-// entry for the staged design.
+// callback to `list.map` previously failed wasm emission first with
+// `gen_lower/emit: unknown local 'invalid_integer'`, then with an
+// unhandled `PerformEffect{StringParseError, invalid_integer, ..}` after
+// the resolver-side fix. The wasm path now lowers handled `int.parse`
+// calls through a backend parse-or-invalid intrinsic, keeping the user's
+// `invalid_integer` handler local to the callback decl.
 //
 // The direct-call shape
 // (`stdlib_int_parse_direct_call_executes_via_compiled_wasm`) succeeds
@@ -2565,7 +2558,6 @@ main =
 // general-lowered path; element 0 is "1" → 1, element 1 is "x" →
 // handler resumes -1.
 #[test]
-#[ignore = "BUGS.md 2026-05-10: HOF-callback handler scope propagation through stdlib decl bodies — codegen follow-up"]
 fn hof_callback_int_parse_invalid_integer_executes_via_compiled_wasm() {
     let _guard = ENV_MUTEX.lock().unwrap();
     let source = r#"

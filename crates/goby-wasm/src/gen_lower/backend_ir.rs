@@ -149,6 +149,14 @@ pub(crate) enum BackendIntrinsic {
     /// Implemented as a host import so CRLF/CR/LF normalization stays aligned with the
     /// runtime-bridge `Read.read_lines` behavior.
     StringSplitLines,
+    /// Parse a tagged `String` as Goby's decimal `Int`.
+    ///
+    /// Signature: `(tagged_str: i64) -> i64`.
+    /// Returns a tagged `Int` on success and tagged `Unit` on invalid input.
+    /// This is an internal lowering boundary used by
+    /// `with invalid_integer ... in int.parse value`; public `int.parse`
+    /// remains effectful at the language level.
+    IntParseMaybe,
     /// Read the total element count from a chunked list header in O(1).
     ///
     /// Signature: `(tagged_list: i64) -> i64` (tagged `Int`).
@@ -197,6 +205,7 @@ impl BackendIntrinsic {
             BackendIntrinsic::ListJoinString => 2,
             BackendIntrinsic::StringGraphemesList => 1,
             BackendIntrinsic::StringSplitLines => 1,
+            BackendIntrinsic::IntParseMaybe => 1,
             BackendIntrinsic::ListLength => 1,
             BackendIntrinsic::ListFold => 3,
             BackendIntrinsic::ListMap => 2,
@@ -211,7 +220,8 @@ impl BackendIntrinsic {
             | BackendIntrinsic::StringConcat
             | BackendIntrinsic::ListJoinString
             | BackendIntrinsic::StringGraphemesList
-            | BackendIntrinsic::StringSplitLines => IntrinsicExecutionBoundary::HostImport,
+            | BackendIntrinsic::StringSplitLines
+            | BackendIntrinsic::IntParseMaybe => IntrinsicExecutionBoundary::HostImport,
             BackendIntrinsic::StringSplit
             | BackendIntrinsic::ListGet
             | BackendIntrinsic::StringLength

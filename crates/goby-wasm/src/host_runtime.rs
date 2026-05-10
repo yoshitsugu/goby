@@ -22,7 +22,7 @@ pub(crate) enum IntrinsicExecutionBoundary {
 /// - arguments and returns use Goby's tagged `i64` runtime value ABI,
 /// - only grapheme iteration crosses the host boundary,
 /// - list accumulation stays in Wasm (`ListPushString`).
-// All variants use the `String` prefix intentionally — these are string-domain host imports.
+// Variants span the string and int domains; each name carries its domain as a prefix.
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HostIntrinsicImport {
@@ -33,6 +33,7 @@ pub(crate) enum HostIntrinsicImport {
     ListJoinString,
     StringGraphemesList,
     StringSplitLines,
+    IntParseMaybe,
 }
 
 impl HostIntrinsicImport {
@@ -52,6 +53,7 @@ impl HostIntrinsicImport {
             Self::ListJoinString => "__goby_list_join_string",
             Self::StringGraphemesList => "__goby_string_graphemes_list",
             Self::StringSplitLines => "__goby_string_split_lines",
+            Self::IntParseMaybe => "__goby_int_parse_maybe",
         }
     }
 
@@ -62,7 +64,9 @@ impl HostIntrinsicImport {
             Self::StringEachGraphemeCount => &[ValType::I64],
             Self::StringEachGraphemeState => &[ValType::I64, ValType::I64],
             Self::StringConcat | Self::ListJoinString => &[ValType::I64, ValType::I64],
-            Self::StringGraphemesList | Self::StringSplitLines => &[ValType::I64],
+            Self::StringGraphemesList | Self::StringSplitLines | Self::IntParseMaybe => {
+                &[ValType::I64]
+            }
         }
     }
 
@@ -72,7 +76,7 @@ impl HostIntrinsicImport {
     }
 }
 
-pub(crate) const HOST_INTRINSIC_IMPORTS: [HostIntrinsicImport; 7] = [
+pub(crate) const HOST_INTRINSIC_IMPORTS: [HostIntrinsicImport; 8] = [
     HostIntrinsicImport::ValueToString,
     HostIntrinsicImport::StringEachGraphemeCount,
     HostIntrinsicImport::StringEachGraphemeState,
@@ -80,6 +84,7 @@ pub(crate) const HOST_INTRINSIC_IMPORTS: [HostIntrinsicImport; 7] = [
     HostIntrinsicImport::ListJoinString,
     HostIntrinsicImport::StringGraphemesList,
     HostIntrinsicImport::StringSplitLines,
+    HostIntrinsicImport::IntParseMaybe,
 ];
 
 pub(crate) const fn host_import_for_intrinsic(
@@ -97,6 +102,7 @@ pub(crate) const fn host_import_for_intrinsic(
         BackendIntrinsic::ListJoinString => Some(HostIntrinsicImport::ListJoinString),
         BackendIntrinsic::StringGraphemesList => Some(HostIntrinsicImport::StringGraphemesList),
         BackendIntrinsic::StringSplitLines => Some(HostIntrinsicImport::StringSplitLines),
+        BackendIntrinsic::IntParseMaybe => Some(HostIntrinsicImport::IntParseMaybe),
         BackendIntrinsic::StringSplit
         | BackendIntrinsic::ListGet
         | BackendIntrinsic::StringLength

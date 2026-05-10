@@ -937,6 +937,7 @@ pub(crate) fn needs_helper_state(instrs: &[WasmBackendInstr]) -> bool {
                         | BackendIntrinsic::StringConcat
                         | BackendIntrinsic::StringGraphemesList
                         | BackendIntrinsic::StringSplitLines
+                        | BackendIntrinsic::IntParseMaybe
                         | BackendIntrinsic::ListPushString
                         | BackendIntrinsic::ListSet
                         | BackendIntrinsic::ListSetInPlace
@@ -3934,7 +3935,8 @@ fn emit_helper_call(
         | BackendIntrinsic::StringConcat
         | BackendIntrinsic::ListJoinString
         | BackendIntrinsic::StringGraphemesList
-        | BackendIntrinsic::StringSplitLines => {
+        | BackendIntrinsic::StringSplitLines
+        | BackendIntrinsic::IntParseMaybe => {
             if let Some(hs) = heap_state {
                 emit_sync_cursor_to_global(function, hs.alloc_cursor_local, hs.pw());
                 emit_sync_floor_to_global(function, hs.heap_floor_local, hs.pw());

@@ -8,10 +8,10 @@ use crate::parser::ParseError;
 use crate::parser_util::{
     collect_indented_body, contains_top_level_colon, has_balanced_delimiters,
     is_camel_case_identifier, is_identifier, is_indented, is_lowercase_start_identifier,
-    is_module_path, is_non_reserved_identifier, is_reserved_keyword,
-    is_type_parameter_identifier, parse_record_field, skip_blank_and_comment_lines,
-    split_record_constructor_shape, split_top_level_definition, split_top_level_pipes,
-    split_top_level_type, split_type_header, starts_with_keyword_token, strip_line_comment,
+    is_module_path, is_non_reserved_identifier, is_reserved_keyword, is_type_parameter_identifier,
+    parse_record_field, skip_blank_and_comment_lines, split_record_constructor_shape,
+    split_top_level_definition, split_top_level_pipes, split_top_level_type, split_type_header,
+    starts_with_keyword_token, strip_line_comment,
 };
 use crate::str_util::split_top_level_commas;
 
@@ -852,11 +852,7 @@ main = 1
                 variants: vec![
                     crate::ast::UnionVariant {
                         ctor: "Node".to_string(),
-                        args: vec![
-                            "a".to_string(),
-                            "Tree a".to_string(),
-                            "Tree a".to_string(),
-                        ],
+                        args: vec!["a".to_string(), "Tree a".to_string(), "Tree a".to_string(),],
                     },
                     crate::ast::UnionVariant {
                         ctor: "Leaf".to_string(),

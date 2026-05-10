@@ -442,10 +442,7 @@ pub(crate) fn inject_type_constructors(
 /// templates; `freshen_type_scheme` later substitutes fresh inference
 /// variables per use site.
 fn union_or_record_result_template(name: &str, type_params: &[String]) -> Ty {
-    let args = type_params
-        .iter()
-        .map(|p| Ty::Var(p.clone()))
-        .collect();
+    let args = type_params.iter().map(|p| Ty::Var(p.clone())).collect();
     Ty::Con {
         name: name.to_string(),
         args,

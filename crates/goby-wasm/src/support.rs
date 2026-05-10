@@ -16,9 +16,9 @@ pub(crate) fn is_supported_case_pattern(pattern: &CasePattern) -> bool {
         // Constructor patterns are not yet lowered natively; they
         // route through the `UnsupportedCasePattern` fallback path
         // until generic-union lowering lands.
-        CasePattern::EmptyList
-        | CasePattern::ListPattern { .. }
-        | CasePattern::Ctor { .. } => false,
+        CasePattern::EmptyList | CasePattern::ListPattern { .. } | CasePattern::Ctor { .. } => {
+            false
+        }
     }
 }
 
