@@ -1218,10 +1218,10 @@ fn required_heap_base_spill_count_instr(instr: &WasmBackendInstr) -> u32 {
             )
         }
         WasmBackendInstr::AllocMutableCell { init_instrs } => {
-            required_heap_base_spill_count(init_instrs)
+            1 + required_heap_base_spill_count(init_instrs)
         }
         WasmBackendInstr::AllocFloatBox { bits_instrs } => {
-            required_heap_base_spill_count(bits_instrs)
+            1 + required_heap_base_spill_count(bits_instrs)
         }
         _ => 0,
     }
@@ -3663,20 +3663,29 @@ fn emit_instrs_with_heap_depth(
             WasmBackendInstr::AllocMutableCell { init_instrs } => {
                 // Allocate 8 bytes, store init value at offset 0, push TAG_CELL-tagged ptr.
                 //
-                // Safety note: same HS_AUX_PTR clobber risk as CreateClosure if
-                // init_instrs contains a nested heap allocation. The lowering pass must ensure
-                // init_instrs does not allocate; typically init_instrs is a single
-                // I64Const or LoadLocal, never a heap-allocating sequence.
+                // Routes through `emit_alloc_with_flag(SizeClass::Cell)` so a free Cell
+                // slot recycled by `__goby_drop` is consumed before falling back to
+                // bump-from-top. The result pointer is held in a depth-indexed spill
+                // (`HELPER_SCRATCH_I32 + heap_base_depth`) so a nested allocation in
+                // `init_instrs` cannot clobber it (same shape as CreateClosure).
                 let hs = require_heap_state(helper_state, "AllocMutableCell")?;
                 let pw = hs.pw();
-                let s_cell_ptr = hs.scratch.i32_base + HS_AUX_PTR;
+                let s_cell_ptr = hs.scratch.i32_base + HELPER_SCRATCH_I32 + heap_base_depth;
                 let s_alloc_size = hs.scratch.i32_base + HS_ALLOC_SIZE;
+                let hit_flag = hs.scratch.i32_base + HS_ITER;
                 function.instruction(&ptr_const(pw, 8));
                 function.instruction(&Instruction::LocalSet(s_alloc_size));
-                emit_alloc_from_top(function, &hs, s_alloc_size, s_cell_ptr);
+                emit_alloc_with_flag(
+                    SizeClass::Cell,
+                    function,
+                    &hs,
+                    s_alloc_size,
+                    s_cell_ptr,
+                    hit_flag,
+                );
                 // Store init value at offset 0.
                 function.instruction(&Instruction::LocalGet(s_cell_ptr));
-                emit_instrs(
+                emit_instrs_with_heap_depth(
                     function,
                     ctx,
                     init_instrs,
@@ -3688,6 +3697,7 @@ fn emit_instrs_with_heap_depth(
                     static_heap,
                     options,
                     function_returns_i64,
+                    heap_base_depth + 1,
                     self_tail_loop_depth,
                 )?;
                 function.instruction(&Instruction::I64Store(MemArg {
@@ -3702,26 +3712,30 @@ fn emit_instrs_with_heap_depth(
             WasmBackendInstr::AllocFloatBox { bits_instrs } => {
                 // Allocate 8 bytes, store IEEE 754 bit pattern at offset 0, push TAG_FLOAT-tagged ptr.
                 //
-                // Same allocation shape as AllocMutableCell. `bits_instrs` must produce a single
-                // i64 (the IEEE 754 bits) and must not nest a further heap allocation, since
-                // HS_AUX_PTR is reused as the result-pointer scratch (same constraint as Cell).
-                //
-                // Two known limitations are tracked together with the matching
-                // AllocMutableCell limitations under the 2026-05-08 entry in
-                // `doc/BUGS.md` (no free-list reuse and no nested-alloc spill).
-                // Follow-up should refactor both opcodes onto a shared cell-alloc
-                // helper that consumes the size-class free list and spills the
-                // result pointer.
+                // Shares the Cell free-list slot via `emit_alloc_with_flag(SizeClass::Cell)`,
+                // matching the alloc shape with `AllocMutableCell` (8B + 8B refcount header)
+                // and the drop-side push in `__goby_drop` for `TAG_FLOAT`. The result
+                // pointer is held in a depth-indexed spill so nested allocations inside
+                // `bits_instrs` (none in current callers, but no longer a hidden constraint)
+                // are safe.
                 let hs = require_heap_state(helper_state, "AllocFloatBox")?;
                 let pw = hs.pw();
-                let s_float_ptr = hs.scratch.i32_base + HS_AUX_PTR;
+                let s_float_ptr = hs.scratch.i32_base + HELPER_SCRATCH_I32 + heap_base_depth;
                 let s_alloc_size = hs.scratch.i32_base + HS_ALLOC_SIZE;
+                let hit_flag = hs.scratch.i32_base + HS_ITER;
                 function.instruction(&ptr_const(pw, 8));
                 function.instruction(&Instruction::LocalSet(s_alloc_size));
-                emit_alloc_from_top(function, &hs, s_alloc_size, s_float_ptr);
+                emit_alloc_with_flag(
+                    SizeClass::Cell,
+                    function,
+                    &hs,
+                    s_alloc_size,
+                    s_float_ptr,
+                    hit_flag,
+                );
                 // Store bits at offset 0.
                 function.instruction(&Instruction::LocalGet(s_float_ptr));
-                emit_instrs(
+                emit_instrs_with_heap_depth(
                     function,
                     ctx,
                     bits_instrs,
@@ -3733,6 +3747,7 @@ fn emit_instrs_with_heap_depth(
                     static_heap,
                     options,
                     function_returns_i64,
+                    heap_base_depth + 1,
                     self_tail_loop_depth,
                 )?;
                 function.instruction(&Instruction::I64Store(MemArg {
@@ -5075,11 +5090,21 @@ fn emit_alloc_float_box_with_bits_local(
     bits_local: u32,
 ) {
     let pw = hs.pw();
+    // The bits live in a pre-stored i64 scratch local; no nested allocation
+    // happens after the alloc, so HS_AUX_PTR is safe for the result pointer.
     let s_float_ptr = hs.scratch.i32_base + HS_AUX_PTR;
     let s_alloc_size = hs.scratch.i32_base + HS_ALLOC_SIZE;
+    let hit_flag = hs.scratch.i32_base + HS_ITER;
     function.instruction(&ptr_const(pw, 8));
     function.instruction(&Instruction::LocalSet(s_alloc_size));
-    emit_alloc_from_top(function, hs, s_alloc_size, s_float_ptr);
+    emit_alloc_with_flag(
+        SizeClass::Cell,
+        function,
+        hs,
+        s_alloc_size,
+        s_float_ptr,
+        hit_flag,
+    );
     function.instruction(&Instruction::LocalGet(s_float_ptr));
     function.instruction(&Instruction::LocalGet(bits_local));
     function.instruction(&Instruction::I64Store(MemArg {
@@ -11365,6 +11390,43 @@ mod tests {
         Validator::new()
             .validate_all(wasm)
             .expect("module should pass wasm validation");
+    }
+
+    // BUGS.md 2026-05-08 acceptance: AllocMutableCell / AllocFloatBox now spill
+    // their result pointer to the depth-indexed `HELPER_SCRATCH_I32 +
+    // heap_base_depth` slot (same as CreateClosure), so every nesting layer
+    // must reserve one additional spill slot. Without this `1 +` term, a
+    // nested allocation inside `init_instrs` / `bits_instrs` would clobber the
+    // outer pointer.
+    #[test]
+    fn alloc_mutable_cell_reserves_heap_spill_slot_at_each_depth() {
+        let inner_alloc = I::AllocMutableCell {
+            init_instrs: vec![I::I64Const(0)],
+        };
+        let nested = I::AllocMutableCell {
+            init_instrs: vec![inner_alloc],
+        };
+        // Outer cell + inner cell + leaf = 2 spill levels above the leaf.
+        assert_eq!(
+            required_heap_base_spill_count_instr(&nested),
+            2,
+            "AllocMutableCell must contribute 1 spill per nesting layer"
+        );
+    }
+
+    #[test]
+    fn alloc_float_box_reserves_heap_spill_slot_at_each_depth() {
+        let inner_alloc = I::AllocFloatBox {
+            bits_instrs: vec![I::I64Const(0)],
+        };
+        let nested = I::AllocFloatBox {
+            bits_instrs: vec![inner_alloc],
+        };
+        assert_eq!(
+            required_heap_base_spill_count_instr(&nested),
+            2,
+            "AllocFloatBox must contribute 1 spill per nesting layer"
+        );
     }
 
     #[test]

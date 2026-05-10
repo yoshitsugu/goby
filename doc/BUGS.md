@@ -4,43 +4,41 @@ This document tracks confirmed, reproducible bugs in the current Goby toolchain.
 
 Open bugs:
 
-- **2026-05-08.** `WasmBackendInstr::AllocFloatBox` and
-  `WasmBackendInstr::AllocMutableCell` share two limitations that should
-  be addressed together as a follow-up cell-allocation refactor (raised
-  by CodeRabbit during the Track Float review):
-
-  1. Both lower to `emit_alloc_from_top` only, so freed Cell / TAG_FLOAT
-     boxes returned to the size-class free list by `__goby_drop` are not
-     reused — every alloc grows the heap top. `__goby_dup` /
-     `__goby_drop` already learn TAG_FLOAT and reuse the Cell free-list
-     slot for accounting (`gen_lower/value.rs`), but the allocation
-     side never consumes it.
-  2. Both reuse `HS_AUX_PTR` as the result-pointer scratch and
-     explicitly require the `init_instrs` / `bits_instrs` to **not**
-     contain a nested heap allocation (would clobber the freshly
-     allocated payload pointer). The constraint is documented inline
-     and currently respected by every caller (`init_instrs` is a
-     single `I64Const` / `LoadLocal`; `bits_instrs` ditto), but a
-     future caller that needs a nested allocation would break it.
-
-  Why this is a single follow-up rather than two Float-only fixes:
-  the two opcodes share the same 8-byte payload shape and the same
-  scratch-slot pattern. Fixing only `AllocFloatBox` would create a
-  divergence between Cell and Float allocation that is hard to
-  justify mechanically. The right shape is a single emit helper that
-  (a) checks the size-class free list before falling back to top
-  allocation, and (b) spills the payload pointer to a reserved spill
-  slot so nested-allocating `*_instrs` are safe — then both
-  `AllocMutableCell` and `AllocFloatBox` route through it.
-
-  Code pointers:
-  - `crates/goby-wasm/src/gen_lower/emit.rs` (`AllocMutableCell` ~L3662,
-    `AllocFloatBox` ~L3701, helper `emit_alloc_float_box_with_bits_local`
-    ~L5063, scratch slot constant `HS_AUX_PTR` L102).
-  - `crates/goby-wasm/src/gen_lower/value.rs` (TAG_FLOAT free-list
-    accounting in `__goby_drop`).
+- *(none)*
 
 Resolved bugs:
+
+- **2026-05-08.** `WasmBackendInstr::AllocFloatBox` and
+  `WasmBackendInstr::AllocMutableCell` shared two limitations
+  (raised by CodeRabbit during the Track Float review):
+
+  1. Both lowered to `emit_alloc_from_top` only, so freed Cell /
+     TAG_FLOAT boxes returned to `FREE_LIST_SLOT_CELL` by `__goby_drop`
+     were never consumed on alloc — every alloc grew the heap top.
+  2. Both reused `HS_AUX_PTR` as the result-pointer scratch, so
+     `init_instrs` / `bits_instrs` could not nest a further heap
+     allocation. The constraint was a hidden invariant enforced only
+     by the lowering pass.
+
+  Fix: both arms (and the float-arithmetic helper
+  `emit_alloc_float_box_with_bits_local`) now route through
+  `emit_alloc_with_flag(SizeClass::Cell, …)`, which pops a recycled
+  payload from the Cell free-list slot before falling back to bump
+  allocation. The result pointer for the literal arms moved to the
+  depth-indexed spill `HELPER_SCRATCH_I32 + heap_base_depth` (mirroring
+  `CreateClosure` / `AllocReuse`), and inner `*_instrs` are routed
+  through `emit_instrs_with_heap_depth(.., heap_base_depth + 1, ..)` so
+  a nested allocation cannot clobber the outer pointer.
+  `required_heap_base_spill_count_instr` returns `1 + child` for both
+  arms, matching the new spill usage.
+
+  Regression coverage:
+
+  - `crates/goby-wasm/src/gen_lower/emit.rs::tests::alloc_mutable_cell_reserves_heap_spill_slot_at_each_depth`
+    and `…::alloc_float_box_reserves_heap_spill_slot_at_each_depth`
+    pin the spill-count contract (the exact bug Codex flagged in
+    plan review).
+  - `cargo nextest run -p goby-wasm` stays green at 876 tests.
 
 - **2026-05-10.** Calling stdlib `int.parse` indirectly through a HOF
   callback (for example `list.map xs to_i`, where `to_i` handles

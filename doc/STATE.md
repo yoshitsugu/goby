@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-10 (post bug-fix interlude entry #3 close).
+Last updated: 2026-05-10 (bug-fix interlude complete — BUGS.md open list empty).
 
 ## Current Focus
 
@@ -40,11 +40,12 @@ commit `df57c32`):
 - `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`:
   the regular wasm suite passes (865 / 11 skipped after Track HF, 2026-05-09).
 
-**All-green (post bug-fix interlude #3 close, 2026-05-10)**:
+**All-green (post bug-fix interlude complete, 2026-05-10)**:
 
 - `cargo test -p goby-core --lib`: 942 passed / 2 ignored.
-- `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`:
-  873 passed / 12 skipped.
+- `cargo nextest run -p goby-wasm`: 876 passed / 11 skipped (up from
+  874 thanks to two new spill-count unit tests pinning the
+  AllocMutableCell / AllocFloatBox refactor).
 - `cargo test -p goby-lsp`: 56 passed.
 - `cargo check --workspace`: warning-free.
 
@@ -98,8 +99,17 @@ Red / ignored:
      `hof_callback_int_parse_invalid_integer_executes_via_compiled_wasm`
      is no longer ignored and passes.
   4. **2026-05-08 `AllocFloatBox` / `AllocMutableCell` shared
-     refactor** — open. Wasm allocator refactor, last in the
-     interlude.
+     refactor** — **CLOSED 2026-05-10**. Both arms (and the
+     `emit_alloc_float_box_with_bits_local` helper) now route through
+     `emit_alloc_with_flag(SizeClass::Cell, …)`, so freed Cell /
+     TAG_FLOAT slots returned to `FREE_LIST_SLOT_CELL` by `__goby_drop`
+     are consumed before bump. The result pointer for the literal
+     arms moved to the depth-indexed spill `HELPER_SCRATCH_I32 +
+     heap_base_depth`, mirroring `CreateClosure` / `AllocReuse`, so
+     nested allocations inside `init_instrs` / `bits_instrs` are no
+     longer a hidden constraint. `required_heap_base_spill_count_instr`
+     returns `1 + child` for both arms to match. Two unit tests in
+     `gen_lower::emit::tests` pin the spill-count contract.
 
 - **Track GU resumes at GU-S3 once the bug-fix interlude is clear.**
   The GU-S3 plan is unchanged: extract `freshen_type_scheme` (with
