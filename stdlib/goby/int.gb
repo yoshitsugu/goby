@@ -19,10 +19,10 @@ digit_to_int_or_minus_one digit =
     _ -> -1
 
 minimum_int_div_10 : Int
-minimum_int_div_10 = -922337203685477580
+minimum_int_div_10 = -57646075230342348
 
 minimum_int : Int
-minimum_int = -9223372036854775808
+minimum_int = -576460752303423488
 
 to_string : Int -> String
 to_string value = "${value}"

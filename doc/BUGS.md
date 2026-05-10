@@ -40,21 +40,18 @@ Open bugs:
   - `crates/goby-wasm/src/gen_lower/value.rs` (TAG_FLOAT free-list
     accounting in `__goby_drop`).
 
-- **2026-05-09.** Stdlib `int.parse` cannot be compiled because its
-  `minimum_int : Int` constant declares the i64 boundary value
-  `-9223372036854775808`, which is outside Goby's 60-bit `Int`
-  representable range. `encode_int` rejects the literal and the
-  module fails with
-  `classification error: integer -9223372036854775808 is outside the 60-bit representable range`.
+- **2026-05-10.** Calling stdlib `int.parse` indirectly through a
+  HOF callback (e.g. `list.map xs to_i` where `to_i` is a top-level
+  decl whose body is `with invalid_integer ... in int.parse d`)
+  fails wasm emission with
+  `gen_lower/emit: unknown local 'invalid_integer'`.
 
-  Surfaced after Track HF (BUGS.md 2026-05-08, fixed 2026-05-09):
-  the cond/scrutinee scope fix lets `int.parse`'s body reach wasm
-  emission for the first time, and emission then trips this
-  pre-existing literal-range issue. Tests that exercise `int.parse`
-  via a HOF callback (the original BUGS.md 2026-05-08 minimal
-  program — `to_i = with invalid_integer ... in int.parse d` passed
-  to `list.map`) now stop here instead of at the unknown-local emit
-  error.
+  Surfaced while pinning regression coverage for the BUGS.md
+  2026-05-09 minimum_int fix: the direct-call shape
+  (`println (int.to_string (to_i "42"))`) now compiles and runs
+  correctly, but the same `to_i` passed as a `list.map` callback
+  trips the unknown-local emit error on the effect-operation name
+  `invalid_integer`. The boundary literal is no longer involved.
 
   Confirmed repro:
 
@@ -74,48 +71,88 @@ Open bugs:
   main =
     xs = push (push [] "1") "2"
     ys = map xs to_i
-    println "done"
+    println (int.to_string ys[0])
   ```
 
   Observed:
 
   ```text
-  classification error: integer -9223372036854775808 is outside the 60-bit representable range
+  runtime error: gen_lower/emit: unknown local 'invalid_integer'
   ```
 
   Triage notes:
 
-  - `stdlib/goby/int.gb` lines 21–25 declare both `minimum_int_div_10
-    = -922337203685477580` (within 60-bit range) and `minimum_int =
-    -9223372036854775808` (out of range). The latter is the offending
-    literal.
-  - `int.parse`'s `minimum_int` reference is used to detect the
-    `Int.MIN_VALUE` boundary case (`if acc == minimum_int` on line
-    69) so a positive overflow on negation is rejected as
-    `invalid_integer`.
-  - Goby's `Int` is a 60-bit tagged value, so the i64
-    `-9223372036854775808` literal is not representable as an `Int`
-    constant. The stdlib boundary check itself is misaligned with
-    the language's number model.
+  - Track HF (BUGS.md 2026-05-08, fixed 2026-05-09) routed four
+    `lower_value`/`lower_value_as_arg` callsites through the context-
+    aware variant so a bare `Var(top-level)` resolves to a `DeclCall`.
+    Track HF did not re-examine how an effect-operation name reaches
+    the function body when that body is reached as a HOF callback —
+    `invalid_integer` here is being looked up as a `LoadLocal` in the
+    callback's local frame instead of being lowered through the
+    handler frame's effect-operation slot.
+  - Direct calls to `to_i` (e.g.
+    `println (int.to_string (to_i "42"))`) compile and run correctly,
+    so the effect-handler scope is set up properly when the function
+    is invoked through a normal `DeclCall`. The defect appears only
+    when `to_i` is passed as a callback and invoked indirectly via
+    `IndirectCall`/`PushFuncHandle` through `list.map`.
 
-  Possible fixes (not yet decided):
-
-  1. Drop the boundary check from `int.parse` and document that it
-     accepts inputs that overflow the 60-bit range as
-     `invalid_integer`. Requires updating `int.parse` to detect
-     overflow earlier (e.g. by comparing against the Goby-Int
-     boundary `2^59 - 1` / `-2^59` rather than i64 `MIN_VALUE`).
-  2. Introduce a 64-bit unboxed integer literal form usable inside
-     stdlib but not directly exposed as `Int`. Larger language
-     change.
-  3. Express `minimum_int` as a runtime-computed value (e.g. derived
-     from `minimum_int_div_10 * 10 - 8` once `int.parse` itself is
-     correct). Avoids the literal entirely.
-
-  Either way, the fix is stdlib-side and language-design-touching;
-  it is intentionally out of scope for Track HF.
+  Out of scope for the immediate boundary-literal interlude
+  (BUGS.md 2026-05-09); to be addressed as part of a follow-up that
+  fixes effect-operation resolution in HOF callback frames.
 
 Resolved bugs:
+
+- **2026-05-09.** Stdlib `int.parse` could not be compiled because its
+  `minimum_int : Int` constant declared the i64 boundary value
+  `-9223372036854775808`, which is outside Goby's 60-bit `Int`
+  representable range (`[-2^59, 2^59 - 1]`). `encode_int` rejected the
+  literal and the module failed with
+  `classification error: integer -9223372036854775808 is outside the 60-bit representable range`.
+
+  Surfaced after Track HF (BUGS.md 2026-05-08, fixed 2026-05-09):
+  the cond/scrutinee scope fix let `int.parse`'s body reach wasm
+  emission for the first time, and emission then tripped this
+  pre-existing literal-range issue.
+
+  Root cause: `stdlib/goby/int.gb` declared `minimum_int =
+  -9223372036854775808` (i64 `MIN_VALUE`), copied from a parser model
+  written against an i64 integer type. Goby's `Int` is 60-bit tagged
+  with range `[-2^59, 2^59 - 1]`, so the literal was unrepresentable
+  and `encode_int` rejected it during wasm lowering.
+
+  Fix (BUGS.md Possible fix 1): re-align the stdlib boundary
+  constants to the Goby `Int` 60-bit boundary. The `int.parse`
+  algorithm itself is unchanged because it already uses the same
+  comparison shape (`acc < minimum_int_div_10`,
+  `acc == minimum_int_div_10 && digit > 8`,
+  `acc == minimum_int`). The new constants:
+
+  - `minimum_int_div_10 = -57646075230342348` (Rust/Goby truncating
+    integer division `INT_MIN / 10` toward zero, remainder `-8`).
+  - `minimum_int = -576460752303423488` (`-(1 << 59)`, Goby `Int`
+    minimum).
+
+  Decimal strings whose value falls outside `[-2^59, 2^59 - 1]` now
+  delegate to `StringParseError.invalid_integer`, matching the
+  language's number model. This is documented in
+  `doc/LANGUAGE_SPEC.md` §3 (`Int` literal range) and the
+  `goby/int.parse` stdlib note.
+
+  Regression coverage:
+
+  - `crates/goby-wasm/src/runtime_output_tests.rs`:
+    - `stdlib_int_parse_direct_call_executes_via_compiled_wasm`
+      pins `"42"` `"-7"` `"x"` → `42` `-7` `-1` (handler resume) on
+      the compiled-wasm path.
+    - `stdlib_int_parse_boundaries_execute_via_compiled_wasm`
+      pins INT_MIN / INT_MAX success and INT_MAX+1 / INT_MIN-1
+      `invalid_integer` fall-through on the compiled-wasm path.
+  - The HOF repro from the original BUGS.md (`to_i` passed to
+    `list.map`) now compiles past `encode_int` but trips a separate
+    `unknown local 'invalid_integer'` defect that is unrelated to the
+    boundary literal. That follow-up is the new BUGS.md 2026-05-10
+    entry above.
 
 - **2026-05-01.** A function whose body is a `case` over a `List` pattern
   that returns the head-element binder corrupted later string operations in

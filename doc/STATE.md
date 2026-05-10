@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-09 (post bug-fix interlude entry #1).
+Last updated: 2026-05-10 (post bug-fix interlude entry #2).
 
 ## Current Focus
 
@@ -40,13 +40,14 @@ commit `df57c32`):
 - `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`:
   the regular wasm suite passes (865 / 11 skipped after Track HF, 2026-05-09).
 
-**All-green (post-GU-S2 close, 2026-05-09)**:
+**All-green (post bug-fix interlude #2 close, 2026-05-10)**:
 
-- `cargo test -p goby-core --lib`: 942 passed / 2 ignored (up from
-  917 thanks to the new parser, formatter, and typecheck data-layer
-  fixtures introduced during GU-S2).
+- `cargo test -p goby-core --lib`: 942 passed / 2 ignored.
 - `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`:
-  864 passed / 12 skipped.
+  872 passed / 12 skipped (up from 864 thanks to the
+  list-pattern Bind regression suite added during interlude #1 and
+  the two `int.parse` compiled-wasm regressions added during
+  interlude #2).
 - `cargo test -p goby-lsp`: 56 passed.
 - `cargo check --workspace`: warning-free.
 
@@ -77,8 +78,24 @@ Red / ignored:
      tracked under PLAN.md §4.5d Track LB (truly-owned binders via
      emit-side or IR-level `Dup`).
   2. **2026-05-09 stdlib `int.parse` `minimum_int` literal range**
-     — open. Language-side stdlib fix, next in the queue.
-  3. **2026-05-08 `AllocFloatBox` / `AllocMutableCell` shared
+     — **CLOSED 2026-05-10** by re-aligning `stdlib/goby/int.gb`
+     boundary constants to the Goby Int 60-bit range
+     (`minimum_int = -576460752303423488`,
+     `minimum_int_div_10 = -57646075230342348`). Two compiled-wasm
+     regressions pinned in `runtime_output_tests.rs`
+     (`stdlib_int_parse_direct_call_executes_via_compiled_wasm`,
+     `stdlib_int_parse_boundaries_execute_via_compiled_wasm`).
+     Spec note added in `doc/LANGUAGE_SPEC.md` §3 (`Int` literal
+     range) and the `goby/int.parse` stdlib paragraph. The HOF
+     repro now compiles past `encode_int` but trips a separate
+     `unknown local 'invalid_integer'` HOF-callback effect-handler
+     scoping defect, captured as the new BUGS.md 2026-05-10 entry.
+  3. **2026-05-10 HOF-callback `int.parse` `unknown local
+     'invalid_integer'`** — open. Surfaced while pinning regression
+     coverage for #2; effect-operation name not resolved in HOF
+     callback frame (`list.map xs to_i`). Next in the queue, but a
+     non-trivial wasm-lowering fix.
+  4. **2026-05-08 `AllocFloatBox` / `AllocMutableCell` shared
      refactor** — open. Wasm allocator refactor, last in the
      interlude.
 - **Track GU resumes at GU-S3 once the bug-fix interlude is clear.**

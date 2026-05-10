@@ -2458,3 +2458,87 @@ main =
         "earlier println must not be clobbered by a later head_or interpolation"
     );
 }
+
+// BUGS.md 2026-05-09 regression: stdlib `int.parse` previously failed
+// wasm lowering because `minimum_int = -9223372036854775808` is outside
+// Goby's 60-bit Int range and `encode_int` rejected the literal. The fix
+// re-aligns the boundary constants to `INT_MIN = -(1<<59)`. These tests
+// must run via `compile_module` + `run_wasm_bytes_with_stdin` (compiled
+// wasm path) — `resolve_module_runtime_output` (interpreter) would not
+// surface the original failure.
+//
+// Direct-call success and the four-corner Goby Int boundary cases are
+// pinned. The BUGS.md HOF repro (`to_i` passed to `list.map`) still
+// trips a separate `unknown local 'invalid_integer'` defect in HOF
+// lowering that is unrelated to the boundary literal; that follow-up is
+// tracked as its own BUGS.md entry.
+#[test]
+fn stdlib_int_parse_direct_call_executes_via_compiled_wasm() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    let source = r#"
+import goby/int as int
+import goby/stdio
+
+to_i : String -> Int
+to_i d =
+  with
+    invalid_integer i -> resume -1
+  in
+    int.parse d
+
+main : Unit -> Unit can Print
+main =
+  println (int.to_string (to_i "42"))
+  println (int.to_string (to_i "-7"))
+  println (int.to_string (to_i "x"))
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let wasm = crate::compile_module(&module)
+        .expect("int.parse direct call should compile after minimum_int fix");
+    let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+        .expect("int.parse direct call wasm should execute");
+    assert_eq!(
+        output, "42\n-7\n-1\n",
+        "int.parse: digit-only input keeps its value; invalid input falls \
+         through the StringParseError handler and resumes -1"
+    );
+}
+
+#[test]
+fn stdlib_int_parse_boundaries_execute_via_compiled_wasm() {
+    let _guard = ENV_MUTEX.lock().unwrap();
+    // Exercises the four boundary cases relative to Goby's Int 60-bit range
+    // [-2^59, 2^59 - 1] = [-576460752303423488, 576460752303423487]:
+    //   * INT_MIN          → success, returns INT_MIN.
+    //   * INT_MAX          → success, returns INT_MAX.
+    //   * INT_MAX + 1      → invalid_integer, handler resumes 0.
+    //   * INT_MIN - 1      → invalid_integer, handler resumes 0.
+    let source = r#"
+import goby/int as int
+import goby/stdio
+
+parse_or_zero : String -> Int
+parse_or_zero d =
+  with
+    invalid_integer i -> resume 0
+  in
+    int.parse d
+
+main : Unit -> Unit can Print
+main =
+  println (int.to_string (parse_or_zero "-576460752303423488"))
+  println (int.to_string (parse_or_zero "576460752303423487"))
+  println (int.to_string (parse_or_zero "576460752303423488"))
+  println (int.to_string (parse_or_zero "-576460752303423489"))
+"#;
+    let module = parse_module(source).expect("parse should work");
+    let wasm =
+        crate::compile_module(&module).expect("int.parse boundary program should compile");
+    let output = crate::wasm_exec::run_wasm_bytes_with_stdin(&wasm, None)
+        .expect("int.parse boundary wasm should execute");
+    assert_eq!(
+        output, "-576460752303423488\n576460752303423487\n0\n0\n",
+        "Goby Int boundaries parse cleanly; values one past either end fall \
+         through invalid_integer and resume 0"
+    );
+}

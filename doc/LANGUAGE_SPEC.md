@@ -1,7 +1,7 @@
 # Goby Language Specification (Current)
 
 Status: active
-Last updated: 2026-05-08
+Last updated: 2026-05-10
 
 This file is the current language-spec source of truth for user-visible Goby
 syntax/semantics.
@@ -71,6 +71,12 @@ syntax/semantics.
 ## 3. Expressions and Statements
 
 - Literals: `Int`, `Float`, `String`, `Bool` (`True` / `False`), list, tuple.
+- `Int` literal range:
+  - Goby `Int` is a 60-bit signed integer with the closed range
+    `[-2^59, 2^59 - 1]` = `[-576460752303423488, 576460752303423487]`.
+  - User-written `Int` literals outside this range are a compile-time
+    error in the wasm backend (`encode_int` rejects them); stdlib code is
+    held to the same range.
 - `Float` literal and arithmetic contract:
   - `Float` is a distinct primitive type backed by IEEE 754 double precision
     (Wasm `f64`). It is not unified with `Int`; mixed arithmetic between
@@ -561,6 +567,9 @@ syntax/semantics.
 - Stdlib `goby/int` provides `parse : String -> Int can StringParseError`.
   - accepted form: optional leading `-` followed by one or more ASCII digits.
   - invalid input delegates to `StringParseError.invalid_integer : String -> Int`.
+  - decimal strings whose value falls outside the Goby `Int` 60-bit range
+    (`[-2^59, 2^59 - 1]` = `[-576460752303423488, 576460752303423487]`)
+    are treated as invalid input and likewise delegate to `invalid_integer`.
 - Stdlib `goby/int` also provides `to_string : Int -> String`.
   - result is canonical base-10 decimal text (`0`, `123`, `-7`).
 - `Print` / `Read` implicit availability is anchored at stdlib prelude (`goby/prelude`) `@embed` metadata.
