@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-11 (Track GU-S3 D-6 `freshen_type_scheme` extraction complete; effect-side call site migrated, behaviour unchanged).
+Last updated: 2026-05-11 (Track GU-S3 union ctor application sub-task planning complete after three Codex plan reviews; 4-commit split CA-1/CA-2/CA-3a/CA-3b ready to execute, implementation not yet started).
 
 ## Current Focus
 
@@ -66,22 +66,70 @@ Red / ignored:
   (BUGS.md open list empty). The first GU-S3 sub-task — D-6 (extract
   `freshen_type_scheme` and migrate the existing effect-side
   `instantiate_handler_clause_signature` to use it, behaviour
-  unchanged) — landed 2026-05-11. The shared helper lives in
-  `crates/goby-core/src/typecheck_unify.rs` and is the single
-  declaration-side template freshener that the remaining GU-S3
-  sub-tasks (union ctor application, ctor-pattern type checking,
-  generic-record ctor application, generic-record field access,
-  cross-module imports of generic types) route through. Next pick is
-  **union constructor application** through `freshen_type_scheme`
-  (`typecheck_call.rs` ctor lookup path); see `doc/PLAN_GU.md` §6
-  GU-S3 for the deliverable list.
+  unchanged) — landed 2026-05-11 (commit `5cf0947`). The shared
+  helper lives in `crates/goby-core/src/typecheck_unify.rs` and is
+  the single declaration-side template freshener that the remaining
+  GU-S3 sub-tasks (union ctor application, ctor-pattern type
+  checking, generic-record ctor application, generic-record field
+  access, cross-module imports of generic types) route through.
 
-  An adjacent existing-behaviour quirk surfaced during Pass 2: when
-  `clause_name` is already qualified (`Eff.op`),
-  `instantiate_handler_clause_signature` will perform an
-  `Eff.Eff.op` lookup. Not a D-6 regression; flagged here so a
-  later GU-S3 / resume-typing sub-task can address it deliberately
-  rather than as a drive-by.
+- **Active sub-task: union ctor application (planning complete,
+  implementation pending).** PLAN_GU.md §6 GU-S3 acceptance items
+  for this sub-task: `Just 42 : Maybe Int` typechecks, two `Just 42`
+  / `Just "hi"` call sites in the same module type-check
+  independently, arity / type mismatches surface through the
+  existing function-call diagnostic path. Three Codex plan-review
+  rounds (2026-05-11) exposed five design holes (Call arm ignores
+  call-site unify; `are_compatible` doesn't bind `Ty::Var`;
+  `next_id=0` collides for nested ctors; rigid vs flexible
+  `Ty::Var` indistinguishable; `next_id` seed needs locals+globals
+  walk). The sub-task is now split into **4 commits**:
+
+  - **CA-1**: Rewrite `typecheck_check.rs::infer_expr_ty` `Expr::Call`
+    arm to use call-site unify via a new `pub(crate)` entry in
+    `typecheck_call.rs`. General precision improvement; no ctor
+    registration change.
+  - **CA-2**: Add a `unifies_with_annotation` helper that binds
+    only flexible (`__goby_fresh_ty_*` prefix) `Ty::Var`, leaves
+    rigid `a` rigid. Swap `typecheck_stmt.rs` return-type comparison
+    to it. `are_compatible` untouched.
+  - **CA-3a**: Thread `next_id: &mut usize` through `infer_expr_ty`
+    and through `typecheck_call.rs::resolve_function_value_ty` so a
+    single inference walk shares one counter. `check_expr` wrapper
+    seeds `next_id = next_fresh_ty_id_seed(env)` (locals + globals
+    walk, one-past-max contract). Plumbing only, behaviour unchanged.
+  - **CA-3b**: Drop the `is_generic -> Ty::Unknown` placeholder in
+    `inject_type_constructors` Union arm. Add Var/Qualified-arm
+    ctor-template freshen in `infer_expr_ty`. Make
+    `instantiate_ty_with_fresh_type_vars` idempotent on
+    `__goby_fresh_ty_*` prefix to avoid double-freshen. Share a
+    `CTOR_SOURCE_PREFIX/SUFFIX` constant between build.rs and a new
+    `TypeEnv::is_ctor_binding(name)`. Tests pin the acceptance
+    shapes (`Just 42`, `Nothing`, nested `Just Nothing`,
+    `Pair 1 "x"`, two `Just`s in one module, `[Nothing, Just 1]`,
+    non-generic regressions, qualified ctors, wrong-type/arity
+    reject).
+
+  Planning artefacts:
+  `~/.claude/workspaces/home_yoshitsugu_src_github.com_yoshitsugu_goby/implementation-plan.md`
+  and `progress-log.md`. Execution starts in the next session from
+  CA-1, one commit per dev-flow Step 3-7 cycle. Acceptance bar is
+  `cargo test -p goby-core --lib` green at each commit, baseline
+  948 passed / 2 ignored.
+
+  Deferred follow-ups (out of scope for this sub-task; tracked in
+  `progress-log.md`): Pipeline (`42 |> Just`) / MethodCall ctor
+  lookup, ctor-as-value (`map xs Just`), case-pattern ctor binder
+  inference, generic record support, cross-module imports of
+  generic unions, ambiguity validation, IR-lowering generic-ctor
+  unsupported path, expected-type-driven bare ctor disambiguation,
+  generic ctor arity / wrong-arg diagnostic wording.
+
+  An adjacent existing-behaviour quirk surfaced during D-6 Pass 2
+  remains open: when `clause_name` is already qualified (`Eff.op`),
+  `instantiate_handler_clause_signature` performs an `Eff.Eff.op`
+  lookup. Not a regression; flagged for a later GU-S3 / resume-typing
+  sub-task.
 
 - **Bug-fix interlude (history).** Track GU was paused before GU-S3
   until every open BUGS.md entry was fixed and covered by a
@@ -132,15 +180,17 @@ Red / ignored:
      `gen_lower::emit::tests` pin the spill-count contract.
 
 - **Track GU-S3 sub-task ordering (post D-6).** D-6
-  `freshen_type_scheme` extraction is the only completed sub-task;
-  the rest of GU-S3 is still ahead. Route every union constructor
-  application, constructor-pattern type-check, generic-record
-  constructor application, and generic-record field access through
-  the shared helper. Constructor-name ambiguity resolution
-  (qualified > scrutinee-pinned > local-shadows-imported >
-  ambiguity diagnostic) and cross-module imports of generic unions
-  also land in GU-S3. See `doc/PLAN_GU.md` §6 GU-S3 for the
-  deliverable list.
+  `freshen_type_scheme` extraction is complete; **union ctor
+  application** is the in-flight sub-task (split into CA-1/CA-2/
+  CA-3a/CA-3b, see above; planning complete, implementation
+  pending). Queued after union ctor application: constructor-
+  pattern type-check with binder inference, generic-record ctor
+  application, generic-record field access (including PC-shaped
+  function-typed fields with effect rows), constructor-name
+  ambiguity resolution (qualified > scrutinee-pinned >
+  local-shadows-imported > ambiguity diagnostic), cross-module
+  imports of generic unions and records. See `doc/PLAN_GU.md` §6
+  GU-S3 for the deliverable list.
 
 **Queued behind GU:**
 
