@@ -104,7 +104,7 @@ Red / ignored:
   checking, generic-record ctor application, generic-record field
   access, cross-module imports of generic types) route through.
 
-- **Active sub-task: union ctor application (CA-1 landed, CA-2 next).**
+- **Active sub-task: union ctor application (CA-1/CA-2/CA-3a landed, CA-3b next).**
   PLAN_GU.md §6 GU-S3 acceptance items for this sub-task: `Just 42 :
   Maybe Int` typechecks, two `Just 42` / `Just "hi"` call sites in the
   same module type-check independently, arity / type mismatches

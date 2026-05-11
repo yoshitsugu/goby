@@ -423,10 +423,10 @@ impl TypeEnv {
 /// `__goby_fresh_row_N` row variable. Used by `are_compatible` to seed
 /// `next_id` so freshly introduced row variables cannot collide with rows
 /// that were already freshened earlier in the typecheck pipeline.
-/// CA-2 で `typecheck_unify::unifies_with_annotation` の `next_id` seed に
-/// 流用するため `pub(crate)` に上げた。`are_compatible` 内で既存に使われて
-/// いる用途は変わらない。`__goby_fresh_row_N` の最大 N + 1 (one past max)
-/// を返す。
+/// CA-2: Elevated to `pub(crate)` so its `next_id` seed can be reused by
+/// `typecheck_unify::unifies_with_annotation`. The existing use within
+/// `are_compatible` is unchanged. Returns one past the max `N` found across
+/// every `__goby_fresh_row_N` row variable in `ty` ("one past max").
 pub(crate) fn max_fresh_row_id(ty: &Ty) -> usize {
     fn extract(name: &str) -> Option<usize> {
         const PREFIX: &str = "__goby_fresh_row_";
