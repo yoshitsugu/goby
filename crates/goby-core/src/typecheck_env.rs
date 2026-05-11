@@ -182,6 +182,75 @@ pub(crate) struct UnionVariantInfo {
     pub(crate) arg_types: Vec<Ty>,
 }
 
+/// GU-S3 constructor-name ambiguity resolution: structured outcome of looking
+/// up a union variant by `(type_qualifier, ctor)`, optionally pinned by the
+/// scrutinee's already-known type.
+///
+/// Resolution priority (PLAN_GU §6 GU-S3):
+///   1. `Some(t)` → restrict to union `t`; `DoesNotBelongToScrutinee` when the
+///      scrutinee is concrete and clashes, `MissingQualifiedCtor` when `t`
+///      itself or its `Ctor` is missing.
+///   2. concrete scrutinee `Ty::Con { name, .. }` → restrict to that union.
+///   3. otherwise: unique match wins, ≥2 matches collapse into `Ambiguous`.
+///
+/// `Unknown` covers "no union declares this ctor at all" so callers can keep
+/// the existing tolerant `Ty::Unknown` fallback for unknown constructors
+/// (the dedicated diagnostic for that case lives elsewhere).
+pub(crate) enum CtorLookupResult<'a> {
+    Resolved {
+        union: &'a UnionTypeInfo,
+        variant: &'a UnionVariantInfo,
+    },
+    /// Qualified form `T.Ctor` where `T` does declare `Ctor`, but the
+    /// scrutinee is concretely typed as another union `U`; or a bare
+    /// `Ctor` where the scrutinee is concretely typed as `U` and `U` does
+    /// not declare `Ctor`.
+    ///
+    /// Fields are consumed by the Step 3 diagnostic helpers
+    /// (`err_ctor_does_not_belong`) — until then the suite would flag them
+    /// as `dead_code`, so the variant-level `allow` keeps the warning-free
+    /// invariant. The `allow` will be removed in Step 3.
+    #[allow(dead_code)]
+    DoesNotBelongToScrutinee {
+        requested: Option<String>,
+        ctor: String,
+        scrutinee: Ty,
+    },
+    /// Qualified form `T.Ctor` where `T` is not a known union, or where
+    /// `T` is known but does not declare `Ctor` (no scrutinee pinning).
+    /// See note on `DoesNotBelongToScrutinee` re: the `allow(dead_code)`.
+    #[allow(dead_code)]
+    MissingQualifiedCtor {
+        qualifier: String,
+        ctor: String,
+    },
+    /// Two or more unions declare `ctor`; the caller must emit the
+    /// dedicated "use `TypeName.Ctor`" diagnostic and fall back to
+    /// `Ty::Unknown`. Candidates are sorted by `type_name` for stable
+    /// diagnostic wording.
+    /// See note on `DoesNotBelongToScrutinee` re: the `allow(dead_code)`.
+    #[allow(dead_code)]
+    Ambiguous {
+        ctor: String,
+        candidates: Vec<CtorCandidate>,
+    },
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CtorCandidate {
+    pub(crate) type_name: String,
+    /// Origin tag retained so a later cross-module sub-task can extend the
+    /// disambiguation rules (local-shadows-imported) without churning the
+    /// helper signature. Today every candidate is `Local`.
+    pub(crate) origin: CtorOrigin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CtorOrigin {
+    Local,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ResumeContext {
     pub(crate) expected_arg_ty: Option<Ty>,
@@ -280,30 +349,176 @@ impl TypeEnv {
     ///   `HashMap` rehashes) and return the first variant whose `ctor`
     ///   matches.
     ///
-    /// `Ambiguous` ctor names (the same `ctor` declared in two unions) are
-    /// left to a later sub-task — this helper just commits to the first
-    /// match in alphabetical order. That makes test output stable; the real
-    /// ambiguity diagnostic (`qualified > scrutinee-pinned > local-shadows-
-    /// imported`) is queued under PLAN_GU §6 GU-S3.
+    /// GU-S3 ambiguity-resolution-era wrapper: kept as a thin facade that
+    /// returns `Some(_)` only on a clean `Resolved` outcome. Existing
+    /// constructor-pattern paths that still want a tolerant "give me a
+    /// match or fall back to `Ty::Unknown`" semantics route through this.
+    ///
+    /// New callers should use `resolve_ctor` directly so they can branch on
+    /// `DoesNotBelongToScrutinee` / `MissingQualifiedCtor` / `Ambiguous`
+    /// without losing information.
     pub(crate) fn lookup_union_variant(
         &self,
         type_qualifier: Option<&str>,
         ctor: &str,
     ) -> Option<(&UnionTypeInfo, &UnionVariantInfo)> {
-        if let Some(t) = type_qualifier {
-            let info = self.union_types.get(t)?;
-            let variant = info.variants.iter().find(|v| v.ctor == ctor)?;
-            return Some((info, variant));
+        match self.resolve_ctor(type_qualifier, ctor, None) {
+            CtorLookupResult::Resolved { union, variant } => Some((union, variant)),
+            _ => None,
         }
+    }
+
+    /// GU-S3 constructor-name ambiguity resolution entry point.
+    ///
+    /// Resolution priority (PLAN_GU §6 GU-S3):
+    ///   1. `type_qualifier = Some(t)` restricts the candidate set to union `t`.
+    ///      - Unknown `t` → `MissingQualifiedCtor`.
+    ///      - `t` has no variant `ctor` → `MissingQualifiedCtor`.
+    ///      - `scrutinee = Some(Ty::Con { name: u, .. })` with `u != t` →
+    ///        `DoesNotBelongToScrutinee`.
+    ///   2. `scrutinee = Some(Ty::Con { name: u, .. })` pins the union; if `u`
+    ///      does not declare `ctor`, that's `DoesNotBelongToScrutinee` too.
+    ///   3. Otherwise we walk every union in `type_name`-sorted order. A
+    ///      unique match resolves; ≥2 matches collapse into `Ambiguous`
+    ///      with the candidate union names (sorted, deduped).
+    ///   4. No match anywhere → `Unknown`.
+    ///
+    /// **Caller contract** (Codex pass-2 follow-up): the helper compares
+    /// `scrutinee` shape via direct `match` and does NOT walk
+    /// `type_aliases`. Callers must pass an already-alias-resolved scrutinee
+    /// (`env.resolve_alias(scrutinee_ty, 0)`) when the scrutinee may be a
+    /// `Ty::Var` alias to a concrete `Ty::Con`. The CP path in
+    /// `typecheck_check.rs::resolve_ctor_pattern_binder_tys` already
+    /// resolves aliases before calling; new callers must do the same.
+    ///
+    /// The helper never emits diagnostics; it is a pure lookup. Callers
+    /// translate the structured outcome into diagnostics using
+    /// `typecheck_diag::err_ctor_*` helpers.
+    pub(crate) fn resolve_ctor(
+        &self,
+        type_qualifier: Option<&str>,
+        ctor: &str,
+        scrutinee: Option<&Ty>,
+    ) -> CtorLookupResult<'_> {
+        let scrutinee_union_name: Option<&str> = match scrutinee {
+            Some(Ty::Con { name, .. }) => Some(name.as_str()),
+            _ => None,
+        };
+
+        if let Some(t) = type_qualifier {
+            // Step 1: qualified form `T.Ctor` strictly restricts the candidate.
+            let Some(info) = self.union_types.get(t) else {
+                return CtorLookupResult::MissingQualifiedCtor {
+                    qualifier: t.to_string(),
+                    ctor: ctor.to_string(),
+                };
+            };
+            if !info.variants.iter().any(|v| v.ctor == ctor) {
+                return CtorLookupResult::MissingQualifiedCtor {
+                    qualifier: t.to_string(),
+                    ctor: ctor.to_string(),
+                };
+            }
+            // If the scrutinee is concretely typed as a different union,
+            // emit D-2 before the freshen/unify path silently passes.
+            if let Some(scrut_name) = scrutinee_union_name
+                && scrut_name != t
+            {
+                return CtorLookupResult::DoesNotBelongToScrutinee {
+                    requested: Some(t.to_string()),
+                    ctor: ctor.to_string(),
+                    scrutinee: scrutinee.cloned().unwrap_or(Ty::Unknown),
+                };
+            }
+            let variant = info
+                .variants
+                .iter()
+                .find(|v| v.ctor == ctor)
+                .expect("variant existence checked above");
+            return CtorLookupResult::Resolved {
+                union: info,
+                variant,
+            };
+        }
+
+        // Step 2: bare `Ctor` with a concrete scrutinee pin.
+        if let Some(scrut_name) = scrutinee_union_name {
+            // Known union: pin restricts the candidate set.
+            if let Some(info) = self.union_types.get(scrut_name) {
+                return match info.variants.iter().find(|v| v.ctor == ctor) {
+                    Some(variant) => CtorLookupResult::Resolved {
+                        union: info,
+                        variant,
+                    },
+                    None => CtorLookupResult::DoesNotBelongToScrutinee {
+                        requested: None,
+                        ctor: ctor.to_string(),
+                        scrutinee: scrutinee.cloned().unwrap_or(Ty::Unknown),
+                    },
+                };
+            }
+            // Codex pass-1 指摘: `Ty::Con` が既知 record 型 (e.g. `Box`,
+            // `Pair`) を指している場合は「scrutinee は別ユニオン型」と等価
+            // なので、union ctor を global search に逃がしてはいけない。
+            // 注意: `record_types` の **key は constructor** であり
+            // `type_name` ではない (`type Wrapped a = Box(value: a)` だと
+            // key は "Box"、`type_name` は "Wrapped")。よって
+            // `contains_key(scrut_name)` ではなく values の `type_name`
+            // を走査する。それ以外 (= 完全に未登録の `Ty::Con` 名) は
+            // global search にフォールバックして既存挙動を維持する。
+            if self.record_types.values().any(|r| r.type_name == scrut_name) {
+                return CtorLookupResult::DoesNotBelongToScrutinee {
+                    requested: None,
+                    ctor: ctor.to_string(),
+                    scrutinee: scrutinee.cloned().unwrap_or(Ty::Unknown),
+                };
+            }
+            // Unknown `Ty::Con` name — fall through to global ctor search
+            // (`Unknown` or `Ambiguous` exactly as for the no-scrutinee
+            // case). Preserves the pre-ambiguity tolerant behaviour for
+            // partially-inferred scrutinees.
+            return self.resolve_ctor_without_pin(ctor);
+        }
+
+        // Step 3: bare `Ctor`, no scrutinee pin — global search.
+        self.resolve_ctor_without_pin(ctor)
+    }
+
+    fn resolve_ctor_without_pin(&self, ctor: &str) -> CtorLookupResult<'_> {
         let mut names: Vec<&String> = self.union_types.keys().collect();
         names.sort();
-        for name in names {
-            let info = &self.union_types[name];
-            if let Some(variant) = info.variants.iter().find(|v| v.ctor == ctor) {
-                return Some((info, variant));
+        let mut hits: Vec<&str> = Vec::new();
+        for name in &names {
+            let info = &self.union_types[*name];
+            if info.variants.iter().any(|v| v.ctor == ctor) {
+                hits.push(name.as_str());
             }
         }
-        None
+        match hits.len() {
+            0 => CtorLookupResult::Unknown,
+            1 => {
+                let info = &self.union_types[hits[0]];
+                let variant = info
+                    .variants
+                    .iter()
+                    .find(|v| v.ctor == ctor)
+                    .expect("variant existence checked above");
+                CtorLookupResult::Resolved {
+                    union: info,
+                    variant,
+                }
+            }
+            _ => CtorLookupResult::Ambiguous {
+                ctor: ctor.to_string(),
+                candidates: hits
+                    .into_iter()
+                    .map(|n| CtorCandidate {
+                        type_name: n.to_string(),
+                        origin: CtorOrigin::Local,
+                    })
+                    .collect(),
+            },
+        }
     }
 
     pub(crate) fn is_effect_op(&self, name: &str) -> bool {
@@ -675,5 +890,443 @@ mod effect_row_tests {
         assert!(row.fixed.contains("Print"));
         assert_eq!(row.tail, Some(RowVarId("e".to_string())));
         assert!(!row.is_closed());
+    }
+}
+
+/// GU-S3 constructor-name ambiguity resolution pins for `TypeEnv::resolve_ctor`.
+///
+/// These cover the rule table from PLAN_GU §6 — qualified > scrutinee-pinned >
+/// unique-match > ambiguous, with a separate signal for "qualifier exists but
+/// the variant is missing" (`MissingQualifiedCtor`) vs "qualifier conflicts
+/// with the scrutinee" (`DoesNotBelongToScrutinee`).
+#[cfg(test)]
+mod resolve_ctor_tests {
+    use super::*;
+
+    fn variant(ctor: &str, idx: u32, args: Vec<Ty>) -> UnionVariantInfo {
+        UnionVariantInfo {
+            ctor: ctor.to_string(),
+            variant_index: idx,
+            arg_types: args,
+        }
+    }
+
+    fn union(name: &str, type_params: Vec<&str>, variants: Vec<UnionVariantInfo>) -> UnionTypeInfo {
+        UnionTypeInfo {
+            type_name: name.to_string(),
+            type_params: type_params.iter().map(|s| s.to_string()).collect(),
+            variants,
+        }
+    }
+
+    fn env_with_unions(unions: Vec<UnionTypeInfo>) -> TypeEnv {
+        let mut env = TypeEnv::empty();
+        for u in unions {
+            env.union_types.insert(u.type_name.clone(), u);
+        }
+        env
+    }
+
+    #[test]
+    fn unique_bare_ctor_resolves_to_only_union() {
+        let env = env_with_unions(vec![union(
+            "Maybe",
+            vec!["a"],
+            vec![
+                variant("Just", 0, vec![Ty::Var("a".to_string())]),
+                variant("Nothing", 1, vec![]),
+            ],
+        )]);
+        match env.resolve_ctor(None, "Just", None) {
+            CtorLookupResult::Resolved { union, variant } => {
+                assert_eq!(union.type_name, "Maybe");
+                assert_eq!(variant.ctor, "Just");
+            }
+            other => panic!("expected Resolved, got {:?}", debug_label(&other)),
+        }
+    }
+
+    #[test]
+    fn unknown_ctor_returns_unknown() {
+        let env = env_with_unions(vec![union(
+            "Color",
+            vec![],
+            vec![variant("Red", 0, vec![]), variant("Blue", 1, vec![])],
+        )]);
+        match env.resolve_ctor(None, "Green", None) {
+            CtorLookupResult::Unknown => {}
+            other => panic!("expected Unknown, got {:?}", debug_label(&other)),
+        }
+    }
+
+    #[test]
+    fn qualified_lookup_unknown_type_returns_missing_qualified_ctor() {
+        let env = env_with_unions(vec![]);
+        match env.resolve_ctor(Some("Maybe"), "Just", None) {
+            CtorLookupResult::MissingQualifiedCtor { qualifier, ctor } => {
+                assert_eq!(qualifier, "Maybe");
+                assert_eq!(ctor, "Just");
+            }
+            other => panic!(
+                "expected MissingQualifiedCtor, got {:?}",
+                debug_label(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn qualified_lookup_known_type_missing_ctor_returns_missing_qualified_ctor() {
+        let env = env_with_unions(vec![union(
+            "Maybe",
+            vec!["a"],
+            vec![variant("Just", 0, vec![Ty::Var("a".to_string())])],
+        )]);
+        match env.resolve_ctor(Some("Maybe"), "Nothing", None) {
+            CtorLookupResult::MissingQualifiedCtor { qualifier, ctor } => {
+                assert_eq!(qualifier, "Maybe");
+                assert_eq!(ctor, "Nothing");
+            }
+            other => panic!(
+                "expected MissingQualifiedCtor, got {:?}",
+                debug_label(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn qualified_lookup_succeeds_when_scrutinee_matches() {
+        let env = env_with_unions(vec![union(
+            "Maybe",
+            vec!["a"],
+            vec![variant("Just", 0, vec![Ty::Var("a".to_string())])],
+        )]);
+        let scrutinee = Ty::Con {
+            name: "Maybe".to_string(),
+            args: vec![Ty::Int],
+        };
+        match env.resolve_ctor(Some("Maybe"), "Just", Some(&scrutinee)) {
+            CtorLookupResult::Resolved { union, .. } => assert_eq!(union.type_name, "Maybe"),
+            other => panic!("expected Resolved, got {:?}", debug_label(&other)),
+        }
+    }
+
+    #[test]
+    fn qualified_lookup_conflicting_scrutinee_returns_does_not_belong() {
+        let env = env_with_unions(vec![
+            union(
+                "Maybe",
+                vec!["a"],
+                vec![variant("Just", 0, vec![Ty::Var("a".to_string())])],
+            ),
+            union(
+                "Result",
+                vec!["a", "b"],
+                vec![
+                    variant("Ok", 0, vec![Ty::Var("a".to_string())]),
+                    variant("Err", 1, vec![Ty::Var("b".to_string())]),
+                ],
+            ),
+        ]);
+        let scrutinee = Ty::Con {
+            name: "Result".to_string(),
+            args: vec![Ty::Int, Ty::Str],
+        };
+        match env.resolve_ctor(Some("Maybe"), "Just", Some(&scrutinee)) {
+            CtorLookupResult::DoesNotBelongToScrutinee {
+                requested,
+                ctor,
+                scrutinee: s,
+            } => {
+                assert_eq!(requested.as_deref(), Some("Maybe"));
+                assert_eq!(ctor, "Just");
+                match s {
+                    Ty::Con { name, .. } => assert_eq!(name, "Result"),
+                    _ => panic!("scrutinee should be Ty::Con"),
+                }
+            }
+            other => panic!(
+                "expected DoesNotBelongToScrutinee, got {:?}",
+                debug_label(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn scrutinee_pinned_bare_ctor_resolves_to_pinned_union() {
+        let env = env_with_unions(vec![
+            union(
+                "Result",
+                vec!["a", "b"],
+                vec![
+                    variant("Ok", 0, vec![Ty::Var("a".to_string())]),
+                    variant("Err", 1, vec![Ty::Var("b".to_string())]),
+                ],
+            ),
+            union(
+                "ParseResult",
+                vec!["a"],
+                vec![
+                    variant("Ok", 0, vec![Ty::Var("a".to_string())]),
+                    variant("Failed", 1, vec![Ty::Str]),
+                ],
+            ),
+        ]);
+        let scrutinee = Ty::Con {
+            name: "ParseResult".to_string(),
+            args: vec![Ty::Int],
+        };
+        match env.resolve_ctor(None, "Ok", Some(&scrutinee)) {
+            CtorLookupResult::Resolved { union, .. } => {
+                assert_eq!(union.type_name, "ParseResult");
+            }
+            other => panic!("expected Resolved, got {:?}", debug_label(&other)),
+        }
+    }
+
+    #[test]
+    fn scrutinee_pinned_bare_ctor_missing_in_pin_returns_does_not_belong() {
+        let env = env_with_unions(vec![
+            union(
+                "Color",
+                vec![],
+                vec![variant("Red", 0, vec![]), variant("Blue", 1, vec![])],
+            ),
+            // Another union declares `Green` so a fall-through global walk
+            // would find it; the scrutinee pin must prevent that.
+            union("Hue", vec![], vec![variant("Green", 0, vec![])]),
+        ]);
+        let scrutinee = Ty::Con {
+            name: "Color".to_string(),
+            args: vec![],
+        };
+        match env.resolve_ctor(None, "Green", Some(&scrutinee)) {
+            CtorLookupResult::DoesNotBelongToScrutinee {
+                requested,
+                ctor,
+                scrutinee: s,
+            } => {
+                assert!(requested.is_none());
+                assert_eq!(ctor, "Green");
+                match s {
+                    Ty::Con { name, .. } => assert_eq!(name, "Color"),
+                    _ => panic!("scrutinee should be Ty::Con"),
+                }
+            }
+            other => panic!(
+                "expected DoesNotBelongToScrutinee, got {:?}",
+                debug_label(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn bare_ctor_with_two_unions_returns_ambiguous_with_sorted_candidates() {
+        // Insert in reverse alphabetical order to verify the helper sorts.
+        let env = env_with_unions(vec![
+            union(
+                "Result",
+                vec!["a", "b"],
+                vec![variant("Err", 0, vec![Ty::Var("b".to_string())])],
+            ),
+            union(
+                "ParseResult",
+                vec!["a"],
+                vec![variant("Err", 0, vec![Ty::Str])],
+            ),
+        ]);
+        match env.resolve_ctor(None, "Err", None) {
+            CtorLookupResult::Ambiguous { ctor, candidates } => {
+                assert_eq!(ctor, "Err");
+                let names: Vec<String> = candidates.iter().map(|c| c.type_name.clone()).collect();
+                assert_eq!(names, vec!["ParseResult".to_string(), "Result".to_string()]);
+                for c in &candidates {
+                    assert_eq!(c.origin, CtorOrigin::Local);
+                }
+            }
+            other => panic!("expected Ambiguous, got {:?}", debug_label(&other)),
+        }
+    }
+
+    #[test]
+    fn scrutinee_pin_to_known_record_does_not_fall_back_to_global_walk() {
+        // Codex pass-1/-2 follow-up: when the scrutinee is
+        // `Ty::Con { name: R, .. }` and `R` is a known record (not a
+        // union), the helper must NOT fall back to global ctor search.
+        // The user-facing behaviour: pattern-match on a `Wrapped` value
+        // with `Just x ->` is a type error, not "Just resolves via the
+        // Maybe union".
+        //
+        // **Type name != constructor name** is the load-bearing shape
+        // here: `record_types` is keyed on `constructor`, so a naive
+        // `contains_key(scrut_name)` check would silently miss this
+        // case. Pin the `type_name`-based check via `record_types.values()`.
+        let mut env = TypeEnv::empty();
+        env.record_types.insert(
+            "MakeWrapped".to_string(),
+            RecordTypeInfo {
+                type_name: "Wrapped".to_string(),
+                type_params: vec!["a".to_string()],
+                constructor: "MakeWrapped".to_string(),
+                fields: HashMap::new(),
+            },
+        );
+        env.union_types.insert(
+            "Maybe".to_string(),
+            union(
+                "Maybe",
+                vec!["a"],
+                vec![variant("Just", 0, vec![Ty::Var("a".to_string())])],
+            ),
+        );
+        let scrutinee = Ty::Con {
+            name: "Wrapped".to_string(),
+            args: vec![Ty::Int],
+        };
+        match env.resolve_ctor(None, "Just", Some(&scrutinee)) {
+            CtorLookupResult::DoesNotBelongToScrutinee {
+                requested,
+                ctor,
+                scrutinee: s,
+            } => {
+                assert!(requested.is_none());
+                assert_eq!(ctor, "Just");
+                match s {
+                    Ty::Con { name, .. } => assert_eq!(name, "Wrapped"),
+                    _ => panic!("scrutinee should be Ty::Con"),
+                }
+            }
+            other => panic!(
+                "expected DoesNotBelongToScrutinee, got {:?}",
+                debug_label(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn scrutinee_pin_with_alias_resolved_to_concrete_pins() {
+        // Codex pass-2 follow-up: helper expects an already-alias-resolved
+        // scrutinee. Document the contract by pinning the post-resolve
+        // shape — a `Ty::Con { name: "Maybe", .. }` (presumed to come from
+        // a `resolve_alias`-applied alias) does pin to the Maybe union,
+        // while an unresolved `Ty::Var("AliasName")` falls through to
+        // global search.
+        let env = env_with_unions(vec![
+            union(
+                "Maybe",
+                vec!["a"],
+                vec![variant("Just", 0, vec![Ty::Var("a".to_string())])],
+            ),
+            union(
+                "Result",
+                vec!["a", "b"],
+                vec![variant("Just", 0, vec![Ty::Var("a".to_string())])],
+            ),
+        ]);
+        // post-alias-resolve concrete pin: deterministic resolve to Maybe.
+        let resolved = Ty::Con {
+            name: "Maybe".to_string(),
+            args: vec![Ty::Int],
+        };
+        match env.resolve_ctor(None, "Just", Some(&resolved)) {
+            CtorLookupResult::Resolved { union, .. } => assert_eq!(union.type_name, "Maybe"),
+            other => panic!("expected Resolved, got {:?}", debug_label(&other)),
+        }
+        // unresolved alias-name `Ty::Var` is treated as no pin.
+        let unresolved = Ty::Var("Alias".to_string());
+        match env.resolve_ctor(None, "Just", Some(&unresolved)) {
+            CtorLookupResult::Ambiguous { .. } => {}
+            other => panic!(
+                "expected Ambiguous (no concrete pin via Var), got {:?}",
+                debug_label(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn non_concrete_scrutinee_falls_back_to_global_walk() {
+        // Codex pass-1 follow-up: `Ty::Unknown` / `Ty::Var` / `Ty::Fun`
+        // do not pin the union — the helper should behave exactly as if
+        // `scrutinee = None`.
+        let env = env_with_unions(vec![
+            union("A", vec![], vec![variant("X", 0, vec![])]),
+            union("B", vec![], vec![variant("X", 0, vec![])]),
+        ]);
+        for scrutinee in [
+            Ty::Unknown,
+            Ty::Var("__goby_fresh_ty_0".to_string()),
+            Ty::Fun {
+                params: vec![Ty::Int],
+                result: Box::new(Ty::Int),
+                effects: EffectRow::closed_empty(),
+            },
+        ] {
+            match env.resolve_ctor(None, "X", Some(&scrutinee)) {
+                CtorLookupResult::Ambiguous { ctor, candidates } => {
+                    assert_eq!(ctor, "X");
+                    let names: Vec<String> =
+                        candidates.iter().map(|c| c.type_name.clone()).collect();
+                    assert_eq!(names, vec!["A".to_string(), "B".to_string()]);
+                }
+                other => panic!(
+                    "expected Ambiguous (no concrete pin), got {:?}",
+                    debug_label(&other)
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn scrutinee_pin_with_unknown_union_falls_back_to_global_walk() {
+        // Scrutinee references `MysteryUnion` that the env does not know
+        // about. The helper should fall back to the no-scrutinee path and
+        // still return Ambiguous if multiple unions declare the ctor —
+        // mirroring the resolved CP path that tolerates an unknown
+        // scrutinee shape.
+        let env = env_with_unions(vec![
+            union("A", vec![], vec![variant("X", 0, vec![])]),
+            union("B", vec![], vec![variant("X", 0, vec![])]),
+        ]);
+        let scrutinee = Ty::Con {
+            name: "MysteryUnion".to_string(),
+            args: vec![],
+        };
+        match env.resolve_ctor(None, "X", Some(&scrutinee)) {
+            CtorLookupResult::Ambiguous { ctor, candidates } => {
+                assert_eq!(ctor, "X");
+                let names: Vec<String> = candidates.iter().map(|c| c.type_name.clone()).collect();
+                assert_eq!(names, vec!["A".to_string(), "B".to_string()]);
+            }
+            other => panic!("expected Ambiguous, got {:?}", debug_label(&other)),
+        }
+    }
+
+    #[test]
+    fn lookup_union_variant_wrapper_returns_some_only_for_resolved() {
+        let env = env_with_unions(vec![
+            union("A", vec![], vec![variant("X", 0, vec![])]),
+            union("B", vec![], vec![variant("X", 0, vec![])]),
+        ]);
+        // Ambiguous bare ctor must collapse to None through the wrapper.
+        assert!(env.lookup_union_variant(None, "X").is_none());
+        // Qualified-with-typeknown still returns Some.
+        let resolved = env
+            .lookup_union_variant(Some("A"), "X")
+            .expect("qualified path should resolve");
+        assert_eq!(resolved.0.type_name, "A");
+        // Missing qualified ctor must collapse to None.
+        assert!(env.lookup_union_variant(Some("A"), "Z").is_none());
+    }
+
+    /// Helper that converts a `CtorLookupResult` into a `&'static str` so the
+    /// `panic!` formatters above can render a stable label without requiring
+    /// `Debug` on the variant payload (which would force `Debug` on `&UnionInfo`).
+    fn debug_label(result: &CtorLookupResult<'_>) -> &'static str {
+        match result {
+            CtorLookupResult::Resolved { .. } => "Resolved",
+            CtorLookupResult::DoesNotBelongToScrutinee { .. } => "DoesNotBelongToScrutinee",
+            CtorLookupResult::MissingQualifiedCtor { .. } => "MissingQualifiedCtor",
+            CtorLookupResult::Ambiguous { .. } => "Ambiguous",
+            CtorLookupResult::Unknown => "Unknown",
+        }
     }
 }
