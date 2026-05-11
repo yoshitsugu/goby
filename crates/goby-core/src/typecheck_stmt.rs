@@ -551,7 +551,24 @@ fn check_declared_return_type(
         })
         .unwrap_or(Ty::Unit);
 
-    if inferred != Ty::Unknown && !env.are_compatible(&declared, &inferred) {
+    // GU-S3 CA-2: 旧 `env.are_compatible(&declared, &inferred)` は `Ty::Var`
+    // を等価比較するだけで、`f : a -> Int; f x = x` のような rigid 型変数
+    // 不一致を見抜けず、また `Maybe Int` ~ `Maybe __goby_fresh_ty_0` の
+    // flexible 束縛も拒否していた。`unifies_with_annotation` は rigid と
+    // flexible (`__goby_fresh_ty_*` prefix) を区別して扱う。
+    //
+    // `next_id` seed は **type fresh と effect-row fresh の双方** の現存
+    // 最大値 + 1 を取る。`unify_with_rigid_vars` が `Ty::Fun` 経路で
+    // `unify_effect_rows` を呼び、open/open unification が新しい
+    // `__goby_fresh_row_N` を作る可能性があるため、`__goby_fresh_row_*` も
+    // 加味しないと既存 row tail と衝突しうる (Codex pass-1 指摘)。
+    let mut next_id = crate::typecheck_unify::max_fresh_ty_id_in_ty(&declared)
+        .max(crate::typecheck_unify::max_fresh_ty_id_in_ty(&inferred))
+        .max(crate::typecheck_env::max_fresh_row_id(&declared))
+        .max(crate::typecheck_env::max_fresh_row_id(&inferred));
+    if inferred != Ty::Unknown
+        && !crate::typecheck_unify::unifies_with_annotation(&declared, &inferred, env, &mut next_id)
+    {
         return Err(TypecheckError {
             declaration: Some(decl_name.to_string()),
             span: None, // body-relative span; file-relative offset not yet wired up

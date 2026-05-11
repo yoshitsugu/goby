@@ -319,6 +319,237 @@ pub(crate) fn unify_types_with_subst(
     }
 }
 
+/// GU-S3 CA-2: annotation 比較用の unify。
+///
+/// `unify_types_with_subst` は呼び出し側で freshen 済みの safe context
+/// (callee の freshen 後など) を前提に、すべての `Ty::Var` を flexible
+/// として bind する。一方、宣言戻り値比較 (`typecheck_stmt::check_declared_return_type`)
+/// のように **ユーザーが書いた rigid な型変数 `a` (`type a -> Int`)** と
+/// 推論で生まれた **flexible な `__goby_fresh_ty_*`** が同居する文脈では、
+/// rigid を flexible に降格して `f : a -> Int; f x = x` を通してしまう。
+///
+/// 本 helper はそれを防ぐため、**`Ty::Var(name)` の `name` が
+/// `__goby_fresh_ty_` で始まる場合のみ flexible として bind し、それ以外
+/// (rigid) は等価比較のみ**を行う。判定は **side-independent**
+/// (expected/actual のどちらに来ても prefix だけで決まる)。
+///
+/// `Ty::Unknown` は両側でワイルドカード扱い (`are_compatible` 互換)、
+/// `Ty::Fun` / `Ty::List` / `Ty::Tuple` / `Ty::Con` / effect row は
+/// `unify_types_with_subst` と同じ規則で構造再帰する。
+///
+/// `next_id` は呼び出し側で
+/// `max_fresh_ty_id_in_ty(expected).max(max_fresh_ty_id_in_ty(actual))
+///  .max(typecheck_env::max_fresh_row_id(expected))
+///  .max(typecheck_env::max_fresh_row_id(actual))`
+/// を seed として渡すこと。`Ty::Fun` 経路の `unify_effect_rows` が新規
+/// `__goby_fresh_row_N` を作る可能性があるため、両 prefix を加味する。
+///
+/// **Reserved prefix (GU-S3 全コミット共通)**:
+/// `__goby_fresh_ty_` および `__goby_fresh_row_` は内部 freshening のために
+/// 予約された prefix。Goby surface annotation で `_` 始まりの型変数を
+/// 書くこと自体は許される (`typecheck_types::is_type_variable_name`) ため、
+/// ユーザーが `__goby_fresh_ty_0` のような identifier を annotation に
+/// 書くと意味論が壊れる可能性がある (= unspecified behaviour)。診断による
+/// 予約名拒否は本サブタスクのスコープ外で、後続改善とする。
+pub(crate) fn unifies_with_annotation(
+    expected: &Ty,
+    actual: &Ty,
+    env: &TypeEnv,
+    next_id: &mut usize,
+) -> bool {
+    let mut type_subst = TypeSubst::new();
+    let mut row_subst = RowSubst::new();
+    unify_with_rigid_vars(
+        expected,
+        actual,
+        &mut type_subst,
+        &mut row_subst,
+        env,
+        next_id,
+    )
+}
+
+/// CA-2 helper: `unifies_with_annotation` の内部実装。`unify_types_with_subst`
+/// と構造はほぼ同じだが、`Ty::Var` 分岐で rigid (= prefix が
+/// `__goby_fresh_ty_` で **始まらない** 名前) は等価比較のみ、flexible
+/// (prefix 一致) のみ `bind_type_variable` で束縛する。
+fn unify_with_rigid_vars(
+    expected: &Ty,
+    actual: &Ty,
+    type_subst: &mut TypeSubst,
+    row_subst: &mut RowSubst,
+    env: &TypeEnv,
+    next_id: &mut usize,
+) -> bool {
+    let expected = apply_type_substitution(expected, type_subst, row_subst, env);
+    let actual = apply_type_substitution(actual, type_subst, row_subst, env);
+    match (expected, actual) {
+        (Ty::Unknown, _) | (_, Ty::Unknown) => true,
+        (Ty::Var(left_name), Ty::Var(right_name)) => {
+            let left_flex = is_flexible_fresh_ty_var(&left_name);
+            let right_flex = is_flexible_fresh_ty_var(&right_name);
+            if left_name == right_name {
+                return true;
+            }
+            if left_flex {
+                bind_type_variable(
+                    &left_name,
+                    &Ty::Var(right_name),
+                    type_subst,
+                    row_subst,
+                    env,
+                    next_id,
+                )
+            } else if right_flex {
+                bind_type_variable(
+                    &right_name,
+                    &Ty::Var(left_name),
+                    type_subst,
+                    row_subst,
+                    env,
+                    next_id,
+                )
+            } else {
+                // どちらも rigid: 等価比較 (上で `==` 判定済みなので false)。
+                false
+            }
+        }
+        (Ty::Var(name), ty) => {
+            if is_flexible_fresh_ty_var(&name) {
+                bind_type_variable(&name, &ty, type_subst, row_subst, env, next_id)
+            } else {
+                false
+            }
+        }
+        (ty, Ty::Var(name)) => {
+            if is_flexible_fresh_ty_var(&name) {
+                bind_type_variable(&name, &ty, type_subst, row_subst, env, next_id)
+            } else {
+                false
+            }
+        }
+        (Ty::Int, Ty::Int)
+        | (Ty::Float, Ty::Float)
+        | (Ty::Bool, Ty::Bool)
+        | (Ty::Str, Ty::Str)
+        | (Ty::Unit, Ty::Unit) => true,
+        (Ty::List(left), Ty::List(right)) => {
+            unify_with_rigid_vars(&left, &right, type_subst, row_subst, env, next_id)
+        }
+        (Ty::Tuple(left), Ty::Tuple(right)) if left.len() == right.len() => left
+            .iter()
+            .zip(right.iter())
+            .all(|(l, r)| unify_with_rigid_vars(l, r, type_subst, row_subst, env, next_id)),
+        (
+            Ty::Fun {
+                params: left_params,
+                result: left_result,
+                effects: left_effects,
+            },
+            Ty::Fun {
+                params: right_params,
+                result: right_result,
+                effects: right_effects,
+            },
+        ) if left_params.len() == right_params.len() => {
+            left_params
+                .iter()
+                .zip(right_params.iter())
+                .all(|(l, r)| unify_with_rigid_vars(l, r, type_subst, row_subst, env, next_id))
+                && unify_with_rigid_vars(
+                    &left_result,
+                    &right_result,
+                    type_subst,
+                    row_subst,
+                    env,
+                    next_id,
+                )
+                && unify_effect_rows(&left_effects, &right_effects, row_subst, next_id)
+        }
+        (
+            Ty::Con {
+                name: left_name,
+                args: left_args,
+            },
+            Ty::Con {
+                name: right_name,
+                args: right_args,
+            },
+        ) if left_name == right_name && left_args.len() == right_args.len() => left_args
+            .iter()
+            .zip(right_args.iter())
+            .all(|(l, r)| unify_with_rigid_vars(l, r, type_subst, row_subst, env, next_id)),
+        (
+            Ty::Handler {
+                covered_ops: left_ops,
+            },
+            Ty::Handler {
+                covered_ops: right_ops,
+            },
+        ) => left_ops == right_ops,
+        // `are_compatible` 互換: `Handler E1 E2 ...` annotation と
+        // `Ty::Handler { covered_ops }` actual の特殊照合。effect 名集合が
+        // 一致すれば許容。両側どちらに `Con("Handler", ..)` が来てもよい。
+        (Ty::Con { name, args }, Ty::Handler { covered_ops })
+        | (Ty::Handler { covered_ops }, Ty::Con { name, args })
+            if name == "Handler" =>
+        {
+            if let Some(expected_ops) = env.handler_ops_from_type_args(&args) {
+                expected_ops == covered_ops
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }
+}
+
+/// CA-2 helper: `Ty::Var(name)` が GU-S3 で予約された flexible prefix
+/// (`__goby_fresh_ty_`) で始まる識別子かを判定する。
+pub(crate) fn is_flexible_fresh_ty_var(name: &str) -> bool {
+    name.starts_with("__goby_fresh_ty_")
+}
+
+/// CA-2 helper: 任意の `Ty` を walk して `__goby_fresh_ty_N` の最大 N に
+/// `+1` した one-past-max を返す。caller が `next_id` を seed するときに
+/// 使う。`max_fresh_row_id` と同じ "one past max" コントラクト。
+pub(crate) fn max_fresh_ty_id_in_ty(ty: &Ty) -> usize {
+    fn extract(name: &str) -> Option<usize> {
+        const PREFIX: &str = "__goby_fresh_ty_";
+        name.strip_prefix(PREFIX)
+            .and_then(|rest| rest.parse::<usize>().ok())
+            .map(|n| n + 1)
+    }
+    fn walk(ty: &Ty, acc: &mut usize) {
+        match ty {
+            Ty::Var(name) => {
+                if let Some(next) = extract(name)
+                    && next > *acc
+                {
+                    *acc = next;
+                }
+            }
+            Ty::List(inner) => walk(inner, acc),
+            Ty::Tuple(items) => items.iter().for_each(|t| walk(t, acc)),
+            Ty::Fun { params, result, .. } => {
+                params.iter().for_each(|p| walk(p, acc));
+                walk(result, acc);
+            }
+            Ty::Con { args, .. } => args.iter().for_each(|a| walk(a, acc)),
+            Ty::Handler { .. }
+            | Ty::Int
+            | Ty::Float
+            | Ty::Bool
+            | Ty::Str
+            | Ty::Unit
+            | Ty::Unknown => {}
+        }
+    }
+    let mut acc = 0usize;
+    walk(ty, &mut acc);
+    acc
+}
+
 pub(crate) fn instantiate_ty_with_fresh_type_vars(
     ty: &Ty,
     ty_mapping: &mut HashMap<String, String>,
@@ -1243,5 +1474,248 @@ mod effect_rows_unify_tests {
             next_id, 0,
             "a fully-concrete nullary op must not consume any fresh ids"
         );
+    }
+
+    // ---- GU-S3 CA-2: `unifies_with_annotation` の rigid/flexible 区別を pin ----
+
+    fn empty_env() -> TypeEnv {
+        TypeEnv::empty()
+    }
+
+    fn fresh_ty(n: usize) -> Ty {
+        Ty::Var(format!("__goby_fresh_ty_{}", n))
+    }
+
+    fn rigid_ty(name: &str) -> Ty {
+        Ty::Var(name.to_string())
+    }
+
+    #[test]
+    fn unifies_with_annotation_rejects_rigid_var_against_concrete() {
+        // `f : a -> Int; f x = x` shape: declared returns `a` (rigid),
+        // body returns `Ty::Int` (concrete). Must be rejected.
+        let env = empty_env();
+        let mut next_id = 0;
+        assert!(
+            !unifies_with_annotation(&rigid_ty("a"), &Ty::Int, &env, &mut next_id),
+            "rigid `a` must not bind to concrete `Int`"
+        );
+    }
+
+    #[test]
+    fn unifies_with_annotation_rejects_const_unit_to_rigid_var() {
+        // `const : Unit -> a; const = 1` shape: declared returns `a` (rigid),
+        // body returns `Ty::Int`. Same rejection from the opposite side
+        // (rigid on expected, concrete on actual) — side-independent.
+        let env = empty_env();
+        let mut next_id = 0;
+        assert!(
+            !unifies_with_annotation(&Ty::Int, &rigid_ty("a"), &env, &mut next_id),
+            "rigid `a` must not be bound by a concrete actual either"
+        );
+    }
+
+    #[test]
+    fn unifies_with_annotation_accepts_concrete_maybe_against_flexible() {
+        // `Maybe Int` vs `Maybe __goby_fresh_ty_0`: flexible bind ok.
+        let env = empty_env();
+        let mut next_id = 1;
+        let expected = Ty::Con {
+            name: "Maybe".to_string(),
+            args: vec![Ty::Int],
+        };
+        let actual = Ty::Con {
+            name: "Maybe".to_string(),
+            args: vec![fresh_ty(0)],
+        };
+        assert!(
+            unifies_with_annotation(&expected, &actual, &env, &mut next_id),
+            "flexible `__goby_fresh_ty_0` should bind to `Int` under `Maybe`"
+        );
+    }
+
+    #[test]
+    fn unifies_with_annotation_accepts_two_flexible_vars_either_side() {
+        // `__goby_fresh_ty_0` ~ `__goby_fresh_ty_1`: both flexible, ok.
+        let env = empty_env();
+        let mut next_id = 2;
+        assert!(
+            unifies_with_annotation(&fresh_ty(0), &fresh_ty(1), &env, &mut next_id),
+            "two flexible vars should unify"
+        );
+    }
+
+    #[test]
+    fn unifies_with_annotation_treats_unknown_as_wildcard() {
+        // `Ty::Unknown` on either side is a wildcard (`are_compatible` 互換)。
+        let env = empty_env();
+        let mut next_id = 0;
+        assert!(unifies_with_annotation(
+            &Ty::Unknown,
+            &Ty::Int,
+            &env,
+            &mut next_id
+        ));
+        assert!(unifies_with_annotation(
+            &rigid_ty("a"),
+            &Ty::Unknown,
+            &env,
+            &mut next_id
+        ));
+    }
+
+    #[test]
+    fn unifies_with_annotation_concrete_concrete_mismatch_rejects() {
+        // Sanity: ordinary concrete mismatch still rejects.
+        let env = empty_env();
+        let mut next_id = 0;
+        assert!(
+            !unifies_with_annotation(&Ty::Int, &Ty::Str, &env, &mut next_id),
+            "Int / Str must not unify"
+        );
+    }
+
+    #[test]
+    fn unifies_with_annotation_same_rigid_var_accepts() {
+        // Identical rigid `a` ~ `a` is just equality.
+        let env = empty_env();
+        let mut next_id = 0;
+        assert!(unifies_with_annotation(
+            &rigid_ty("a"),
+            &rigid_ty("a"),
+            &env,
+            &mut next_id
+        ));
+    }
+
+    #[test]
+    fn unifies_with_annotation_flexible_var_against_concrete_either_side() {
+        // Codex pass-1 指摘: flexible `__goby_fresh_ty_0` ~ concrete の
+        // 双方向 bind を pin。expected 側 / actual 側どちらに flexible が
+        // 来ても束縛されることを確認。
+        let env = empty_env();
+        let mut next_id = 1;
+        assert!(unifies_with_annotation(
+            &fresh_ty(0),
+            &Ty::Int,
+            &env,
+            &mut next_id
+        ));
+        let mut next_id = 1;
+        assert!(unifies_with_annotation(
+            &Ty::Int,
+            &fresh_ty(0),
+            &env,
+            &mut next_id
+        ));
+    }
+
+    #[test]
+    fn unifies_with_annotation_handler_special_case_either_side() {
+        // Codex pass-1 指摘: `Handler` annotation 特例の対称性を pin する。
+        // 宣言戻り値比較では通常 `declared = Con("Handler", [..])` /
+        // `inferred = Ty::Handler { .. }` (annotation 側に `Ty::Handler` 形
+        // は構文上書けないが、内部表現としては片方向に偏らせない方が安全)。
+        let env = empty_env();
+        let mut next_id = 0;
+        let handler_con = Ty::Con {
+            name: "Handler".to_string(),
+            args: vec![Ty::Con {
+                name: "Log".to_string(),
+                args: vec![],
+            }],
+        };
+        let handler_value = Ty::Handler {
+            covered_ops: ["log".to_string()].into_iter().collect(),
+        };
+        // Note: handler_ops_from_type_args walks the env for `effect Log` to
+        // expand `Log` into its op set; without that env the unification
+        // returns `None`. Test the symmetry instead by ensuring the two
+        // shapes match an empty handler trivially (`Handler` with no args
+        // → expected_ops = empty set).
+        let _ = (handler_con, handler_value);
+        let empty_handler_con = Ty::Con {
+            name: "Handler".to_string(),
+            args: vec![],
+        };
+        let empty_handler_value = Ty::Handler {
+            covered_ops: Default::default(),
+        };
+        assert!(unifies_with_annotation(
+            &empty_handler_con,
+            &empty_handler_value,
+            &env,
+            &mut next_id
+        ));
+        assert!(unifies_with_annotation(
+            &empty_handler_value,
+            &empty_handler_con,
+            &env,
+            &mut next_id
+        ));
+    }
+
+    #[test]
+    fn unifies_with_annotation_seeds_next_id_for_effect_rows() {
+        // Codex pass-1 指摘: `Ty::Fun` の effect row が unification で fresh
+        // row を作るとき、`next_id` seed に既存の `__goby_fresh_row_N` が
+        // 含まれていないと衝突する。caller (`typecheck_stmt.rs`) は
+        // `max_fresh_row_id` を加味する。helper 単体テストで row var 経由
+        // でも fail しないことを pin。
+        //
+        // expected = `Int -> Int can __goby_fresh_row_3`,
+        // actual   = `Int -> Int can __goby_fresh_row_5`. 別 var の open ~ open
+        // は新しい fresh row を作って両方を bind。`next_id` を 6 で seed
+        // しておけば衝突しない。
+        let env = empty_env();
+        let mut next_id = 6;
+        let expected = Ty::Fun {
+            params: vec![Ty::Int],
+            result: Box::new(Ty::Int),
+            effects: EffectRow {
+                fixed: Default::default(),
+                tail: Some(RowVarId("__goby_fresh_row_3".to_string())),
+            },
+        };
+        let actual = Ty::Fun {
+            params: vec![Ty::Int],
+            result: Box::new(Ty::Int),
+            effects: EffectRow {
+                fixed: Default::default(),
+                tail: Some(RowVarId("__goby_fresh_row_5".to_string())),
+            },
+        };
+        assert!(
+            unifies_with_annotation(&expected, &actual, &env, &mut next_id),
+            "open ~ open effect rows must unify under non-colliding next_id seed"
+        );
+    }
+
+    #[test]
+    fn max_fresh_ty_id_returns_one_past_max() {
+        // Walks Fun / Con / List / Tuple structurally. Returns max + 1.
+        let ty = Ty::Fun {
+            params: vec![
+                Ty::List(Box::new(fresh_ty(2))),
+                Ty::Con {
+                    name: "Maybe".to_string(),
+                    args: vec![fresh_ty(5)],
+                },
+            ],
+            result: Box::new(fresh_ty(1)),
+            effects: EffectRow::closed_empty(),
+        };
+        assert_eq!(max_fresh_ty_id_in_ty(&ty), 6);
+    }
+
+    #[test]
+    fn max_fresh_ty_id_ignores_rigid_and_non_var_types() {
+        // Rigid `a` and concrete types contribute nothing.
+        let ty = Ty::Fun {
+            params: vec![rigid_ty("a"), Ty::Int],
+            result: Box::new(Ty::Str),
+            effects: EffectRow::closed_empty(),
+        };
+        assert_eq!(max_fresh_ty_id_in_ty(&ty), 0);
     }
 }

@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-11 (Track GU-S3 union ctor application sub-task CA-1 landed; `Expr::Call` arm now routes through `typecheck_call::infer_call_result_ty` so call-site unify is reflected in the result type. CA-2/CA-3a/CA-3b pending).
+Last updated: 2026-05-11 (Track GU-S3 union ctor application sub-tasks CA-1 + CA-2 landed; `typecheck_unify::unifies_with_annotation` introduces rigid/flexible `Ty::Var` distinction for declaration return-type comparison. CA-3a/CA-3b pending).
 
 ## Current Focus
 
@@ -61,6 +61,16 @@ commit `df57c32`):
 - `cargo nextest run -p goby-wasm`: not re-run for CA-1 — the change is
   pure typecheck-side and emit-side baselines remain valid until CA-3b.
 
+**All-green (post GU-S3 CA-2 `unifies_with_annotation`, 2026-05-11)**:
+
+- `cargo test -p goby-core --lib`: 962 passed / 2 ignored (up from 950
+  via 12 new `typecheck_unify::tests` rigid/flexible / Handler / effect-
+  row-seed pins for the new helper).
+- `cargo test -p goby-lsp`: 56 passed.
+- `cargo check --workspace`: warning-free.
+- `cargo nextest run -p goby-wasm`: not re-run for CA-2 — typecheck-side
+  only.
+
 Red / ignored:
 
 - Pre-existing `#[ignore]`d perceus / compile_tests entries (see
@@ -105,6 +115,17 @@ Red / ignored:
     `typechecks_int_to_string_as_named_map_callback`) were rewritten
     against the now-precise call-site behaviour. General precision
     improvement; no ctor registration change.
+  - **CA-2** ✅ landed: `typecheck_unify::unifies_with_annotation` +
+    helpers (`is_flexible_fresh_ty_var`, `max_fresh_ty_id_in_ty`).
+    Treats `Ty::Var` whose name starts with `__goby_fresh_ty_` as
+    flexible (bindable both sides) and any other `Ty::Var` as rigid
+    (equality only). `Ty::Unknown` stays as a wildcard. `Handler`
+    annotation special-case (`Con("Handler", [..])` ~ `Ty::Handler`)
+    is preserved symmetrically. `typecheck_stmt.rs::check_declared_return_type`
+    switched from `env.are_compatible` to the new helper; `next_id`
+    is seeded from both `max_fresh_ty_id_in_ty` and `max_fresh_row_id`
+    so `unify_effect_rows`-created row vars do not collide. Existing
+    `are_compatible` callers untouched.
   - **CA-2**: Add a `unifies_with_annotation` helper that binds
     only flexible (`__goby_fresh_ty_*` prefix) `Ty::Var`, leaves
     rigid `a` rigid. Swap `typecheck_stmt.rs` return-type comparison
