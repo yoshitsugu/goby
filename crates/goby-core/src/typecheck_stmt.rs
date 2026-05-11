@@ -392,7 +392,13 @@ fn ensure_known_call_targets_in_expr(
         Expr::Call { callee, arg, .. } => {
             if let Expr::Var { name, .. } = callee.as_ref() {
                 let callee_ty = env.lookup(name);
-                if callee_ty == Ty::Unknown {
+                // GU-S3 AR-3 (Codex pass-2): an `Ambiguous` ctor binding
+                // also makes `env.lookup` return `Ty::Unknown`, so the
+                // generic "unknown function or constructor" diagnostic
+                // would steal the dedicated `err_ctor_ambiguous` wording.
+                // Defer to the AR-3 path in `ensure_no_ambiguous_refs_in_expr`
+                // for those — the ambiguous-ctor diagnostic fires there.
+                if callee_ty == Ty::Unknown && env.ambiguous_sources(name).is_none() {
                     return Err(err_unknown_callable(
                         decl_name,
                         name,
@@ -410,7 +416,11 @@ fn ensure_known_call_targets_in_expr(
             Ok(())
         }
         Expr::Pipeline { value, callee, .. } => {
-            if env.lookup(callee) == Ty::Unknown {
+            // GU-S3 AR-3 (Codex pass-2): same `Ambiguous`-as-Unknown
+            // skirmish as for `Expr::Call`. Defer ambiguous-ctor callees
+            // to `ensure_no_ambiguous_refs_in_expr`. AR-3 will catch
+            // `xs |> Same` when two unions declare `Same`.
+            if env.lookup(callee) == Ty::Unknown && env.ambiguous_sources(callee).is_none() {
                 return Err(err_unknown_callable(
                     decl_name,
                     callee,

@@ -42,6 +42,13 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             Ok(())
         }
         Expr::Var { name, .. } => {
+            // GU-S3 AR-3: bare-name ctor application. Emit the dedicated
+            // ambiguity diagnostic when two unions declare the same ctor
+            // and the application site has no expected-type pinning yet.
+            // Expected-type-driven disambiguation (`x : Result Int String;
+            // x = Err "e"`) is out of scope for this sub-task and is
+            // deferred per PLAN_GU §6 GU-S3 follow-ups.
+            ensure_ctor_resolution(name, None, env, decl_name, expr)?;
             ensure_name_not_ambiguous(name, env, decl_name, best_available_name_use_span(expr))
         }
         Expr::Qualified {
@@ -96,6 +103,15 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             if env.locals.contains_key(receiver) {
                 return Ok(());
             }
+            // GU-S3 AR-3: qualified-form ctor application `T.Ctor`. If
+            // `T` is a known union but does not declare `Ctor`, or if
+            // `T` is not a known union at all, emit the dedicated
+            // `qualified constructor not declared by any union type`
+            // wording. Pre-existing name-resolution / unknown-callable
+            // diagnostics still fire downstream when the qualified name
+            // does not resolve to a global symbol — AR-3 only adds the
+            // union-aware variant for the common ctor case.
+            ensure_ctor_resolution(member, Some(receiver), env, decl_name, expr)?;
             ensure_name_not_ambiguous(
                 &format!("{}.{}", receiver, member),
                 env,
@@ -458,6 +474,88 @@ fn ensure_name_not_ambiguous(
         return Err(err_name_ambiguous(Some(decl_name), name, sources, span));
     }
     Ok(())
+}
+
+/// GU-S3 AR-3: union-aware ctor resolution for application sites.
+///
+/// Routes `Expr::Var { name }` (bare ctor) and `Expr::Qualified { receiver,
+/// member }` (qualified `T.Ctor`) through `TypeEnv::resolve_ctor` so the
+/// dedicated `err_ctor_ambiguous` / `err_qualified_ctor_unknown` /
+/// `err_ctor_does_not_belong` wordings can fire at application sites,
+/// not just inside `case` patterns.
+///
+/// Application sites do not have a scrutinee, so the only outcomes that
+/// produce a diagnostic here are:
+///   - `Ambiguous` (bare `Ctor` declared by ≥2 unions) and
+///   - `MissingQualifiedCtor` (qualified `T.Ctor` where `T` is unknown
+///     or `T` does not declare `Ctor`).
+///
+/// `Resolved` falls through; `Unknown` falls through too (existing
+/// "unknown function or constructor" diagnostics own that case);
+/// `DoesNotBelongToScrutinee` is structurally unreachable at application
+/// sites because `resolve_ctor` is called with `scrutinee = None`.
+///
+/// Locals shadow ctor bindings (the existing `ensure_name_not_ambiguous`
+/// rule), so a bare `Var` for a non-ctor name is left untouched and the
+/// downstream pre-existing checks remain authoritative for those.
+fn ensure_ctor_resolution(
+    ctor: &str,
+    qualifier: Option<&str>,
+    env: &TypeEnv,
+    decl_name: &str,
+    expr: &Expr,
+) -> Result<(), TypecheckError> {
+    use crate::parser_util::is_camel_case_identifier;
+    use crate::typecheck_env::CtorLookupResult;
+    // Goby ctor names are CamelCase, type names (qualifier) are CamelCase
+    // too. Reject the cheap cases first so module-qualified function
+    // calls (`int.to_string`, `list.map`) and record field access
+    // (`user.name`) cannot enter the union ctor resolver.
+    if !is_camel_case_identifier(ctor) {
+        return Ok(());
+    }
+    if let Some(q) = qualifier
+        && !is_camel_case_identifier(q)
+    {
+        return Ok(());
+    }
+    // Skip when a local binding shadows the ctor name — same rule the
+    // pattern-side helper enforces via `TypeEnv::is_ctor_binding`.
+    if qualifier.is_none() && env.locals.contains_key(ctor) {
+        return Ok(());
+    }
+    // Codex AR-3 pass-1 follow-up: when the qualified form is already a
+    // registered global (e.g. record `Box.Box` is registered as a
+    // `Type.Ctor` global in `typecheck_build`, and so are some `Effect.op`
+    // entries), defer to the existing `ensure_name_not_ambiguous` / call-
+    // target paths so AR-3 does NOT claim a qualified record constructor
+    // is missing from any union.
+    if let Some(q) = qualifier {
+        let qualified = format!("{}.{}", q, ctor);
+        if env.globals.contains_key(&qualified) {
+            return Ok(());
+        }
+    }
+    match env.resolve_ctor(qualifier, ctor, None) {
+        CtorLookupResult::Ambiguous { ctor, candidates } => {
+            let names: Vec<String> = candidates.iter().map(|c| c.type_name.clone()).collect();
+            Err(crate::typecheck_diag::err_ctor_ambiguous(
+                decl_name,
+                &ctor,
+                &names,
+                best_available_name_use_span(expr),
+            ))
+        }
+        CtorLookupResult::MissingQualifiedCtor { qualifier, ctor } => {
+            Err(crate::typecheck_diag::err_qualified_ctor_unknown(
+                decl_name,
+                &qualifier,
+                &ctor,
+                best_available_name_use_span(expr),
+            ))
+        }
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]

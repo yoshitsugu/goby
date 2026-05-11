@@ -2452,6 +2452,238 @@ f = (r) -> case r
         assert_eq!(diag.declaration.as_deref(), Some("decl_under_test"));
     }
 
+    // ---- GU-S3 AR-3: constructor-name ambiguity resolution (application side) ----
+
+    #[test]
+    fn application_bare_ambiguous_ctor_emits_ambiguous_diagnostic() {
+        // AR-3 acceptance: two unions both declare `Same`; calling
+        // bare `Same 0` must be rejected with the ambiguous diagnostic.
+        // Expected-type-driven disambiguation (`x : OnePair Int; x =
+        // Same 0` should resolve to `OnePair.Same`) is a follow-up.
+        let source = "\
+type OnePair a = Same(a)
+type TwoPair a = Same(a)
+v : Int
+v =
+  pair = Same 0
+  case pair
+    OnePair.Same x -> x
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err(
+            "bare ambiguous `Same 0` at application site should be rejected",
+        );
+        assert!(
+            err.message.contains("is ambiguous"),
+            "diagnostic should mention 'is ambiguous'; got: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("OnePair") && err.message.contains("TwoPair"),
+            "diagnostic should list both candidates; got: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("use a qualified form"),
+            "diagnostic should suggest the qualified form; got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn application_qualified_unknown_type_emits_qualified_unknown_diagnostic() {
+        // AR-3 acceptance: `Unknown.Just 42` at an application site
+        // rejects via `err_qualified_ctor_unknown` wording.
+        let source = "\
+type Maybe a = Just(a) | Nothing
+v : Maybe Int
+v = Unknown.Just 42
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("`Unknown.Just 42` should be rejected (no such union type)");
+        assert!(
+            err.message
+                .contains("qualified constructor `Unknown.Just`"),
+            "diagnostic should mention the qualified form; got: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("not declared by any union type"),
+            "diagnostic should explain the missing union; got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn application_qualified_known_type_missing_ctor_emits_qualified_unknown_diagnostic() {
+        // AR-3 acceptance: `Maybe.Foo 42` rejects via the qualified-unknown
+        // wording — `Maybe` exists but does not declare `Foo`.
+        let source = "\
+type Maybe a = Just(a) | Nothing
+v : Maybe Int
+v = Maybe.Foo 42
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("`Maybe.Foo 42` should be rejected (Foo missing in Maybe)");
+        assert!(
+            err.message.contains("`Maybe.Foo`"),
+            "diagnostic should mention the qualified form; got: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("not declared by any union type"),
+            "diagnostic should explain the missing union; got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn application_qualified_resolves_when_known_in_union() {
+        // AR-3 regression: `OnePair.Same 0` resolves cleanly even when
+        // a sibling union declares the same ctor — qualified form wins.
+        let source = "\
+type OnePair a = Same(a)
+type TwoPair a = Same(a)
+v : OnePair Int
+v = OnePair.Same 0
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("qualified `OnePair.Same 0` should resolve cleanly past sibling ctor");
+    }
+
+    #[test]
+    fn application_module_qualified_call_not_affected_by_ar3() {
+        // AR-3 regression (Codex-anticipated): stdlib module-qualified
+        // calls like `int.to_string` and `list.map` must not enter the
+        // union ctor resolver — they go through the existing
+        // `ensure_name_not_ambiguous` path.
+        //
+        // We pin this with a minimal CamelCase-vs-lowercase check by
+        // calling a lowercase-qualifier name. `list.map` is a stdlib
+        // function declared in `stdlib/goby/list.gb`.
+        let source = "\
+v : List Int
+v = list.map [1] (x) -> x + 1
+";
+        let module = parse_module(source).expect("should parse");
+        // The exact typecheck outcome depends on stdlib import; we only
+        // pin that AR-3 itself does NOT emit the qualified-unknown
+        // wording for a lowercase qualifier.
+        match typecheck_module(&module) {
+            Ok(()) => {}
+            Err(err) => assert!(
+                !err.message.contains("not declared by any union type"),
+                "AR-3 should not fire for lowercase-qualifier calls; got: {}",
+                err.message
+            ),
+        }
+    }
+
+    #[test]
+    fn application_local_binding_shadows_ctor_name() {
+        // AR-3 regression: a local binding named like a ctor must shadow
+        // the ctor resolution path. Two unions declare `Same`; a local
+        // `Same` (= a value bound to that name) makes the bare `Same`
+        // reference a value, not a ctor application, and AR-3 should
+        // stay silent.
+        let source = "\
+type OnePair a = Same(a)
+type TwoPair a = Same(a)
+v : Int
+v =
+  Same = 42
+  Same
+";
+        let module = parse_module(source).expect("should parse");
+        // The exact outcome depends on whether the parser allows
+        // CamelCase binding names; if it does not, the test still
+        // exercises that AR-3 alone is not the rejector.
+        match typecheck_module(&module) {
+            Ok(()) => {}
+            Err(err) => assert!(
+                !err.message.contains("is ambiguous"),
+                "AR-3 ambiguous diagnostic must not fire when a local \
+                 shadows the ctor name; got: {}",
+                err.message
+            ),
+        }
+    }
+
+    #[test]
+    fn application_pipeline_with_ambiguous_ctor_emits_ambiguous_diagnostic() {
+        // AR-3 acceptance (Codex pass-2): the pipeline form `42 |> Same`
+        // routes through `Expr::Pipeline.callee`, which `env.lookup`
+        // also returns `Ty::Unknown` for an `Ambiguous` ctor binding.
+        // The Codex pass-2 fix in `ensure_known_call_targets_in_expr`
+        // defers to AR-3 for those.
+        let source = "\
+type OnePair a = Same(a)
+type TwoPair a = Same(a)
+v : Int
+v =
+  pair = 0 |> Same
+  case pair
+    OnePair.Same x -> x
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("pipeline form `0 |> Same` with two unions should be rejected");
+        assert!(
+            err.message.contains("is ambiguous"),
+            "diagnostic should mention 'is ambiguous'; got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn application_camel_case_local_call_shadows_ctor_and_does_not_trigger_ar3() {
+        // AR-3 regression (Codex pass-2): a CamelCase local **callable**
+        // shadowing a ctor name must not trigger AR-3. We bind `Same`
+        // to an identity-like lambda value in a local scope and call
+        // it. Whether the parser/runtime permit CamelCase locals in
+        // every shape may evolve; the pin is that AR-3's ambiguous
+        // diagnostic does NOT fire when local shadowing applies.
+        let source = "\
+type OnePair a = Same(a)
+type TwoPair a = Same(a)
+v : Int
+v =
+  Same = (x) -> x
+  Same 0
+";
+        let module = parse_module(source).expect("should parse");
+        match typecheck_module(&module) {
+            Ok(()) => {}
+            Err(err) => assert!(
+                !err.message.contains("is ambiguous"),
+                "AR-3 ambiguous diagnostic must not fire when a local \
+                 shadows the ctor name; got: {}",
+                err.message
+            ),
+        }
+    }
+
+    #[test]
+    fn application_qualified_record_constructor_not_affected_by_ar3() {
+        // AR-3 regression (Codex AR-3 pass-1): qualified record
+        // constructors like `Box.Box 42` are registered in `globals`
+        // under the `Type.Ctor` key by `typecheck_build`. AR-3 must
+        // defer to the existing global lookup so the qualified record
+        // form keeps working — only union-only qualifiers should hit
+        // the `MissingQualifiedCtor` wording.
+        let source = "\
+type Box = Box(Int)
+v : Box
+v = Box.Box 42
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("qualified record ctor `Box.Box 42` must remain valid through AR-3");
+    }
+
     #[test]
     fn pattern_record_scrutinee_with_unknown_ctor_stays_silent_at_module_level() {
         // AR-2 acceptance (Codex pass-2): the record-pin silent
