@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
     BinOpKind, CasePattern, CtorPatternArg, Expr, ListPatternItem, ListPatternTail, Stmt,
@@ -70,8 +70,7 @@ pub(crate) fn infer_expr_ty(expr: &Expr, env: &TypeEnv, next_id: &mut usize) -> 
             }
             if let Some(receiver_ty) = env.locals.get(receiver) {
                 let resolved_receiver_ty = env.resolve_alias(receiver_ty, 0);
-                if let Ty::Con { name, .. } = &resolved_receiver_ty
-                    && let Some(field_ty) = env.record_field_ty(name, member)
+                if let Some(field_ty) = resolve_record_field_ty(env, &resolved_receiver_ty, member)
                 {
                     return env.resolve_alias(&field_ty, 0);
                 }
@@ -83,27 +82,7 @@ pub(crate) fn infer_expr_ty(expr: &Expr, env: &TypeEnv, next_id: &mut usize) -> 
             constructor,
             fields,
             ..
-        } => {
-            let Some(record) = env.lookup_record_by_constructor(constructor) else {
-                return Ty::Unknown;
-            };
-            if fields.len() != record.fields.len() {
-                return Ty::Unknown;
-            }
-            for (name, value) in fields {
-                let Some(expected_ty) = record.fields.get(name) else {
-                    return Ty::Unknown;
-                };
-                let actual_ty = infer_expr_ty(value, env, next_id);
-                if actual_ty != Ty::Unknown && !env.are_compatible(expected_ty, &actual_ty) {
-                    return Ty::Unknown;
-                }
-            }
-            Ty::Con {
-                name: record.type_name.clone(),
-                args: Vec::new(),
-            }
-        }
+        } => infer_record_construct_ty(env, constructor, fields, next_id),
         Expr::UnaryOp { op, expr } => {
             let inner = infer_expr_ty(expr, env, next_id);
             match (op, &inner) {
@@ -714,6 +693,160 @@ fn resolve_ctor_pattern_binder_tys(
         .into_iter()
         .map(|ty| crate::typecheck_unify::apply_type_substitution(&ty, &subst, &row_subst, env))
         .collect()
+}
+
+/// GU-S3 GR-2: infer the type of an `Expr::RecordConstruct`.
+///
+/// Mirrors the union-side `CA-3b` / `CP` flow but for a record constructor
+/// expression. Builds a single declaration-side scheme
+/// `[result_template, field_ty_a, field_ty_b, ...]` where the result
+/// template is `Ty::Con { name: record.type_name, args: type_params as
+/// Ty::Var }` and the field types come from `record.fields` taken in a
+/// **name-sorted order** so the iteration is deterministic across
+/// `HashMap` rehashes (matches the union side's `type_name`-sorted
+/// disambiguation). `freshen_type_scheme` then maps every shared
+/// `Ty::Var(p)` to one fresh name, and each field expression is unified
+/// against its freshened template via `unify_types_with_subst`. The
+/// resulting `TypeSubst`/`RowSubst` rewrites the freshened result
+/// template into `Ty::Con { name, args: [resolved...] }`.
+///
+/// Non-generic records (`type_params` empty) fall through with a
+/// trivially-substituted result of `Ty::Con { name, args: vec![] }`,
+/// which matches the pre-GR shape exactly. Wrong-arity (provided fields
+/// count mismatch) or unknown field name still returns `Ty::Unknown`,
+/// preserving the existing tolerant behaviour. Wrong field type
+/// (unification failure) also collapses to `Ty::Unknown`.
+fn infer_record_construct_ty(
+    env: &TypeEnv,
+    constructor: &str,
+    fields: &[(String, crate::ast::Expr)],
+    next_id: &mut usize,
+) -> Ty {
+    let Some(record) = env.lookup_record_by_constructor(constructor) else {
+        return Ty::Unknown;
+    };
+    if fields.len() != record.fields.len() {
+        return Ty::Unknown;
+    }
+    // Sort field names so the iteration order is stable across HashMap
+    // rehashes (analogous to the union-side type_name sort).
+    let mut field_names: Vec<&String> = record.fields.keys().collect();
+    field_names.sort();
+
+    // Build the scheme: [result_template, field_ty_for_name_0, ...].
+    let result_template = Ty::Con {
+        name: record.type_name.clone(),
+        args: record
+            .type_params
+            .iter()
+            .map(|p| Ty::Var(p.clone()))
+            .collect(),
+    };
+    let mut scheme: Vec<Ty> = Vec::with_capacity(1 + field_names.len());
+    scheme.push(result_template);
+    for fname in &field_names {
+        scheme.push(record.fields[*fname].clone());
+    }
+
+    // Seed `next_id` past existing fresh names in env (CA-3a contract);
+    // there is no scrutinee to consider here, unlike the pattern side.
+    *next_id = (*next_id).max(crate::typecheck_unify::next_fresh_ty_id_seed(env));
+    let freshened = crate::typecheck_unify::freshen_type_scheme(&scheme, next_id);
+    let freshened_result = freshened[0].clone();
+    let freshened_field_tys: Vec<Ty> = freshened[1..].to_vec();
+
+    let mut subst = crate::typecheck_env::TypeSubst::new();
+    let mut row_subst = crate::typecheck_env::RowSubst::new();
+
+    // Build a name -> provided-expr map so we can iterate in the sorted
+    // order while still picking up whatever ordering the source used.
+    let mut provided: HashMap<&str, &crate::ast::Expr> = HashMap::new();
+    for (name, value) in fields {
+        provided.insert(name.as_str(), value);
+    }
+
+    for (fname, freshened_field_ty) in field_names.iter().zip(freshened_field_tys.iter()) {
+        let Some(value) = provided.get(fname.as_str()) else {
+            // A declared field is not provided by the source — treat as
+            // wrong-arity / unknown-field (consistent with the legacy
+            // `record.fields.get(name)` miss case).
+            return Ty::Unknown;
+        };
+        let actual_ty = infer_expr_ty(value, env, next_id);
+        if actual_ty == Ty::Unknown {
+            // Treat `Ty::Unknown` actual as a wildcard; the legacy
+            // `are_compatible` short-circuited on `Ty::Unknown` in the
+            // same direction, so preserve that to avoid spurious rejects.
+            continue;
+        }
+        let expected_after_subst = crate::typecheck_unify::apply_type_substitution(
+            freshened_field_ty,
+            &subst,
+            &row_subst,
+            env,
+        );
+        if !crate::typecheck_unify::unify_types_with_subst(
+            &expected_after_subst,
+            &actual_ty,
+            &mut subst,
+            &mut row_subst,
+            env,
+            next_id,
+        ) {
+            return Ty::Unknown;
+        }
+    }
+
+    crate::typecheck_unify::apply_type_substitution(&freshened_result, &subst, &row_subst, env)
+}
+
+/// GU-S3 GR-3: resolve a record field type against a concrete receiver
+/// `Ty::Con { name, args }`.
+///
+/// For a non-generic record (`type_params` empty), this returns the
+/// declared field type unchanged — matching the pre-GR behaviour exactly.
+///
+/// For a generic record (e.g. `Box(value: a)` against a receiver
+/// `Ty::Con { name: "Box", args: [Ty::Int] }`), the helper builds a
+/// `TypeSubst` mapping each declared `type_params[i]` to `args[i]`, then
+/// applies it to the field template via `apply_type_substitution`. So
+/// `v.value` where `v : Box Int` resolves to `Int` instead of leaving
+/// `Ty::Var("a")` leaking out.
+///
+/// Returns `None` when the receiver is not a `Ty::Con` shape known to
+/// have a record declaration with the requested field; callers preserve
+/// their existing fallthrough (Qualified arm falls back to
+/// `env.lookup(qualified)` which routes ctor lookups through the CA-3b
+/// freshen path).
+fn resolve_record_field_ty(env: &TypeEnv, receiver_ty: &Ty, field: &str) -> Option<Ty> {
+    let Ty::Con { name, args } = receiver_ty else {
+        return None;
+    };
+    let record_info = env
+        .record_types
+        .values()
+        .find(|info| info.type_name == *name)?;
+    let field_template = record_info.fields.get(field)?.clone();
+    if record_info.type_params.is_empty() {
+        return Some(field_template);
+    }
+    if record_info.type_params.len() != args.len() {
+        // Arity mismatch — fall back to the un-substituted template. This
+        // matches the legacy `record_field_ty` behaviour (no substitution
+        // was performed before GR-3 either).
+        return Some(field_template);
+    }
+    let mut subst = crate::typecheck_env::TypeSubst::new();
+    for (param, arg) in record_info.type_params.iter().zip(args.iter()) {
+        subst.insert(param.clone(), arg.clone());
+    }
+    let row_subst = crate::typecheck_env::RowSubst::new();
+    Some(crate::typecheck_unify::apply_type_substitution(
+        &field_template,
+        &subst,
+        &row_subst,
+        env,
+    ))
 }
 
 fn infer_handler_covered_ops_lenient(
@@ -1782,5 +1915,183 @@ fst p =
         };
         let child_env = super::env_with_case_pattern_bindings(&env, &pattern, &scrutinee_ty);
         assert_eq!(child_env.locals.get("x"), Some(&Ty::Str));
+    }
+
+    // ---- GU-S3 GR: generic-record ctor application + field access ----
+
+    #[test]
+    fn typechecks_generic_record_ctor_application_box_int() {
+        // GR-2 acceptance: `Box(value: 42) : Box Int` (single-field
+        // generic record)。
+        let source = "\
+type Box a = Box(value: a)
+v : Box Int
+v = Box(value: 42)
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("`Box(value: 42) : Box Int` should typecheck");
+    }
+
+    #[test]
+    fn typechecks_generic_record_ctor_application_box_string_via_call_rewrite() {
+        // GR-2 acceptance: `Box "hello" : Box String` (single-field、Call
+        // rewrite 経路、typecheck_check.rs:150-162)。
+        let source = "\
+type Box a = Box(value: a)
+v : Box String
+v = Box \"hello\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("`Box \"hello\" : Box String` should typecheck");
+    }
+
+    #[test]
+    fn typechecks_generic_record_ctor_with_two_type_parameters() {
+        // GR-2 acceptance: 多パラメータ generic record。
+        let source = "\
+type Pair a b = Pair(first: a, second: b)
+v : Pair Int String
+v = Pair(first: 1, second: \"x\")
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("`Pair(first: 1, second: \"x\") : Pair Int String` should typecheck");
+    }
+
+    #[test]
+    fn typechecks_generic_record_field_access_box_int() {
+        // GR-3 acceptance: field access。`v : Box Int` から `v.value : Int`。
+        let source = "\
+type Box a = Box(value: a)
+v : Box Int
+v = Box(value: 42)
+n : Int
+n = v.value
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("`v.value : Int` should typecheck for `v : Box Int`");
+    }
+
+    #[test]
+    fn typechecks_generic_record_field_access_nested_box_maybe_int() {
+        // GR-3 acceptance: nested `Box (Maybe Int)` で `v.value : Maybe Int`。
+        let source = "\
+type Maybe a = Just(a) | Nothing
+type Box a = Box(value: a)
+v : Box (Maybe Int)
+v = Box(value: Nothing)
+inner : Maybe Int
+inner = v.value
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("`v.value : Maybe Int` should typecheck for `v : Box (Maybe Int)`");
+    }
+
+    #[test]
+    fn non_generic_record_ctor_application_still_typechecks_as_before() {
+        // GR-2 regression: non-generic record はの挙動完全不変。
+        let source = "\
+type Point = Point(x: Int, y: Int)
+p : Point
+p = Point(x: 1, y: 2)
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("non-generic `Point(x: 1, y: 2) : Point` should still typecheck");
+    }
+
+    #[test]
+    fn non_generic_record_field_access_still_typechecks_as_before() {
+        // GR-3 regression: non-generic record field access も挙動不変。
+        let source = "\
+type Point = Point(x: Int, y: Int)
+p : Point
+p = Point(x: 1, y: 2)
+n : Int
+n = p.x
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("non-generic `p.x : Int` should still typecheck");
+    }
+
+    #[test]
+    fn record_construct_returns_ty_con_with_resolved_type_args() {
+        // GR-2 AST-level pin: `infer_expr_ty(RecordConstruct)` の戻り値が
+        // `Ty::Con { name, args: [resolved] }` になることを直接 assert。
+        // 旧挙動では `args: vec![]` を返していた。
+        let mut record_types = HashMap::new();
+        let mut box_fields = HashMap::new();
+        box_fields.insert("value".to_string(), Ty::Var("a".to_string()));
+        record_types.insert(
+            "Box".to_string(),
+            crate::typecheck_env::RecordTypeInfo {
+                type_name: "Box".to_string(),
+                type_params: vec!["a".to_string()],
+                constructor: "Box".to_string(),
+                fields: box_fields,
+            },
+        );
+        let env = TypeEnv {
+            record_types,
+            ..TypeEnv::empty()
+        };
+        let expr = Expr::RecordConstruct {
+            constructor: "Box".to_string(),
+            fields: vec![("value".to_string(), Expr::IntLit(42))],
+            span: None,
+        };
+        match check_expr(&expr, &env) {
+            Ty::Con { name, args } => {
+                assert_eq!(name, "Box");
+                assert_eq!(args, vec![Ty::Int]);
+            }
+            other => panic!(
+                "expected `Ty::Con {{ name: \"Box\", args: [Int] }}`, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn rejects_generic_record_with_inconsistent_shared_type_param() {
+        // Codex GR pass-1 指摘 regression: 同じ `type_params[i]` を複数
+        // field が共有しているときの mismatch は `infer_record_construct_ty`
+        // が `Ty::Unknown` を返すだけで宣言型比較が wildcard pass する
+        // ため、`typecheck_ambiguity` の generic-record validator で
+        // 明示的に reject する必要がある。
+        // `Same a = Same(left: a, right: a)` に対して `Same(left: 1,
+        // right: "x")` を渡すと `a = Int` と `a = String` で矛盾するため
+        // 拒否されるべき。
+        let source = "\
+type Same a = Same(left: a, right: a)
+v : Same Int
+v = Same(left: 1, right: \"x\")
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err(
+            "`Same(left: 1, right: \"x\")` should be rejected — shared type param mismatch",
+        );
+        assert!(
+            !err.message.is_empty(),
+            "should produce a non-empty error message"
+        );
+    }
+
+    #[test]
+    fn rejects_generic_record_with_wrong_field_type() {
+        // GR-2 acceptance: wrong-type field を reject。
+        let source = "\
+type Box a = Box(value: a)
+v : Box String
+v = Box(value: 42)
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("`Box(value: 42) : Box String` should be rejected (Int vs String)");
+        assert!(
+            !err.message.is_empty(),
+            "should produce a non-empty error message"
+        );
     }
 }

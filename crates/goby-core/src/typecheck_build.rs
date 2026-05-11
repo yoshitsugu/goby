@@ -390,7 +390,6 @@ pub(crate) fn inject_type_constructors(
                 constructor,
                 fields,
             } => {
-                let is_generic = !type_params.is_empty();
                 let mut field_map = HashMap::new();
                 let params: Vec<Ty> = fields
                     .iter()
@@ -403,17 +402,19 @@ pub(crate) fn inject_type_constructors(
                     field_map.insert(field_name.clone(), field_ty);
                 }
                 let result = union_or_record_result_template(name, type_params);
-                // Generic record constructors face the same template-leakage
-                // hazard as generic unions; defer real signatures to the
-                // freshening pass.
-                let ctor_ty = if is_generic {
-                    Ty::Unknown
-                } else {
-                    Ty::Fun {
-                        params,
-                        result: Box::new(result),
-                        effects: EffectRow::closed_empty(),
-                    }
+                // GU-S3 GR-1: generic record ctors used to be registered as
+                // `Ty::Unknown` to avoid leaking unfreshened `Ty::Var`
+                // templates into unification. Now that
+                // `infer_expr_ty`'s Var/Qualified arm freshens ctor
+                // lookups (CA-3b) and `Expr::RecordConstruct` unifies
+                // field values against freshened field templates (GR-2),
+                // we register the real `Ty::Fun { params, result }`
+                // template just like the non-generic case (which is the
+                // same shape with empty `type_params`).
+                let ctor_ty = Ty::Fun {
+                    params,
+                    result: Box::new(result),
+                    effects: EffectRow::closed_empty(),
                 };
                 insert_global_symbol(
                     globals,

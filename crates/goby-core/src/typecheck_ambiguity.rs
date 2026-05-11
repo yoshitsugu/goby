@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::{Expr, InterpolatedPart, Span, Stmt};
 use crate::typecheck::TypecheckError;
@@ -142,16 +142,54 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
                     });
                 };
                 let actual_ty = check_expr(value, env);
-                if actual_ty != Ty::Unknown && !env.are_compatible(expected_ty, &actual_ty) {
+                if actual_ty == Ty::Unknown {
+                    // `Ty::Unknown` actual is a wildcard — preserve the
+                    // pre-GR behaviour of skipping the mismatch check.
+                    continue;
+                }
+                if record.type_params.is_empty() {
+                    if !env.are_compatible(expected_ty, &actual_ty) {
+                        return Err(TypecheckError {
+                            declaration: Some(decl_name.to_string()),
+                            span: best_available_expr_span(expr),
+                            message: format!(
+                                "field `{}` in constructor `{}` has type `{}` but expected `{}`",
+                                name,
+                                constructor,
+                                ty_name(&actual_ty),
+                                ty_name(expected_ty),
+                            ),
+                        });
+                    }
+                }
+                // GU-S3 GR-2 (Codex pass-1): generic record では field
+                // template `Ty::Var(a)` をそのまま `are_compatible` で
+                // 比較すると `Int vs a` が reject されてしまうので、
+                // ここでは個別の field を pass し、generic record 全体
+                // の field-vs-field 整合 (e.g. `Same a = Same(left: a,
+                // right: a)` で `Same(left: 1, right: "x")` を reject)
+                // は下記の generic-record validator で扱う。
+            }
+            // GU-S3 GR-2 (Codex pass-1 follow-up): generic record の場合、
+            // 同一 `type_params[i]` を複数 field が共有しているときの
+            // mismatch (`Same(left: 1, right: "x")` を `Same a = Same(
+            // left: a, right: a)` に対して reject) を確実に拾う。
+            // `infer_record_construct_ty` は失敗時に `Ty::Unknown` を
+            // 返すだけで、後段の宣言型比較で wildcard pass してしまうため、
+            // ambiguity walker 側で diagnostic を生成する。
+            if !record.type_params.is_empty() {
+                if let Some((failing_field, expected_ty, actual_ty)) =
+                    find_generic_record_field_mismatch(env, &record, fields)
+                {
                     return Err(TypecheckError {
                         declaration: Some(decl_name.to_string()),
                         span: best_available_expr_span(expr),
                         message: format!(
                             "field `{}` in constructor `{}` has type `{}` but expected `{}`",
-                            name,
+                            failing_field,
                             constructor,
                             ty_name(&actual_ty),
-                            ty_name(expected_ty),
+                            ty_name(&expected_ty),
                         ),
                     });
                 }
@@ -291,6 +329,91 @@ pub(crate) fn ensure_no_ambiguous_refs_in_stmts(
         }
     }
     Ok(())
+}
+
+/// GU-S3 GR-2 (Codex pass-1 follow-up): for a generic record (`type_params`
+/// non-empty), validate that the provided field values agree on the shared
+/// `Ty::Var(p)` template params across fields.
+///
+/// Returns `Some((field_name, expected_ty, actual_ty))` for the first field
+/// whose value cannot be unified against the freshened field template under
+/// the accumulating substitution, so the caller can produce a diagnostic
+/// equivalent to the non-generic mismatch error. Non-generic records and
+/// fully-`Ty::Unknown` value lists return `None`.
+///
+/// Mirrors `infer_record_construct_ty`'s scheme-freshen + per-field
+/// `unify_types_with_subst` walk, but stops at the first failure and
+/// reports the un-substituted field template (`Ty::Var(p)`) and the
+/// concrete actual type so the diagnostic mentions the user-facing
+/// template name rather than the internal `__goby_fresh_ty_N`.
+fn find_generic_record_field_mismatch(
+    env: &TypeEnv,
+    record: &crate::typecheck_env::RecordTypeInfo,
+    provided_fields: &[(String, crate::ast::Expr)],
+) -> Option<(String, crate::typecheck_env::Ty, crate::typecheck_env::Ty)> {
+    if record.type_params.is_empty() {
+        return None;
+    }
+    // Iterate declared fields in name-sorted order so the diagnostic is
+    // stable across HashMap rehashes — same contract as
+    // `infer_record_construct_ty`.
+    let mut field_names: Vec<&String> = record.fields.keys().collect();
+    field_names.sort();
+
+    let result_template = crate::typecheck_env::Ty::Con {
+        name: record.type_name.clone(),
+        args: record
+            .type_params
+            .iter()
+            .map(|p| crate::typecheck_env::Ty::Var(p.clone()))
+            .collect(),
+    };
+    let mut scheme: Vec<crate::typecheck_env::Ty> = Vec::with_capacity(1 + field_names.len());
+    scheme.push(result_template);
+    for fname in &field_names {
+        scheme.push(record.fields[*fname].clone());
+    }
+    let mut next_id = crate::typecheck_unify::next_fresh_ty_id_seed(env);
+    let freshened = crate::typecheck_unify::freshen_type_scheme(&scheme, &mut next_id);
+    let freshened_field_tys: Vec<crate::typecheck_env::Ty> = freshened[1..].to_vec();
+
+    let mut subst = crate::typecheck_env::TypeSubst::new();
+    let mut row_subst = crate::typecheck_env::RowSubst::new();
+
+    let mut provided_map: HashMap<&str, &crate::ast::Expr> = HashMap::new();
+    for (name, value) in provided_fields {
+        provided_map.insert(name.as_str(), value);
+    }
+
+    for (fname, freshened_field_ty) in field_names.iter().zip(freshened_field_tys.iter()) {
+        let Some(value) = provided_map.get(fname.as_str()) else {
+            continue;
+        };
+        let actual_ty = check_expr(value, env);
+        if actual_ty == crate::typecheck_env::Ty::Unknown {
+            continue;
+        }
+        let expected_after_subst = crate::typecheck_unify::apply_type_substitution(
+            freshened_field_ty,
+            &subst,
+            &row_subst,
+            env,
+        );
+        if !crate::typecheck_unify::unify_types_with_subst(
+            &expected_after_subst,
+            &actual_ty,
+            &mut subst,
+            &mut row_subst,
+            env,
+            &mut next_id,
+        ) {
+            // Report the original declared template (the user-facing
+            // `Ty::Var("a")` etc.) rather than the freshened name.
+            let original_field_ty = record.fields[*fname].clone();
+            return Some(((*fname).clone(), original_field_ty, actual_ty));
+        }
+    }
+    None
 }
 
 fn ensure_name_not_ambiguous(

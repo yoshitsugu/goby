@@ -243,13 +243,6 @@ impl TypeEnv {
         self.record_types.get(constructor)
     }
 
-    pub(crate) fn record_field_ty(&self, type_name: &str, field: &str) -> Option<Ty> {
-        self.record_types
-            .values()
-            .find(|info| info.type_name == type_name)
-            .and_then(|info| info.fields.get(field).cloned())
-    }
-
     /// GU-S3 CA-3b: returns true when the global `name` is bound to a type
     /// constructor (union variant ctor or record constructor) registered via
     /// `typecheck_build::inject_type_constructors`. The detector matches the
