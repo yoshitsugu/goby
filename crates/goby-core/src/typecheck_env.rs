@@ -204,13 +204,7 @@ pub(crate) enum CtorLookupResult<'a> {
     /// Qualified form `T.Ctor` where `T` does declare `Ctor`, but the
     /// scrutinee is concretely typed as another union `U`; or a bare
     /// `Ctor` where the scrutinee is concretely typed as `U` and `U` does
-    /// not declare `Ctor`.
-    ///
-    /// Fields are consumed by the Step 3 diagnostic helpers
-    /// (`err_ctor_does_not_belong`) — until then the suite would flag them
-    /// as `dead_code`, so the variant-level `allow` keeps the warning-free
-    /// invariant. The `allow` will be removed in Step 3.
-    #[allow(dead_code)]
+    /// not declare `Ctor`. Consumed by `err_ctor_does_not_belong`.
     DoesNotBelongToScrutinee {
         requested: Option<String>,
         ctor: String,
@@ -218,18 +212,15 @@ pub(crate) enum CtorLookupResult<'a> {
     },
     /// Qualified form `T.Ctor` where `T` is not a known union, or where
     /// `T` is known but does not declare `Ctor` (no scrutinee pinning).
-    /// See note on `DoesNotBelongToScrutinee` re: the `allow(dead_code)`.
-    #[allow(dead_code)]
+    /// Consumed by `err_qualified_ctor_unknown`.
     MissingQualifiedCtor {
         qualifier: String,
         ctor: String,
     },
-    /// Two or more unions declare `ctor`; the caller must emit the
-    /// dedicated "use `TypeName.Ctor`" diagnostic and fall back to
-    /// `Ty::Unknown`. Candidates are sorted by `type_name` for stable
-    /// diagnostic wording.
-    /// See note on `DoesNotBelongToScrutinee` re: the `allow(dead_code)`.
-    #[allow(dead_code)]
+    /// Two or more unions declare `ctor`; the caller emits the dedicated
+    /// "use `TypeName.Ctor`" diagnostic and falls back to `Ty::Unknown`.
+    /// Candidates are sorted by `type_name` for stable diagnostic wording.
+    /// Consumed by `err_ctor_ambiguous`.
     Ambiguous {
         ctor: String,
         candidates: Vec<CtorCandidate>,
@@ -349,25 +340,6 @@ impl TypeEnv {
     ///   `HashMap` rehashes) and return the first variant whose `ctor`
     ///   matches.
     ///
-    /// GU-S3 ambiguity-resolution-era wrapper: kept as a thin facade that
-    /// returns `Some(_)` only on a clean `Resolved` outcome. Existing
-    /// constructor-pattern paths that still want a tolerant "give me a
-    /// match or fall back to `Ty::Unknown`" semantics route through this.
-    ///
-    /// New callers should use `resolve_ctor` directly so they can branch on
-    /// `DoesNotBelongToScrutinee` / `MissingQualifiedCtor` / `Ambiguous`
-    /// without losing information.
-    pub(crate) fn lookup_union_variant(
-        &self,
-        type_qualifier: Option<&str>,
-        ctor: &str,
-    ) -> Option<(&UnionTypeInfo, &UnionVariantInfo)> {
-        match self.resolve_ctor(type_qualifier, ctor, None) {
-            CtorLookupResult::Resolved { union, variant } => Some((union, variant)),
-            _ => None,
-        }
-    }
-
     /// GU-S3 constructor-name ambiguity resolution entry point.
     ///
     /// Resolution priority (PLAN_GU §6 GU-S3):
@@ -445,17 +417,34 @@ impl TypeEnv {
         if let Some(scrut_name) = scrutinee_union_name {
             // Known union: pin restricts the candidate set.
             if let Some(info) = self.union_types.get(scrut_name) {
-                return match info.variants.iter().find(|v| v.ctor == ctor) {
-                    Some(variant) => CtorLookupResult::Resolved {
+                if let Some(variant) = info.variants.iter().find(|v| v.ctor == ctor) {
+                    return CtorLookupResult::Resolved {
                         union: info,
                         variant,
-                    },
-                    None => CtorLookupResult::DoesNotBelongToScrutinee {
+                    };
+                }
+                // Codex pass-1 (AR-2) 指摘: pin 先 union が `ctor` を declare
+                // していないとき、自動的に `DoesNotBelongToScrutinee` にして
+                // しまうと、どの union にも宣言が無い完全 unknown ctor
+                // (例: `case m: Maybe Int / Foo _ -> ...`) まで AR-2 診断が
+                // 焚かれてしまう。silent fallback (= 既存 walker の
+                // 「unknown function or constructor」診断に任せる挙動) を
+                // 守るために、他の union に存在するかどうかで分岐する。
+                // - 他 union にも無い → `Unknown` (silent)。
+                // - 他 union にある → 真の pin 衝突なので `DoesNotBelong`。
+                let ctor_known_elsewhere = self
+                    .union_types
+                    .iter()
+                    .any(|(name, other)| name != scrut_name
+                        && other.variants.iter().any(|v| v.ctor == ctor));
+                if ctor_known_elsewhere {
+                    return CtorLookupResult::DoesNotBelongToScrutinee {
                         requested: None,
                         ctor: ctor.to_string(),
                         scrutinee: scrutinee.cloned().unwrap_or(Ty::Unknown),
-                    },
-                };
+                    };
+                }
+                return CtorLookupResult::Unknown;
             }
             // Codex pass-1 指摘: `Ty::Con` が既知 record 型 (e.g. `Box`,
             // `Pair`) を指している場合は「scrutinee は別ユニオン型」と等価
@@ -464,14 +453,23 @@ impl TypeEnv {
             // `type_name` ではない (`type Wrapped a = Box(value: a)` だと
             // key は "Box"、`type_name` は "Wrapped")。よって
             // `contains_key(scrut_name)` ではなく values の `type_name`
-            // を走査する。それ以外 (= 完全に未登録の `Ty::Con` 名) は
-            // global search にフォールバックして既存挙動を維持する。
+            // を走査する。
+            // Codex pass-2 (AR-2) と同じ silent fallback ロジックを適用:
+            // record 型 scrutinee に対して、ctor がどの union にも宣言が
+            // 無ければ silent、ある union で宣言されていれば pin 衝突。
             if self.record_types.values().any(|r| r.type_name == scrut_name) {
-                return CtorLookupResult::DoesNotBelongToScrutinee {
-                    requested: None,
-                    ctor: ctor.to_string(),
-                    scrutinee: scrutinee.cloned().unwrap_or(Ty::Unknown),
-                };
+                let ctor_known_elsewhere = self
+                    .union_types
+                    .values()
+                    .any(|u| u.variants.iter().any(|v| v.ctor == ctor));
+                if ctor_known_elsewhere {
+                    return CtorLookupResult::DoesNotBelongToScrutinee {
+                        requested: None,
+                        ctor: ctor.to_string(),
+                        scrutinee: scrutinee.cloned().unwrap_or(Ty::Unknown),
+                    };
+                }
+                return CtorLookupResult::Unknown;
             }
             // Unknown `Ty::Con` name — fall through to global ctor search
             // (`Unknown` or `Ambiguous` exactly as for the no-scrutinee
@@ -1084,6 +1082,72 @@ mod resolve_ctor_tests {
     }
 
     #[test]
+    fn scrutinee_pinned_bare_ctor_unknown_everywhere_falls_back_to_unknown() {
+        // Codex AR-2 pass-1 follow-up: when the bare ctor is not declared
+        // by any union (including the pinned one), the helper must return
+        // `Unknown` so the existing tolerant "unknown function or
+        // constructor" path keeps owning that diagnostic. Without this
+        // silent fallback, a typo like `Foo _` against a `Maybe Int`
+        // scrutinee would be double-reported (once as D-2, once as
+        // unknown-ctor downstream).
+        let env = env_with_unions(vec![union(
+            "Maybe",
+            vec!["a"],
+            vec![
+                variant("Just", 0, vec![Ty::Var("a".to_string())]),
+                variant("Nothing", 1, vec![]),
+            ],
+        )]);
+        let scrutinee = Ty::Con {
+            name: "Maybe".to_string(),
+            args: vec![Ty::Int],
+        };
+        match env.resolve_ctor(None, "Foo", Some(&scrutinee)) {
+            CtorLookupResult::Unknown => {}
+            other => panic!(
+                "expected Unknown (silent fallback for unknown ctor), got {:?}",
+                debug_label(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn scrutinee_pin_to_record_with_unknown_ctor_everywhere_falls_back_to_unknown() {
+        // Same shape as above, but the scrutinee is a known record type
+        // (so the pin would otherwise short-circuit to `DoesNotBelong`).
+        // The Codex pass-1 follow-up applies symmetrically.
+        let mut env = TypeEnv::empty();
+        env.record_types.insert(
+            "MakeWrapped".to_string(),
+            RecordTypeInfo {
+                type_name: "Wrapped".to_string(),
+                type_params: vec!["a".to_string()],
+                constructor: "MakeWrapped".to_string(),
+                fields: HashMap::new(),
+            },
+        );
+        env.union_types.insert(
+            "Maybe".to_string(),
+            union(
+                "Maybe",
+                vec!["a"],
+                vec![variant("Just", 0, vec![Ty::Var("a".to_string())])],
+            ),
+        );
+        let scrutinee = Ty::Con {
+            name: "Wrapped".to_string(),
+            args: vec![Ty::Int],
+        };
+        match env.resolve_ctor(None, "Foo", Some(&scrutinee)) {
+            CtorLookupResult::Unknown => {}
+            other => panic!(
+                "expected Unknown (silent fallback for unknown ctor with record pin), got {:?}",
+                debug_label(&other)
+            ),
+        }
+    }
+
+    #[test]
     fn scrutinee_pinned_bare_ctor_missing_in_pin_returns_does_not_belong() {
         let env = env_with_unions(vec![
             union(
@@ -1298,23 +1362,6 @@ mod resolve_ctor_tests {
             }
             other => panic!("expected Ambiguous, got {:?}", debug_label(&other)),
         }
-    }
-
-    #[test]
-    fn lookup_union_variant_wrapper_returns_some_only_for_resolved() {
-        let env = env_with_unions(vec![
-            union("A", vec![], vec![variant("X", 0, vec![])]),
-            union("B", vec![], vec![variant("X", 0, vec![])]),
-        ]);
-        // Ambiguous bare ctor must collapse to None through the wrapper.
-        assert!(env.lookup_union_variant(None, "X").is_none());
-        // Qualified-with-typeknown still returns Some.
-        let resolved = env
-            .lookup_union_variant(Some("A"), "X")
-            .expect("qualified path should resolve");
-        assert_eq!(resolved.0.type_name, "A");
-        // Missing qualified ctor must collapse to None.
-        assert!(env.lookup_union_variant(Some("A"), "Z").is_none());
     }
 
     /// Helper that converts a `CtorLookupResult` into a `&'static str` so the

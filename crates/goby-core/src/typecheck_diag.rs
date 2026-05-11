@@ -103,3 +103,87 @@ pub(crate) fn err_failed_stdlib_module_resolve(
         ),
     }
 }
+
+/// GU-S3 ambiguity resolution: a qualified constructor form `T.Ctor` clashes
+/// with the scrutinee's concretely-known union type `U`, or a bare `Ctor`
+/// resolves under a pinned scrutinee type `U` that does not declare `Ctor`.
+///
+/// `requested_type` is `Some("T")` when the source wrote `T.Ctor` and the
+/// scrutinee was a different union, `None` when the source wrote the bare
+/// form and the scrutinee pinned the union (i.e. the qualifier was inferred,
+/// not written).
+///
+/// Wording aligns with PLAN_GU §6 GU-S3 D-2.
+pub(crate) fn err_ctor_does_not_belong(
+    decl_name: &str,
+    requested_type: Option<&str>,
+    ctor: &str,
+    scrutinee_type_name: &str,
+    span: Option<Span>,
+) -> TypecheckError {
+    let message = match requested_type {
+        Some(t) => format!(
+            "constructor `{}.{}` does not belong to scrutinee type `{}`",
+            t, ctor, scrutinee_type_name
+        ),
+        None => format!(
+            "constructor `{}` does not belong to scrutinee type `{}`",
+            ctor, scrutinee_type_name
+        ),
+    };
+    TypecheckError {
+        declaration: Some(decl_name.to_string()),
+        span,
+        message,
+    }
+}
+
+/// GU-S3 ambiguity resolution: a qualified constructor form `T.Ctor`
+/// references either an unknown type `T` or a type `T` that does not
+/// declare `Ctor`. Distinct from the unqualified "unknown function or
+/// constructor" diagnostic because the qualified form carries strictly
+/// more information about user intent.
+pub(crate) fn err_qualified_ctor_unknown(
+    decl_name: &str,
+    qualifier: &str,
+    ctor: &str,
+    span: Option<Span>,
+) -> TypecheckError {
+    TypecheckError {
+        declaration: Some(decl_name.to_string()),
+        span,
+        message: format!(
+            "qualified constructor `{}.{}` is not declared by any union type",
+            qualifier, ctor
+        ),
+    }
+}
+
+/// GU-S3 ambiguity resolution: a bare `Ctor` matches more than one union
+/// declaration in scope. `candidate_type_names` must be sorted (the caller
+/// receives them sorted from `TypeEnv::resolve_ctor`); we render the first
+/// `TypeName.Ctor` suggestion so the diagnostic doubles as a fix hint.
+pub(crate) fn err_ctor_ambiguous(
+    decl_name: &str,
+    ctor: &str,
+    candidate_type_names: &[String],
+    span: Option<Span>,
+) -> TypecheckError {
+    let listed = candidate_type_names
+        .iter()
+        .map(|t| format!("`{}.{}`", t, ctor))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let suggest = candidate_type_names
+        .first()
+        .map(|t| format!(" — use a qualified form like `{}.{}`", t, ctor))
+        .unwrap_or_default();
+    TypecheckError {
+        declaration: Some(decl_name.to_string()),
+        span,
+        message: format!(
+            "constructor `{}` is ambiguous; candidates: {}{}",
+            ctor, listed, suggest
+        ),
+    }
+}

@@ -619,27 +619,168 @@ pub(crate) fn env_with_case_pattern_bindings_using(
     child
 }
 
+/// GU-S3 AR-2 (constructor-name ambiguity resolution): pattern-side result
+/// surfaced to the ambiguity walker (`typecheck_ambiguity::ensure_no_ambiguous_refs_in_expr`).
+///
+/// `binder_tys` carries the per-arg binder type inference exactly as before
+/// (silent fallback to `Ty::Unknown` for unknown ctor / wrong-arity / failed
+/// unify), so the existing `env_with_case_pattern_bindings_using` path keeps
+/// emitting tolerant bindings. `diagnostic` is `Some(_)` when the ambiguity
+/// walker should reject the pattern (qualified-ctor mismatch with the
+/// scrutinee, missing qualified ctor, or two unions sharing the ctor name).
+///
+/// **Caller contract** (mirrors `TypeEnv::resolve_ctor`): `scrutinee_ty`
+/// must be alias-resolved before invocation (the existing CP path does this
+/// via `env.resolve_alias` inside the helper).
+pub(crate) struct CtorPatternResolution {
+    pub(crate) binder_tys: Vec<Ty>,
+    pub(crate) diagnostic: Option<crate::typecheck::TypecheckError>,
+}
+
 /// GU-S3 constructor-pattern binder inference: given a `CasePattern::Ctor`
-/// and the scrutinee's type, return a `Vec<Ty>` (one per pattern arg)
-/// holding each binder's inferred type.
+/// and the scrutinee's type, return both the per-arg binder type inference
+/// (`binder_tys`) and an optional ambiguity-resolution diagnostic.
 ///
 /// Implementation:
-/// 1. Look up the union variant via `TypeEnv::lookup_union_variant`. Unknown
-///    ctor → all-`Ty::Unknown` (= pre-GU-S3 behaviour).
-/// 2. Wrong-arity (`args.len() != variant.arg_types.len()`) also falls back
-///    to all-`Ty::Unknown`, matching the existing tolerant pattern walker
-///    (the dedicated wrong-arity diagnostic is a follow-up).
-/// 3. Build a single declaration-side scheme `[result_template,
-///    arg_type_0, arg_type_1, ...]` and feed it to `freshen_type_scheme`
+/// 1. Look up the variant via `TypeEnv::resolve_ctor(type_qualifier, ctor,
+///    Some(scrutinee_ty))`. Unknown ctor → all-`Ty::Unknown` binder fallback
+///    + no diagnostic (= pre-GU-S3 tolerant walker behaviour).
+/// 2. AR-2: `DoesNotBelongToScrutinee` / `MissingQualifiedCtor` / `Ambiguous`
+///    each produce all-`Ty::Unknown` binders and a corresponding diagnostic
+///    via `typecheck_diag::err_ctor_*`.
+/// 3. Wrong-arity (`args.len() != variant.arg_types.len()`) on a `Resolved`
+///    outcome also falls back to all-`Ty::Unknown` with no diagnostic — the
+///    dedicated wrong-arity diagnostic is a follow-up tracked in PLAN_GU §6.
+/// 4. On clean resolve: build a single declaration-side scheme
+///    `[result_template, arg_type_0, ...]` and feed it to `freshen_type_scheme`
 ///    so every `Ty::Var(a)` shared between the result template and any arg
 ///    type maps to one fresh name.
-/// 4. Try `unify_types_with_subst(freshened_result, scrutinee_ty, ...)`.
-///    On success, `apply_type_substitution` rewrites the freshened arg
-///    types into concrete binder types. On failure (or when the scrutinee
-///    is `Ty::Unknown` / a different shape), the freshened arg types are
-///    returned as-is. For non-generic unions the freshen is a no-op so
-///    binders come back exactly as the original `arg_types` declared, and
-///    behaviour is unchanged.
+/// 5. Unify `(freshened_result, scrutinee_ty)`. On success, `apply_type_substitution`
+///    rewrites the freshened arg types into concrete binder types. On failure
+///    (or when the scrutinee is `Ty::Unknown` / a different shape), the
+///    freshened arg types are returned as-is. For non-generic unions the
+///    freshen is a no-op so binders come back exactly as the declared
+///    `arg_types`, and behaviour is unchanged.
+pub(crate) fn resolve_ctor_pattern_binders(
+    env: &TypeEnv,
+    type_qualifier: Option<&str>,
+    ctor: &str,
+    args: &[CtorPatternArg],
+    scrutinee_ty: &Ty,
+    next_id: &mut usize,
+    decl_name: &str,
+    span: Option<crate::ast::Span>,
+) -> CtorPatternResolution {
+    use crate::typecheck_env::CtorLookupResult;
+    let scrutinee_resolved = env.resolve_alias(scrutinee_ty, 0);
+    let lookup = env.resolve_ctor(type_qualifier, ctor, Some(&scrutinee_resolved));
+    match lookup {
+        CtorLookupResult::Resolved { union, variant } => {
+            if args.len() != variant.arg_types.len() {
+                return CtorPatternResolution {
+                    binder_tys: vec![Ty::Unknown; args.len()],
+                    diagnostic: None,
+                };
+            }
+            let result_template = Ty::Con {
+                name: union.type_name.clone(),
+                args: union
+                    .type_params
+                    .iter()
+                    .map(|p| Ty::Var(p.clone()))
+                    .collect(),
+            };
+            let mut scheme: Vec<Ty> = Vec::with_capacity(1 + variant.arg_types.len());
+            scheme.push(result_template);
+            scheme.extend(variant.arg_types.iter().cloned());
+            // Codex CP pass-1/pass-2 指摘: seed は env と scrutinee_ty の両方を
+            // 加味した最大値からスタートする。caller (`Expr::Case` arm in
+            // `infer_expr_ty`) は同じ `&mut next_id` を渡して、消費後の counter
+            // を arm body 推論に引き継ぐ。
+            *next_id = (*next_id)
+                .max(crate::typecheck_unify::next_fresh_ty_id_seed(env))
+                .max(crate::typecheck_unify::max_fresh_ty_id_in_ty(scrutinee_ty))
+                .max(crate::typecheck_env::max_fresh_row_id(scrutinee_ty));
+            let freshened = crate::typecheck_unify::freshen_type_scheme(&scheme, next_id);
+            let freshened_result = freshened[0].clone();
+            let freshened_arg_tys: Vec<Ty> = freshened[1..].to_vec();
+
+            let mut subst = crate::typecheck_env::TypeSubst::new();
+            let mut row_subst = crate::typecheck_env::RowSubst::new();
+            let _ = crate::typecheck_unify::unify_types_with_subst(
+                &freshened_result,
+                &scrutinee_resolved,
+                &mut subst,
+                &mut row_subst,
+                env,
+                next_id,
+            );
+            let binder_tys = freshened_arg_tys
+                .into_iter()
+                .map(|ty| {
+                    crate::typecheck_unify::apply_type_substitution(&ty, &subst, &row_subst, env)
+                })
+                .collect();
+            CtorPatternResolution {
+                binder_tys,
+                diagnostic: None,
+            }
+        }
+        CtorLookupResult::DoesNotBelongToScrutinee {
+            requested,
+            ctor: ctor_name,
+            scrutinee: scrut_ty,
+        } => {
+            let scrut_name = match &scrut_ty {
+                Ty::Con { name, .. } => name.clone(),
+                // Should not occur because resolve_ctor only emits this
+                // variant when the scrutinee is `Ty::Con`. Render a safe
+                // fallback rather than panic.
+                _ => crate::typecheck_render::ty_name(&scrut_ty),
+            };
+            CtorPatternResolution {
+                binder_tys: vec![Ty::Unknown; args.len()],
+                diagnostic: Some(crate::typecheck_diag::err_ctor_does_not_belong(
+                    decl_name,
+                    requested.as_deref(),
+                    &ctor_name,
+                    &scrut_name,
+                    span,
+                )),
+            }
+        }
+        CtorLookupResult::MissingQualifiedCtor {
+            qualifier,
+            ctor: ctor_name,
+        } => CtorPatternResolution {
+            binder_tys: vec![Ty::Unknown; args.len()],
+            diagnostic: Some(crate::typecheck_diag::err_qualified_ctor_unknown(
+                decl_name, &qualifier, &ctor_name, span,
+            )),
+        },
+        CtorLookupResult::Ambiguous {
+            ctor: ctor_name,
+            candidates,
+        } => {
+            let names: Vec<String> = candidates.iter().map(|c| c.type_name.clone()).collect();
+            CtorPatternResolution {
+                binder_tys: vec![Ty::Unknown; args.len()],
+                diagnostic: Some(crate::typecheck_diag::err_ctor_ambiguous(
+                    decl_name, &ctor_name, &names, span,
+                )),
+            }
+        }
+        CtorLookupResult::Unknown => CtorPatternResolution {
+            binder_tys: vec![Ty::Unknown; args.len()],
+            diagnostic: None,
+        },
+    }
+}
+
+/// Backwards-compatible wrapper used by `env_with_case_pattern_bindings_using`.
+/// Drops the diagnostic; `typecheck_ambiguity` calls
+/// `resolve_ctor_pattern_binders` directly so it can surface the diagnostic
+/// to the validation walker.
 fn resolve_ctor_pattern_binder_tys(
     env: &TypeEnv,
     type_qualifier: Option<&str>,
@@ -648,51 +789,17 @@ fn resolve_ctor_pattern_binder_tys(
     scrutinee_ty: &Ty,
     next_id: &mut usize,
 ) -> Vec<Ty> {
-    let Some((union_info, variant_info)) = env.lookup_union_variant(type_qualifier, ctor) else {
-        return vec![Ty::Unknown; args.len()];
-    };
-    if args.len() != variant_info.arg_types.len() {
-        return vec![Ty::Unknown; args.len()];
-    }
-    let result_template = Ty::Con {
-        name: union_info.type_name.clone(),
-        args: union_info
-            .type_params
-            .iter()
-            .map(|p| Ty::Var(p.clone()))
-            .collect(),
-    };
-    let mut scheme: Vec<Ty> = Vec::with_capacity(1 + variant_info.arg_types.len());
-    scheme.push(result_template);
-    scheme.extend(variant_info.arg_types.iter().cloned());
-    // Codex CP pass-1/pass-2 指摘: seed は env と scrutinee_ty の両方を
-    // 加味した最大値からスタートする。caller (`Expr::Case` arm in
-    // `infer_expr_ty`) は同じ `&mut next_id` を渡して、消費後の counter を
-    // arm body 推論に引き継ぐ。これにより CP binder が消費した fresh ID
-    // を後続の generic ctor/function freshen が再発行することがなくなる。
-    *next_id = (*next_id)
-        .max(crate::typecheck_unify::next_fresh_ty_id_seed(env))
-        .max(crate::typecheck_unify::max_fresh_ty_id_in_ty(scrutinee_ty))
-        .max(crate::typecheck_env::max_fresh_row_id(scrutinee_ty));
-    let freshened = crate::typecheck_unify::freshen_type_scheme(&scheme, next_id);
-    let freshened_result = freshened[0].clone();
-    let freshened_arg_tys: Vec<Ty> = freshened[1..].to_vec();
-
-    let mut subst = crate::typecheck_env::TypeSubst::new();
-    let mut row_subst = crate::typecheck_env::RowSubst::new();
-    let scrutinee_resolved = env.resolve_alias(scrutinee_ty, 0);
-    let _ = crate::typecheck_unify::unify_types_with_subst(
-        &freshened_result,
-        &scrutinee_resolved,
-        &mut subst,
-        &mut row_subst,
+    resolve_ctor_pattern_binders(
         env,
+        type_qualifier,
+        ctor,
+        args,
+        scrutinee_ty,
         next_id,
-    );
-    freshened_arg_tys
-        .into_iter()
-        .map(|ty| crate::typecheck_unify::apply_type_substitution(&ty, &subst, &row_subst, env))
-        .collect()
+        "",
+        None,
+    )
+    .binder_tys
 }
 
 /// GU-S3 GR-2: infer the type of an `Expr::RecordConstruct`.
@@ -2093,5 +2200,308 @@ v = Box(value: 42)
             !err.message.is_empty(),
             "should produce a non-empty error message"
         );
+    }
+
+    // ---- GU-S3 AR-2: constructor-name ambiguity resolution (pattern side) ----
+
+    #[test]
+    fn pattern_qualified_ctor_conflicting_with_scrutinee_emits_does_not_belong() {
+        // AR-2 D-2 acceptance: `Maybe.Just(x) ->` matched against a
+        // `Result` scrutinee must reject with the dedicated D-2 wording.
+        // The scrutinee is a top-level value with a concrete annotation
+        // so that the inferred scrutinee type pins to `Ty::Con { name:
+        // "Result", .. }`. The function body uses the indented `case`
+        // shape that Goby's parser expects (decl `=` on its own line,
+        // then `case`/arms indented under it).
+        let source = "\
+type Maybe a = Just(a) | Nothing
+type Result a b = Ok(a) | Err(b)
+unwrap : Result Int String -> Int
+unwrap r =
+  case r
+    Maybe.Just x -> x
+    Result.Ok x -> x
+    Result.Err _ -> 0
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module).expect_err(
+            "`Maybe.Just(x) -> ...` against a `Result` scrutinee should be rejected",
+        );
+        assert!(
+            err.message.contains("does not belong"),
+            "diagnostic should mention 'does not belong'; got: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("Maybe.Just"),
+            "diagnostic should mention `Maybe.Just`; got: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("Result"),
+            "diagnostic should mention scrutinee type `Result`; got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn pattern_qualified_ctor_with_unknown_qualifier_emits_qualified_unknown() {
+        // AR-2: `Unknown.Just(x) ->` rejects via `MissingQualifiedCtor`
+        // wording, distinct from "unknown function or constructor".
+        // `MissingQualifiedCtor` does not depend on the scrutinee being
+        // concretely typed, so the helper fires even if the scrutinee
+        // arrives as `Ty::Unknown`.
+        let source = "\
+type Maybe a = Just(a) | Nothing
+to_int : Maybe Int -> Int
+to_int m =
+  case m
+    Unknown.Just x -> x
+    Nothing -> 0
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("`Unknown.Just x -> ...` should be rejected (no such type)");
+        assert!(
+            err.message
+                .contains("qualified constructor `Unknown.Just`"),
+            "diagnostic should mention the qualified form; got: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("not declared by any union type"),
+            "diagnostic should explain the missing union; got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn pattern_qualified_ctor_with_known_type_but_missing_ctor_emits_qualified_unknown() {
+        // AR-2: `Maybe.Foo(x) ->` rejects via `MissingQualifiedCtor` —
+        // `Maybe` exists but does not declare `Foo`.
+        let source = "\
+type Maybe a = Just(a) | Nothing
+to_int : Maybe Int -> Int
+to_int m =
+  case m
+    Maybe.Foo x -> x
+    Nothing -> 0
+    Just x -> x
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("`Maybe.Foo(x) -> ...` should be rejected (Foo missing in Maybe)");
+        assert!(
+            err.message.contains("`Maybe.Foo`"),
+            "diagnostic should mention the qualified form; got: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("not declared by any union type"),
+            "diagnostic should explain the missing union; got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn pattern_qualified_ctor_resolves_when_scrutinee_matches() {
+        // AR-2 regression: qualified pattern matching the scrutinee union
+        // continues to resolve cleanly with no diagnostic.
+        let source = "\
+type Maybe a = Just(a) | Nothing
+to_int : Maybe Int -> Int
+to_int m =
+  case m
+    Maybe.Just x -> x
+    Maybe.Nothing -> 0
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("`Maybe.Just(x) -> x` against a `Maybe` scrutinee should typecheck");
+    }
+
+    #[test]
+    fn pattern_bare_unknown_ctor_with_concrete_scrutinee_stays_silent() {
+        // AR-2 silent-fallback regression (Codex AR-2 pass-1): a bare ctor
+        // that no union declares — `Foo _` — must not trigger
+        // `DoesNotBelongToScrutinee`. The current `case` walker has no
+        // dedicated "unknown pattern constructor" diagnostic, so the
+        // arm silently binds the wildcard under `Ty::Unknown` and the
+        // module typechecks. AR-2 must preserve this behaviour rather
+        // than double-reporting. A dedicated diagnostic for unknown
+        // pattern ctors is tracked as a separate follow-up (PLAN_GU §6
+        // GU-S3 wrong-arity / unknown-ctor wording).
+        let source = "\
+type Maybe a = Just(a) | Nothing
+to_int : Maybe Int -> Int
+to_int m =
+  case m
+    Just x -> x
+    Foo _ -> 0
+    Nothing -> 0
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("unknown ctor `Foo _` should silently fall back, not trigger AR-2 D-2");
+    }
+
+    #[test]
+    fn pattern_lambda_param_scrutinee_does_not_trigger_does_not_belong() {
+        // AR-2 deferred behaviour pin (Codex AR-2 pass-2 follow-up):
+        // when the scrutinee comes from a lambda parameter, the
+        // ambiguity walker currently sees `scrutinee_ty = Ty::Unknown`
+        // (`Expr::Lambda` arm introduces the param into the walker's
+        // local env with `Ty::Unknown`). The scrutinee-pinned D-2 path
+        // therefore does not fire even when the qualifier would
+        // contradict the lambda's declared parameter type. This pin
+        // documents the current behaviour rather than the desired one;
+        // it asserts that `Maybe.Just x` does NOT trigger the AR-2
+        // "does not belong" wording in the lambda-param case.
+        //
+        // When the lambda-param threading follow-up lands, this test
+        // can flip to `expect_err` for the same input. The
+        // `MissingQualifiedCtor` / `Ambiguous` paths already work
+        // because they do not depend on scrutinee pinning.
+        let source = "\
+type Maybe a = Just(a) | Nothing
+type Result a b = Ok(a) | Err(b)
+f : Result Int String -> Int
+f = (r) -> case r
+  Maybe.Just x -> x
+  Ok x -> x
+  Err _ -> 0
+";
+        let module = parse_module(source).expect("should parse");
+        // Pin the "no AR-2 D-2 wording" behaviour. If the module errors
+        // for some other reason (e.g. `Maybe.Just x` arm body type
+        // mismatching `Int`), we still allow that — the AR-2-specific
+        // pin is that the diagnostic, if any, does NOT mention "does
+        // not belong" (D-2's signature wording).
+        match typecheck_module(&module) {
+            Ok(()) => {}
+            Err(err) => assert!(
+                !err.message.contains("does not belong"),
+                "AR-2 D-2 should not fire for a lambda-param scrutinee \
+                 (current limitation); got: {}",
+                err.message
+            ),
+        }
+    }
+
+    #[test]
+    fn pattern_bare_ambiguous_ctor_emits_ambiguous_diagnostic_at_helper_level() {
+        // AR-2 acceptance (Codex pass-2): pin the ambiguous-walker
+        // connection by calling `resolve_ctor_pattern_binders` directly
+        // with a `Ty::Unknown` scrutinee against an env that declares
+        // the ctor in two unions. In real Goby sources scrutinees are
+        // usually inferred to a concrete `Ty::Con`, so the walker-side
+        // ambiguous diagnostic is hard to surface end-to-end at module
+        // level; the helper-level pin keeps the walker → diagnostic
+        // wiring honest until cross-module imported unions expose a
+        // natural `Ty::Unknown` scrutinee shape.
+        use crate::ast::CtorPatternArg;
+        use crate::typecheck_env::{UnionTypeInfo, UnionVariantInfo};
+        let mut env = TypeEnv::empty();
+        let insert_union = |env: &mut TypeEnv, name: &str| {
+            env.union_types.insert(
+                name.to_string(),
+                UnionTypeInfo {
+                    type_name: name.to_string(),
+                    type_params: vec!["a".to_string()],
+                    variants: vec![UnionVariantInfo {
+                        ctor: "Same".to_string(),
+                        variant_index: 0,
+                        arg_types: vec![Ty::Var("a".to_string())],
+                    }],
+                },
+            );
+        };
+        insert_union(&mut env, "OnePair");
+        insert_union(&mut env, "TwoPair");
+        let mut next_id = 0usize;
+        let resolution = super::resolve_ctor_pattern_binders(
+            &env,
+            None,
+            "Same",
+            &[CtorPatternArg::Bind("x".to_string())],
+            &Ty::Unknown,
+            &mut next_id,
+            "decl_under_test",
+            None,
+        );
+        assert_eq!(resolution.binder_tys, vec![Ty::Unknown]);
+        let diag = resolution
+            .diagnostic
+            .expect("bare ambiguous ctor should emit a diagnostic");
+        assert!(
+            diag.message.contains("is ambiguous"),
+            "diagnostic should mention 'is ambiguous'; got: {}",
+            diag.message
+        );
+        assert!(
+            diag.message.contains("`OnePair.Same`")
+                && diag.message.contains("`TwoPair.Same`"),
+            "diagnostic should list both candidates with qualified form; got: {}",
+            diag.message
+        );
+        assert!(
+            diag.message.contains("use a qualified form"),
+            "diagnostic should suggest the qualified form; got: {}",
+            diag.message
+        );
+        assert_eq!(diag.declaration.as_deref(), Some("decl_under_test"));
+    }
+
+    #[test]
+    fn pattern_record_scrutinee_with_unknown_ctor_stays_silent_at_module_level() {
+        // AR-2 acceptance (Codex pass-2): the record-pin silent
+        // fallback path also fires at module level. A `Wrapped`-typed
+        // local is matched against an unknown `Foo _` pattern; the
+        // helper returns `Unknown` (not D-2) so no AR-2 diagnostic
+        // fires. The arm body still has to typecheck — we use `0` so
+        // the module is otherwise valid.
+        let source = "\
+type Wrapped a = MakeWrapped(value: a)
+w : Wrapped Int
+w = MakeWrapped(value: 1)
+v : Int
+v =
+  case w
+    Foo _ -> 0
+    MakeWrapped(value: x) -> x
+";
+        let module = parse_module(source).expect("should parse");
+        // The module should typecheck; even if some other diagnostic
+        // fires (unlikely on this shape), AR-2 must not fire D-2 here.
+        match typecheck_module(&module) {
+            Ok(()) => {}
+            Err(err) => assert!(
+                !err.message.contains("does not belong"),
+                "unknown pattern ctor against a record-typed scrutinee must not \
+                 trigger AR-2 D-2; got: {}",
+                err.message
+            ),
+        }
+    }
+
+    #[test]
+    fn pattern_bare_ctor_with_two_unions_pins_via_scrutinee() {
+        // AR-2 regression: bare `Ok(x) ->` against a `Result` scrutinee
+        // continues to resolve cleanly even when another union (e.g.
+        // `ParseResult`) declares the same `Ok` ctor — scrutinee pin wins.
+        // The function arg's annotated type flows into the `case`
+        // scrutinee via `to_int`'s parameter binding.
+        let source = "\
+type Result a b = Ok(a) | Err(b)
+type ParseResult a = Ok(a) | Failed(String)
+unwrap : Result Int String -> Int
+unwrap r =
+  case r
+    Ok x -> x
+    Err _ -> 0
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("scrutinee-pinned bare `Ok(x) -> x` should resolve to `Result.Ok`");
     }
 }

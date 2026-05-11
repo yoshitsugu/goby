@@ -292,6 +292,35 @@ pub(crate) fn ensure_no_ambiguous_refs_in_expr(
             ensure_no_ambiguous_refs_in_expr(scrutinee, env, decl_name)?;
             let scrutinee_ty = check_expr(scrutinee, env);
             for arm in arms {
+                // GU-S3 AR-2: emit any ctor-name ambiguity diagnostic
+                // (`DoesNotBelongToScrutinee` / `MissingQualifiedCtor` /
+                // `Ambiguous`) for the pattern *before* descending into the
+                // arm body. Silent fallbacks (unknown ctor / wrong-arity)
+                // still slip through to preserve the pre-AR tolerant walker
+                // shape used by other existing diagnostics downstream.
+                if let crate::ast::CasePattern::Ctor {
+                    type_qualifier,
+                    ctor,
+                    args,
+                } = &arm.pattern
+                {
+                    let mut next_id = crate::typecheck_unify::next_fresh_ty_id_seed(env)
+                        .max(crate::typecheck_unify::max_fresh_ty_id_in_ty(&scrutinee_ty))
+                        .max(crate::typecheck_env::max_fresh_row_id(&scrutinee_ty));
+                    let resolution = crate::typecheck_check::resolve_ctor_pattern_binders(
+                        env,
+                        type_qualifier.as_deref(),
+                        ctor,
+                        args,
+                        &scrutinee_ty,
+                        &mut next_id,
+                        decl_name,
+                        Some(arm.span),
+                    );
+                    if let Some(diag) = resolution.diagnostic {
+                        return Err(diag);
+                    }
+                }
                 let arm_env = env_with_case_pattern_bindings(env, &arm.pattern, &scrutinee_ty);
                 ensure_no_ambiguous_refs_in_expr(&arm.body, &arm_env, decl_name)?;
             }
