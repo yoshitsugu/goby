@@ -220,12 +220,21 @@ syntax/semantics.
       value) or `_` (ignores the value). Nested constructor patterns are not
       supported.
     - constructor patterns also accept the type-qualified form, e.g.
-      `Maybe.Just x -> ...` / `Maybe.Nothing -> ...`. The qualified and bare
-      forms are equivalent; the qualified form exists so that the
-      "use the qualified form `TypeName.Ctor`" diagnostic guidance is
-      actually writable in patterns. This mirrors the existing precedent
-      in handler-clause heads, where unqualified clause names are accepted
-      only when unambiguous and the qualified `EffectName.operation` form
+      `Maybe.Just x -> ...` / `Maybe.Nothing -> ...`. The qualified form
+      is **strictly more restrictive** than the bare form: `T.Ctor`
+      requires the scrutinee to be (or unify with) `T`, while bare
+      `Ctor` is disambiguated by the scrutinee's concrete union type
+      when known, by uniqueness across visible declarations otherwise,
+      and falls to an explicit "ambiguous; use `TypeName.Ctor`"
+      diagnostic when neither pin applies. When the qualified form
+      contradicts the scrutinee (e.g. `case (r : Result Int String) /
+      Maybe.Just x -> ...`), the typecheck phase rejects the arm with
+      *"constructor `T.Ctor` does not belong to scrutinee type `U`"*.
+      An unknown qualifier or a `T.Ctor` not declared by `T` rejects
+      with *"qualified constructor `T.Ctor` is not declared by any
+      union type"*. This mirrors the existing precedent in handler-
+      clause heads, where unqualified clause names are accepted only
+      when unambiguous and the qualified `EffectName.operation` form
       (e.g. `Iterator.yield`) is otherwise required.
 - Mutable locals:
   - declaration: `mut x = expr`

@@ -768,30 +768,50 @@ follow the same fresh-instantiation rule as union constructors.
   through inference; the same `freshen_type_scheme` path covers all
   of these cases because field access reads `Ty` from inference,
   not from syntactic context.
-- **Constructor-name ambiguity resolution.** When two unions
-  expose the same constructor name (e.g. `Result.Err` and
-  `ParseResult.Err`), the typecheck rule is:
+- **Constructor-name ambiguity resolution (AR-1/AR-2/AR-3 landed
+  2026-05-11).** When two unions expose the same constructor name
+  (e.g. `Result.Err` and `ParseResult.Err`), the typecheck rule is:
   1. **If `type_qualifier` is `Some(t)`** (the source wrote
      `T.Ctor`): only the constructor of type `t` is a candidate. If
      `t` does not declare `Ctor`, or if the scrutinee type is already
      known concretely as `Ty::Con { name: u, .. }` with `u != t`,
      emit the dedicated diagnostic *"constructor `t.Ctor` does not
      belong to scrutinee type `u`"* (D-2). This case never falls
-     through to step 2/3.
+     through to step 2/3. ✅ Landed in AR-1/AR-2; unknown qualifier
+     or missing-in-qualifier emits the related but distinct
+     *"qualified constructor `T.Ctor` is not declared by any union
+     type"* wording.
   2. If the scrutinee's type is already known concretely
      (`Ty::Con { name, .. }`), use that to disambiguate — only
-     constructors of that type are candidates.
-  3. Otherwise, **local declarations shadow imported declarations**:
-     if exactly one *local* constructor matches by name, use it; only
-     if no local match exists do imported constructors come into
-     scope. This is the lexical-scope rule used by Rust / Haskell and
-     mirrors the existing import resolution in `parser_top.rs`. (D-3)
+     constructors of that type are candidates. ✅ Landed in AR-1.
+     Caveat: today's `ensure_no_ambiguous_refs_in_expr` introduces
+     lambda params into the walker's local env with `Ty::Unknown`,
+     so scrutinee-pin D-2 does not fire when the scrutinee is a
+     lambda parameter even if the lambda is annotated. Threading
+     the lambda's annotated param type into the walker is a
+     deferred follow-up; the `MissingQualifiedCtor` / `Ambiguous`
+     paths still fire because they do not depend on scrutinee
+     pinning.
+  3. **Deferred until imported-union registration lands**: local
+     declarations shadow imported declarations. `CtorCandidate` has
+     a future-proofed `origin: CtorOrigin { Local }` field, but
+     `inject_imported_type_constructors` currently registers
+     records only (PLAN_GU §6 GU-S2d). Once imported unions are
+     registered, AR-1 will extend the resolver with the
+     local-shadows-imported step. (D-3)
   4. Otherwise, if exactly one constructor matches by name across
-     the locally-visible set, use it.
+     the locally-visible set, use it. ✅ Landed in AR-1.
   5. Otherwise, emit a diagnostic naming all candidate types and
-     suggesting the qualified form `TypeName.Ctor`.
-  Constructor *application* (not patterns) follows the same rule with
-  expected-type information from the surrounding context.
+     suggesting the qualified form `TypeName.Ctor`. ✅ Landed in
+     AR-1/AR-2/AR-3 via `err_ctor_ambiguous`.
+  Constructor *application* (not patterns) follows the same rule
+  through `ensure_ctor_resolution` in the application walker
+  (AR-3). **Deferred**: expected-type-driven application-site
+  disambiguation (`x : OnePair Int; x = Same 0` should resolve to
+  `OnePair.Same` even when another union declares `Same`); AR-3
+  today emits the ambiguous diagnostic instead. This is a
+  follow-up to be picked up after expected-type threading at
+  application sites lands.
 - Cross-module use of generic unions and generic records
   (`typecheck_validate.rs`, `typecheck_build.rs::inject_imported_*`).
 - Diagnostic wording for arity / type mismatches on constructor
