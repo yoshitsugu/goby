@@ -210,7 +210,10 @@ pub(crate) fn infer_expr_ty(expr: &Expr, env: &TypeEnv, next_id: &mut usize) -> 
             let scrutinee_ty = infer_expr_ty(scrutinee, env, next_id);
             let mut merged: Option<Ty> = None;
             for arm in arms {
-                let arm_env = env_with_case_pattern_bindings(env, &arm.pattern, &scrutinee_ty);
+                // CP (Codex pass-2): pattern binder の freshen で消費した
+                // counter を arm body に引き継ぐため、`*_using` 版を使う。
+                let arm_env =
+                    env_with_case_pattern_bindings_using(env, &arm.pattern, &scrutinee_ty, next_id);
                 let arm_ty = infer_expr_ty(&arm.body, &arm_env, next_id);
                 merged = Some(match merged {
                     Some(prev) => merge_branch_type(env, prev, arm_ty),
@@ -557,11 +560,43 @@ fn list_item_ty_for_case_scrutinee(env: &TypeEnv, scrutinee_ty: &Ty) -> Ty {
     }
 }
 
+/// CP: pattern binder の env を作る入り口 (旧シグネチャ)。
+///
+/// `next_id` を持たない caller (`typecheck_ambiguity` / `typecheck_branch` /
+/// `typecheck_effect_usage` / `typecheck_resume`) はこちらを使う。内部で
+/// ローカル `next_id` を seed して使い切り、消費結果は外に伝わらない。
+/// これらの caller は pattern bindings の **env を作るだけ** で、その後の
+/// expr 推論には流れないため、`next_id` を共有する必要がない。
 pub(crate) fn env_with_case_pattern_bindings(
     env: &TypeEnv,
     pattern: &CasePattern,
     scrutinee_ty: &Ty,
 ) -> TypeEnv {
+    let mut next_id = crate::typecheck_unify::next_fresh_ty_id_seed(env)
+        .max(crate::typecheck_unify::max_fresh_ty_id_in_ty(scrutinee_ty))
+        .max(crate::typecheck_env::max_fresh_row_id(scrutinee_ty));
+    env_with_case_pattern_bindings_using(env, pattern, scrutinee_ty, &mut next_id)
+}
+
+/// CP (Codex pass-2 指摘): caller の `&mut next_id` を thread して、
+/// pattern binder で消費した fresh counter を arm body 推論に引き継ぐ
+/// 入り口。`infer_expr_ty` の `Expr::Case` arm が使う。
+///
+/// 旧 entry (`env_with_case_pattern_bindings`) はこちらの薄い wrapper で
+/// あり、`next_id` を持たない caller も挙動を変えずに通すために残す。
+pub(crate) fn env_with_case_pattern_bindings_using(
+    env: &TypeEnv,
+    pattern: &CasePattern,
+    scrutinee_ty: &Ty,
+    next_id: &mut usize,
+) -> TypeEnv {
+    // Codex CP pass-2 指摘: 渡された counter よりさらに進んだ最大値で
+    // seed しなおす。caller 側が CP の binder freshen で消費した fresh
+    // 名を使い回さないように。env / scrutinee_ty の両方を加味する。
+    *next_id = (*next_id)
+        .max(crate::typecheck_unify::next_fresh_ty_id_seed(env))
+        .max(crate::typecheck_unify::max_fresh_ty_id_in_ty(scrutinee_ty))
+        .max(crate::typecheck_env::max_fresh_row_id(scrutinee_ty));
     let mut child = env.clone();
     if let CasePattern::ListPattern { items, tail } = pattern {
         let item_ty = list_item_ty_for_case_scrutinee(env, scrutinee_ty);
@@ -580,23 +615,105 @@ pub(crate) fn env_with_case_pattern_bindings(
                 .insert(name.clone(), Ty::List(Box::new(item_ty)));
         }
     }
-    if let CasePattern::Ctor { args, .. } = pattern {
-        // The constructor's variant arg types are not yet propagated to
-        // pattern binders — that lands in the unification phase that
-        // turns the scrutinee's `Ty::Con { name, args }` into per-binder
-        // types. Until then, register every binder as `Ty::Unknown`
-        // so the body still type-checks (any expression is compatible
-        // with `Ty::Unknown`). Skip the `_` discard binder, mirroring
-        // the existing list-pattern behaviour.
-        for arg in args {
+    if let CasePattern::Ctor {
+        type_qualifier,
+        ctor,
+        args,
+    } = pattern
+    {
+        let resolved = resolve_ctor_pattern_binder_tys(
+            env,
+            type_qualifier.as_deref(),
+            ctor,
+            args,
+            scrutinee_ty,
+            next_id,
+        );
+        for (arg, resolved_ty) in args.iter().zip(resolved.iter()) {
             if let CtorPatternArg::Bind(name) = arg
                 && name != "_"
             {
-                child.locals.insert(name.clone(), Ty::Unknown);
+                child.locals.insert(name.clone(), resolved_ty.clone());
             }
         }
     }
     child
+}
+
+/// GU-S3 constructor-pattern binder inference: given a `CasePattern::Ctor`
+/// and the scrutinee's type, return a `Vec<Ty>` (one per pattern arg)
+/// holding each binder's inferred type.
+///
+/// Implementation:
+/// 1. Look up the union variant via `TypeEnv::lookup_union_variant`. Unknown
+///    ctor → all-`Ty::Unknown` (= pre-GU-S3 behaviour).
+/// 2. Wrong-arity (`args.len() != variant.arg_types.len()`) also falls back
+///    to all-`Ty::Unknown`, matching the existing tolerant pattern walker
+///    (the dedicated wrong-arity diagnostic is a follow-up).
+/// 3. Build a single declaration-side scheme `[result_template,
+///    arg_type_0, arg_type_1, ...]` and feed it to `freshen_type_scheme`
+///    so every `Ty::Var(a)` shared between the result template and any arg
+///    type maps to one fresh name.
+/// 4. Try `unify_types_with_subst(freshened_result, scrutinee_ty, ...)`.
+///    On success, `apply_type_substitution` rewrites the freshened arg
+///    types into concrete binder types. On failure (or when the scrutinee
+///    is `Ty::Unknown` / a different shape), the freshened arg types are
+///    returned as-is. For non-generic unions the freshen is a no-op so
+///    binders come back exactly as the original `arg_types` declared, and
+///    behaviour is unchanged.
+fn resolve_ctor_pattern_binder_tys(
+    env: &TypeEnv,
+    type_qualifier: Option<&str>,
+    ctor: &str,
+    args: &[CtorPatternArg],
+    scrutinee_ty: &Ty,
+    next_id: &mut usize,
+) -> Vec<Ty> {
+    let Some((union_info, variant_info)) = env.lookup_union_variant(type_qualifier, ctor) else {
+        return vec![Ty::Unknown; args.len()];
+    };
+    if args.len() != variant_info.arg_types.len() {
+        return vec![Ty::Unknown; args.len()];
+    }
+    let result_template = Ty::Con {
+        name: union_info.type_name.clone(),
+        args: union_info
+            .type_params
+            .iter()
+            .map(|p| Ty::Var(p.clone()))
+            .collect(),
+    };
+    let mut scheme: Vec<Ty> = Vec::with_capacity(1 + variant_info.arg_types.len());
+    scheme.push(result_template);
+    scheme.extend(variant_info.arg_types.iter().cloned());
+    // Codex CP pass-1/pass-2 指摘: seed は env と scrutinee_ty の両方を
+    // 加味した最大値からスタートする。caller (`Expr::Case` arm in
+    // `infer_expr_ty`) は同じ `&mut next_id` を渡して、消費後の counter を
+    // arm body 推論に引き継ぐ。これにより CP binder が消費した fresh ID
+    // を後続の generic ctor/function freshen が再発行することがなくなる。
+    *next_id = (*next_id)
+        .max(crate::typecheck_unify::next_fresh_ty_id_seed(env))
+        .max(crate::typecheck_unify::max_fresh_ty_id_in_ty(scrutinee_ty))
+        .max(crate::typecheck_env::max_fresh_row_id(scrutinee_ty));
+    let freshened = crate::typecheck_unify::freshen_type_scheme(&scheme, next_id);
+    let freshened_result = freshened[0].clone();
+    let freshened_arg_tys: Vec<Ty> = freshened[1..].to_vec();
+
+    let mut subst = crate::typecheck_env::TypeSubst::new();
+    let mut row_subst = crate::typecheck_env::RowSubst::new();
+    let scrutinee_resolved = env.resolve_alias(scrutinee_ty, 0);
+    let _ = crate::typecheck_unify::unify_types_with_subst(
+        &freshened_result,
+        &scrutinee_resolved,
+        &mut subst,
+        &mut row_subst,
+        env,
+        next_id,
+    );
+    freshened_arg_tys
+        .into_iter()
+        .map(|ty| crate::typecheck_unify::apply_type_substitution(&ty, &subst, &row_subst, env))
+        .collect()
 }
 
 fn infer_handler_covered_ops_lenient(
@@ -1269,5 +1386,401 @@ v = Just 1 2
             "wrong-arity generic ctor application currently passes silently (pre-existing \
              validator gap; reject is a deferred follow-up)",
         );
+    }
+
+    // ---- GU-S3 CP: constructor-pattern binder inference を pin ----
+
+    #[test]
+    fn case_ctor_pattern_binds_int_for_maybe_int_scrutinee() {
+        // CP acceptance: `case xs ... Just(x) -> x + 1` で `x : Int` に
+        // bind される。旧挙動 (binder = `Ty::Unknown`) では `x + 1` が
+        // `BinOp(Unknown, Int) -> Unknown` になるが、arm body の戻り値
+        // 型注釈 `Int` と annotation 比較は `Ty::Unknown` ワイルドカード
+        // で通っていた。新挙動では `x : Int` で `BinOp(Int, Int) -> Int`
+        // が正しく推論される。どちらでも typecheck は通るが、本テストは
+        // パターン側 binder が `Int` に解決されることを式戻り値経由で間接
+        // 的に pin する (binder = `Ty::Unknown` で `x + 1 : Unknown` が
+        // 返ったとしても annotation `Int` には通るので、より厳密な pin
+        // は CP-2 の追加リファクタで Var lookup を観察する必要がある —
+        // 後続テストで行う)。
+        let source = "\
+type Maybe a = Just(a) | Nothing
+to_int : Maybe Int -> Int
+to_int m =
+  case m
+    Just(x) -> x + 1
+    Nothing -> 0
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("`Just(x)` against `Maybe Int` scrutinee should bind `x : Int`");
+    }
+
+    #[test]
+    fn case_ctor_pattern_binds_string_for_maybe_string_scrutinee() {
+        // CP acceptance: 別 type argument でも独立に binder を推論する。
+        // `Just(x) -> x` で arm body type が `String` になることを宣言
+        // 戻り値 `String` 注釈で確認。binder が `Ty::Unknown` のままだと
+        // arm 型は `Ty::Unknown` で `String` annotation は wildcard で
+        // 通るが、CP-3 で AST-level 直接検査するテストを別途追加する。
+        let source = "\
+type Maybe a = Just(a) | Nothing
+from_some : Maybe String -> String
+from_some m =
+  case m
+    Just(x) -> x
+    Nothing -> \"empty\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("`Just(x)` against `Maybe String` scrutinee should bind `x : String`");
+    }
+
+    #[test]
+    fn case_ctor_pattern_binds_pair_components() {
+        // CP acceptance: 多パラメータ template でも各 binder が独立に
+        // 解決される。`Pair(x, y)` against `Pair Int String` で `x : Int`、
+        // `y : String`。
+        let source = "\
+type Pair a b = Pair(a, b)
+fst : Pair Int String -> Int
+fst p =
+  case p
+    Pair(x, _) -> x + 0
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module)
+            .expect("`Pair(x, _)` against `Pair Int String` should bind `x : Int`");
+    }
+
+    #[test]
+    fn case_ctor_pattern_binder_is_int_at_var_lookup() {
+        // CP acceptance (直接観察): pattern 後の env で `Var "x"` を
+        // 評価した結果が `Ty::Int` であることを `check_expr` で直接確認。
+        // 旧挙動なら `Ty::Unknown` が返るところを `Ty::Int` に。
+        use crate::ast::{CaseArm, CasePattern, CtorPatternArg};
+        // env: union "Maybe" with `Just(a)` / `Nothing`、scrutinee local
+        // `xs : Maybe Int` を仕込む。
+        let union_info = crate::typecheck_env::UnionTypeInfo {
+            type_name: "Maybe".to_string(),
+            type_params: vec!["a".to_string()],
+            variants: vec![
+                crate::typecheck_env::UnionVariantInfo {
+                    ctor: "Just".to_string(),
+                    variant_index: 0,
+                    arg_types: vec![Ty::Var("a".to_string())],
+                },
+                crate::typecheck_env::UnionVariantInfo {
+                    ctor: "Nothing".to_string(),
+                    variant_index: 1,
+                    arg_types: vec![],
+                },
+            ],
+        };
+        let mut union_types = HashMap::new();
+        union_types.insert("Maybe".to_string(), union_info);
+        let mut locals = HashMap::new();
+        locals.insert(
+            "xs".to_string(),
+            Ty::Con {
+                name: "Maybe".to_string(),
+                args: vec![Ty::Int],
+            },
+        );
+        let env = TypeEnv {
+            locals,
+            union_types,
+            ..TypeEnv::empty()
+        };
+        let pattern = CasePattern::Ctor {
+            type_qualifier: None,
+            ctor: "Just".to_string(),
+            args: vec![CtorPatternArg::Bind("x".to_string())],
+        };
+        let scrutinee_ty = Ty::Con {
+            name: "Maybe".to_string(),
+            args: vec![Ty::Int],
+        };
+        let child_env = super::env_with_case_pattern_bindings(&env, &pattern, &scrutinee_ty);
+        let body = Expr::Var {
+            name: "x".to_string(),
+            span: None,
+        };
+        assert_eq!(
+            check_expr(&body, &child_env),
+            Ty::Int,
+            "binder `x` should resolve to `Int` after `Just(x)` against `Maybe Int`"
+        );
+        // arm walker contract: `CaseArm` is unused here directly; the
+        // helper is what `infer_expr_ty` calls. Avoid unused import warning.
+        let _ = std::mem::size_of::<CaseArm>();
+    }
+
+    #[test]
+    fn case_ctor_pattern_wildcard_does_not_bind() {
+        // CP acceptance: `Just(_)` は env に何も追加しない。
+        use crate::ast::{CasePattern, CtorPatternArg};
+        let union_info = crate::typecheck_env::UnionTypeInfo {
+            type_name: "Maybe".to_string(),
+            type_params: vec!["a".to_string()],
+            variants: vec![crate::typecheck_env::UnionVariantInfo {
+                ctor: "Just".to_string(),
+                variant_index: 0,
+                arg_types: vec![Ty::Var("a".to_string())],
+            }],
+        };
+        let mut union_types = HashMap::new();
+        union_types.insert("Maybe".to_string(), union_info);
+        let env = TypeEnv {
+            union_types,
+            ..TypeEnv::empty()
+        };
+        let pattern = CasePattern::Ctor {
+            type_qualifier: None,
+            ctor: "Just".to_string(),
+            args: vec![CtorPatternArg::Wildcard],
+        };
+        let scrutinee_ty = Ty::Con {
+            name: "Maybe".to_string(),
+            args: vec![Ty::Int],
+        };
+        let child_env = super::env_with_case_pattern_bindings(&env, &pattern, &scrutinee_ty);
+        assert!(
+            child_env.locals.is_empty(),
+            "wildcard binder should not insert anything into the env"
+        );
+    }
+
+    #[test]
+    fn case_ctor_pattern_non_generic_box_arg_still_binds_int() {
+        // CP regression: non-generic single-arg ctor pattern (`Box(x)` for
+        // `type Box = Box(Int)`) を `Box` scrutinee 上で評価して `x : Int`
+        // を pin。`type_params` 空 → freshen 結果は `arg_types` の clone
+        // (no fresh ids 消費) → subst も同じ Con shape の unify で成立
+        // しないが、freshened_arg_tys がそのまま Int で返るので OK。
+        use crate::ast::{CasePattern, CtorPatternArg};
+        let union_info = crate::typecheck_env::UnionTypeInfo {
+            type_name: "Box".to_string(),
+            type_params: vec![],
+            variants: vec![crate::typecheck_env::UnionVariantInfo {
+                ctor: "Box".to_string(),
+                variant_index: 0,
+                arg_types: vec![Ty::Int],
+            }],
+        };
+        let mut union_types = HashMap::new();
+        union_types.insert("Box".to_string(), union_info);
+        let env = TypeEnv {
+            union_types,
+            ..TypeEnv::empty()
+        };
+        let pattern = CasePattern::Ctor {
+            type_qualifier: None,
+            ctor: "Box".to_string(),
+            args: vec![CtorPatternArg::Bind("x".to_string())],
+        };
+        let scrutinee_ty = Ty::Con {
+            name: "Box".to_string(),
+            args: vec![],
+        };
+        let child_env = super::env_with_case_pattern_bindings(&env, &pattern, &scrutinee_ty);
+        assert_eq!(child_env.locals.get("x"), Some(&Ty::Int));
+    }
+
+    #[test]
+    fn case_ctor_pattern_unknown_ctor_falls_back_to_unknown_binders() {
+        // CP regression: unknown ctor は all-`Ty::Unknown` で fallback。
+        use crate::ast::{CasePattern, CtorPatternArg};
+        let env = TypeEnv::empty();
+        let pattern = CasePattern::Ctor {
+            type_qualifier: None,
+            ctor: "Unknown".to_string(),
+            args: vec![CtorPatternArg::Bind("x".to_string())],
+        };
+        let scrutinee_ty = Ty::Unknown;
+        let child_env = super::env_with_case_pattern_bindings(&env, &pattern, &scrutinee_ty);
+        assert_eq!(child_env.locals.get("x"), Some(&Ty::Unknown));
+    }
+
+    #[test]
+    fn case_ctor_pattern_wrong_arity_falls_back_to_unknown_binders() {
+        // CP regression: wrong-arity (binder 数 > variant arg 数 等) は
+        // all-`Ty::Unknown` で fallback (CA-3b と同じ deferred diagnostic
+        // policy)。
+        use crate::ast::{CasePattern, CtorPatternArg};
+        let union_info = crate::typecheck_env::UnionTypeInfo {
+            type_name: "Maybe".to_string(),
+            type_params: vec!["a".to_string()],
+            variants: vec![crate::typecheck_env::UnionVariantInfo {
+                ctor: "Just".to_string(),
+                variant_index: 0,
+                arg_types: vec![Ty::Var("a".to_string())],
+            }],
+        };
+        let mut union_types = HashMap::new();
+        union_types.insert("Maybe".to_string(), union_info);
+        let env = TypeEnv {
+            union_types,
+            ..TypeEnv::empty()
+        };
+        // `Just(x, y)` — variant は 1-arg なのに pattern は 2 binder。
+        let pattern = CasePattern::Ctor {
+            type_qualifier: None,
+            ctor: "Just".to_string(),
+            args: vec![
+                CtorPatternArg::Bind("x".to_string()),
+                CtorPatternArg::Bind("y".to_string()),
+            ],
+        };
+        let scrutinee_ty = Ty::Con {
+            name: "Maybe".to_string(),
+            args: vec![Ty::Int],
+        };
+        let child_env = super::env_with_case_pattern_bindings(&env, &pattern, &scrutinee_ty);
+        assert_eq!(child_env.locals.get("x"), Some(&Ty::Unknown));
+        assert_eq!(child_env.locals.get("y"), Some(&Ty::Unknown));
+    }
+
+    #[test]
+    fn env_with_case_pattern_bindings_using_advances_caller_next_id() {
+        // Codex CP pass-2 指摘: `*_using` 版に caller の `&mut next_id` を
+        // 渡したとき、CP 側で消費した fresh counter が外に伝わることを pin。
+        // pattern binder で freshen が走れば next_id は最低 1 回 advance
+        // するはず (`Ty::Var("a")` を `__goby_fresh_ty_N` に置換)。
+        use crate::ast::{CasePattern, CtorPatternArg};
+        let union_info = crate::typecheck_env::UnionTypeInfo {
+            type_name: "Maybe".to_string(),
+            type_params: vec!["a".to_string()],
+            variants: vec![crate::typecheck_env::UnionVariantInfo {
+                ctor: "Just".to_string(),
+                variant_index: 0,
+                arg_types: vec![Ty::Var("a".to_string())],
+            }],
+        };
+        let mut union_types = HashMap::new();
+        union_types.insert("Maybe".to_string(), union_info);
+        let env = TypeEnv {
+            union_types,
+            ..TypeEnv::empty()
+        };
+        let pattern = CasePattern::Ctor {
+            type_qualifier: None,
+            ctor: "Just".to_string(),
+            args: vec![CtorPatternArg::Bind("x".to_string())],
+        };
+        // 未解決の scrutinee — Maybe `__goby_fresh_ty_2` を渡す。
+        let scrutinee_ty = Ty::Con {
+            name: "Maybe".to_string(),
+            args: vec![Ty::Var("__goby_fresh_ty_2".to_string())],
+        };
+        let mut next_id = 0usize;
+        let _ = super::env_with_case_pattern_bindings_using(
+            &env,
+            &pattern,
+            &scrutinee_ty,
+            &mut next_id,
+        );
+        // 入力 scrutinee に `__goby_fresh_ty_2` があるので seed は 3 以上に
+        // jump し、CP の freshen で `a` を `__goby_fresh_ty_3` に置換する。
+        // 結果として next_id は 4 以上 (3 を消費して advance) — Codex
+        // pass-3 nit 反映でより強い pin に。
+        assert!(
+            next_id >= 4,
+            "next_id must advance past scrutinee fresh max + 1 (got {})",
+            next_id
+        );
+    }
+
+    #[test]
+    fn case_ctor_pattern_seeds_next_id_past_scrutinee_fresh_vars() {
+        // Codex CP pass-1 指摘 regression: scrutinee に既存
+        // `__goby_fresh_ty_N` が含まれていても CP の freshen が同じ ID を
+        // 再利用しないことを pin。例として scrutinee
+        // `Pair __goby_fresh_ty_1 __goby_fresh_ty_0` (param 順を入れ替えて
+        // ある) で `Pair(x, y)` 評価 — もし seed が env のみだと CP が
+        // `__goby_fresh_ty_0` / `__goby_fresh_ty_1` を再利用して
+        // `a -> __goby_fresh_ty_0`, `b -> __goby_fresh_ty_1` に freshen し
+        // unify で `a` も `b` も同じ `__goby_fresh_ty_1` に bind してしまう
+        // 可能性がある。scrutinee 側の fresh も seed すれば 2 以降から
+        // 新規 fresh を取るため衝突しない。
+        use crate::ast::{CasePattern, CtorPatternArg};
+        let union_info = crate::typecheck_env::UnionTypeInfo {
+            type_name: "Pair".to_string(),
+            type_params: vec!["a".to_string(), "b".to_string()],
+            variants: vec![crate::typecheck_env::UnionVariantInfo {
+                ctor: "Pair".to_string(),
+                variant_index: 0,
+                arg_types: vec![Ty::Var("a".to_string()), Ty::Var("b".to_string())],
+            }],
+        };
+        let mut union_types = HashMap::new();
+        union_types.insert("Pair".to_string(), union_info);
+        let env = TypeEnv {
+            union_types,
+            ..TypeEnv::empty()
+        };
+        let pattern = CasePattern::Ctor {
+            type_qualifier: None,
+            ctor: "Pair".to_string(),
+            args: vec![
+                CtorPatternArg::Bind("x".to_string()),
+                CtorPatternArg::Bind("y".to_string()),
+            ],
+        };
+        // scrutinee `Pair __goby_fresh_ty_1 __goby_fresh_ty_0` — 内側で
+        // 順序を反転させてあるので、CP の freshen が同じ ID を再利用すると
+        // collapse する。
+        let scrutinee_ty = Ty::Con {
+            name: "Pair".to_string(),
+            args: vec![
+                Ty::Var("__goby_fresh_ty_1".to_string()),
+                Ty::Var("__goby_fresh_ty_0".to_string()),
+            ],
+        };
+        let child_env = super::env_with_case_pattern_bindings(&env, &pattern, &scrutinee_ty);
+        let x_ty = child_env.locals.get("x").cloned().expect("x must be bound");
+        let y_ty = child_env.locals.get("y").cloned().expect("y must be bound");
+        // x は scrutinee の 1 番目 = `__goby_fresh_ty_1`、y は 2 番目 =
+        // `__goby_fresh_ty_0`。2 つの binder が別の fresh 名に bind されて
+        // いることが本テストの core 不変条件 (= ID 衝突で collapse して
+        // いない)。
+        assert_ne!(
+            x_ty, y_ty,
+            "two independent template params must not collapse to one fresh id"
+        );
+        assert_eq!(x_ty, Ty::Var("__goby_fresh_ty_1".to_string()));
+        assert_eq!(y_ty, Ty::Var("__goby_fresh_ty_0".to_string()));
+    }
+
+    #[test]
+    fn case_ctor_pattern_qualified_ctor_resolves_via_lookup_union_variant() {
+        // CP: `Maybe.Just(x)` Qualified pattern も同じ経路で binder 推論。
+        use crate::ast::{CasePattern, CtorPatternArg};
+        let union_info = crate::typecheck_env::UnionTypeInfo {
+            type_name: "Maybe".to_string(),
+            type_params: vec!["a".to_string()],
+            variants: vec![crate::typecheck_env::UnionVariantInfo {
+                ctor: "Just".to_string(),
+                variant_index: 0,
+                arg_types: vec![Ty::Var("a".to_string())],
+            }],
+        };
+        let mut union_types = HashMap::new();
+        union_types.insert("Maybe".to_string(), union_info);
+        let env = TypeEnv {
+            union_types,
+            ..TypeEnv::empty()
+        };
+        let pattern = CasePattern::Ctor {
+            type_qualifier: Some("Maybe".to_string()),
+            ctor: "Just".to_string(),
+            args: vec![CtorPatternArg::Bind("x".to_string())],
+        };
+        let scrutinee_ty = Ty::Con {
+            name: "Maybe".to_string(),
+            args: vec![Ty::Str],
+        };
+        let child_env = super::env_with_case_pattern_bindings(&env, &pattern, &scrutinee_ty);
+        assert_eq!(child_env.locals.get("x"), Some(&Ty::Str));
     }
 }

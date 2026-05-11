@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-11 (Track GU-S3 union ctor application 4-commit split CA-1/CA-2/CA-3a/CA-3b complete; `Just 42 : Maybe Int`, `Nothing : Maybe Int`, `Pair 1 "x" : Pair Int String`, `Maybe.Just 42`, and nested `Just Nothing : Maybe (Maybe Int)` all type-check. Two independent `Just` call sites in the same module type-check independently as required by PLAN_GU §6 GU-S3. Next sub-task: constructor-pattern type checking with binder inference).
+Last updated: 2026-05-11 (Track GU-S3 constructor-pattern binder inference (CP) landed: `case xs Just(x) -> ...` against `Maybe Int` now binds `x : Int` instead of `Ty::Unknown`. Union ctor application from CA-1..CA-3b plus this CP step together close the union side of PLAN_GU §6 GU-S3; queued next is generic-record support).
 
 ## Current Focus
 
@@ -103,6 +103,24 @@ commit `df57c32`):
   reaches the wasm backend boundary (`UnsupportedCasePattern` /
   `LowerError::UnsupportedForm` paths are untouched), no regression.
 
+**All-green (post GU-S3 CP constructor-pattern binder inference, 2026-05-11)**:
+
+- `cargo test -p goby-core --lib`: 986 passed / 2 ignored (up from
+  975; 11 new `typecheck_check::tests` for the new CP path:
+  module-level acceptance for `Just(x) -> x + 1` against
+  `Maybe Int` / `from_some Just(x) -> x` against `Maybe String` /
+  `Pair(x, _)` against `Pair Int String`, plus AST-level pins for
+  the `x : Int` binder, wildcard non-binding, non-generic
+  `Box(x)` regression, unknown-ctor fallback, wrong-arity
+  fallback, qualified `Maybe.Just(x)`, two `next_id` plumbing
+  regressions (scrutinee-fresh seed-jump + caller-counter
+  advance from Codex pass-1/pass-2 reviews)).
+- `cargo test -p goby-lsp`: 56 passed.
+- `cargo check --workspace`: warning-free.
+- `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`:
+  875 passed / 12 skipped — CP is typecheck-side only, no wasm
+  layer touched.
+
 Red / ignored:
 
 - Pre-existing `#[ignore]`d perceus / compile_tests entries (see
@@ -126,7 +144,7 @@ Red / ignored:
   checking, generic-record ctor application, generic-record field
   access, cross-module imports of generic types) route through.
 
-- **Active sub-task: union ctor application ✅ DONE (CA-1/CA-2/CA-3a/CA-3b all landed 2026-05-11).** Next active sub-task per PLAN_GU §6 GU-S3 is constructor-pattern type checking with binder inference.
+- **Active sub-task: union ctor application ✅ DONE (CA-1/CA-2/CA-3a/CA-3b all landed 2026-05-11). Constructor-pattern binder inference (CP) ✅ DONE (landed 2026-05-11).** `env_with_case_pattern_bindings` now drives binders through `freshen_type_scheme` + `unify_types_with_subst`, with the caller's `next_id` shared via the new `*_using` entry so pattern binders and arm-body inference cannot collide on fresh-id reuse. Next active sub-task per PLAN_GU §6 GU-S3 is generic-record support (ctor application + field access).
   PLAN_GU.md §6 GU-S3 acceptance items for this sub-task: `Just 42 :
   Maybe Int` typechecks, two `Just 42` / `Just "hi"` call sites in the
   same module type-check independently, arity / type mismatches
@@ -281,21 +299,22 @@ Red / ignored:
      returns `1 + child` for both arms to match. Two unit tests in
      `gen_lower::emit::tests` pin the spill-count contract.
 
-- **Track GU-S3 sub-task ordering (post union ctor application).** D-6
-  `freshen_type_scheme` extraction and **union ctor application**
-  (CA-1/CA-2/CA-3a/CA-3b) are both complete (2026-05-11). The
-  remaining queued sub-tasks, in the order they will be picked up:
-  constructor-pattern type-check with binder inference, generic-record
-  ctor application, generic-record field access (including PC-shaped
-  function-typed fields with effect rows), constructor-name ambiguity
-  resolution (qualified > scrutinee-pinned > local-shadows-imported >
-  ambiguity diagnostic), cross-module imports of generic unions and
-  records. See `doc/PLAN_GU.md` §6 GU-S3 for the deliverable list.
-  Deferred CA-3b follow-ups (tracked in
-  `progress-log.md`): Pipeline (`42 |> Just`) / MethodCall ctor
-  lookup, ctor-as-value (`map xs Just`), expected-type-driven bare
-  ctor disambiguation, generic ctor arity / wrong-arg diagnostic
-  wording (currently silent-passes on extra args).
+- **Track GU-S3 sub-task ordering (post union ctor application + CP).**
+  D-6 `freshen_type_scheme` extraction, **union ctor application**
+  (CA-1/CA-2/CA-3a/CA-3b), and **constructor-pattern binder inference**
+  (CP) are all complete (2026-05-11). The remaining queued sub-tasks,
+  in the order they will be picked up: generic-record ctor application,
+  generic-record field access (including PC-shaped function-typed fields
+  with effect rows), constructor-name ambiguity resolution (qualified >
+  scrutinee-pinned > local-shadows-imported > ambiguity diagnostic),
+  cross-module imports of generic unions and records. See
+  `doc/PLAN_GU.md` §6 GU-S3 for the deliverable list. Deferred CA-3b /
+  CP follow-ups (tracked in `progress-log.md`): Pipeline (`42 |> Just`)
+  / MethodCall ctor lookup, ctor-as-value (`map xs Just`), expected-
+  type-driven bare ctor disambiguation, generic ctor arity / wrong-arg
+  diagnostic wording (currently silent-passes on extra args), and
+  pattern-side wrong-arity diagnostic (currently silent fallback to
+  `Ty::Unknown`).
 
 **Queued behind GU:**
 

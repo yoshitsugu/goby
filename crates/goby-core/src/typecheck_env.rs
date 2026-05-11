@@ -276,6 +276,43 @@ impl TypeEnv {
         }
     }
 
+    /// GU-S3 constructor-pattern binder inference: locate the union variant
+    /// for a `CasePattern::Ctor { type_qualifier, ctor, .. }`.
+    ///
+    /// - If `type_qualifier` is `Some(t)`, restrict the search to `union_types[t]`.
+    ///   `None` (no such union) and "the union has no variant named `ctor`"
+    ///   both return `None`.
+    /// - If `type_qualifier` is `None`, walk every union (sorted by
+    ///   `type_name` so the iteration order is deterministic across
+    ///   `HashMap` rehashes) and return the first variant whose `ctor`
+    ///   matches.
+    ///
+    /// `Ambiguous` ctor names (the same `ctor` declared in two unions) are
+    /// left to a later sub-task — this helper just commits to the first
+    /// match in alphabetical order. That makes test output stable; the real
+    /// ambiguity diagnostic (`qualified > scrutinee-pinned > local-shadows-
+    /// imported`) is queued under PLAN_GU §6 GU-S3.
+    pub(crate) fn lookup_union_variant(
+        &self,
+        type_qualifier: Option<&str>,
+        ctor: &str,
+    ) -> Option<(&UnionTypeInfo, &UnionVariantInfo)> {
+        if let Some(t) = type_qualifier {
+            let info = self.union_types.get(t)?;
+            let variant = info.variants.iter().find(|v| v.ctor == ctor)?;
+            return Some((info, variant));
+        }
+        let mut names: Vec<&String> = self.union_types.keys().collect();
+        names.sort();
+        for name in names {
+            let info = &self.union_types[name];
+            if let Some(variant) = info.variants.iter().find(|v| v.ctor == ctor) {
+                return Some((info, variant));
+            }
+        }
+        None
+    }
+
     pub(crate) fn is_effect_op(&self, name: &str) -> bool {
         if self.locals.contains_key(name) {
             return false;
