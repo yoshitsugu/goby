@@ -4,25 +4,27 @@ Last updated: 2026-05-11 (Track GU-S3 generic-record support (GR) landed: `Box(v
 
 ## Current Focus
 
-**Track GU (generic user-defined types) — GU-S2 closed.** All eight
-GU-S2 sub-tasks (S2a parser, S2b formatter, S2c no-op resolved
-form, S2d typecheck data layer, S2e typecheck walker hooks, S2f IR
-layer, S2g stdlib resolver no-op, S2h wasm backend) have landed.
-The new generic-type AST flows through every layer; constructor
-patterns parse, format, type-check (binders as `Ty::Unknown` until
-the freshening pass), lower into a placeholder
-`IrCasePattern::Ctor` that perceus / closure-capture pattern
-walkers carry, and the wasm backend routes them through
-`UnsupportedCasePattern` / `LowerError::UnsupportedForm` so generic
-union construction is not yet runtime-executable. Single bare
-`type Wrap = String` keeps its alias meaning; `type Box a = Box(a)`
-is a single-variant generic union; `type S = S(xs: List (String)`
-fails at parse time via the new RHS balanced-delimiter check.
-Next phase is **GU-S3: typecheck semantics for parametric types**
-(`freshen_type_scheme` extraction, ctor-application unification,
-constructor-pattern type checking, ambiguity resolution, generic
-records, cross-module imports of generic unions). See
-`doc/PLAN_GU.md` §6 GU-S3 for the deliverable list.
+**Track GU (generic user-defined types) — GU-S3 mostly closed
+on the typecheck side.** GU-S2 (parser → formatter → IR → wasm
+placeholder) landed earlier; on top of that, GU-S3 has now
+absorbed D-6 (`freshen_type_scheme` extraction), the union ctor
+application split (CA-1/CA-2/CA-3a/CA-3b), constructor-pattern
+binder inference (CP), and generic-record support (GR-1/GR-2/GR-3),
+all on 2026-05-11. As a result, generic ctor applications
+(`Just 42 : Maybe Int`, `Box(value: 42) : Box Int`, `Pair 1 "x"
+: Pair Int String`), generic field access (`v.value : Int` for
+`v : Box Int`), and generic ctor patterns (`case xs Just(x) -> x
++ 1` binding `x : Int`) all type-check; shared-type-param
+mismatches at both call sites and record literals (`Same(left:
+1, right: "x")` against `Same a = Same(left: a, right: a)`) are
+rejected. The IR / wasm side still routes generic ctor
+construction and ctor patterns through `UnsupportedCasePattern` /
+`LowerError::UnsupportedForm` — runtime support is GU-S4. The
+next typecheck-side sub-task in PLAN_GU §6 GU-S3 is constructor-
+name ambiguity resolution (qualified > scrutinee-pinned > local-
+shadows-imported > diagnostic), followed by cross-module imports
+of generic unions and records via
+`inject_imported_type_constructors`.
 
 Track PC remains queued; it cannot start before GU-X2 (the closed-form
 green check). The earlier reference to `tmp/pc.md` is dropped — the
@@ -162,27 +164,22 @@ Red / ignored:
   checking, generic-record ctor application, generic-record field
   access, cross-module imports of generic types) route through.
 
-- **Active sub-task: union ctor application ✅ DONE (CA-1/CA-2/CA-3a/CA-3b all landed 2026-05-11). Constructor-pattern binder inference (CP) ✅ DONE (landed 2026-05-11). Generic-record support (GR) ✅ DONE (landed 2026-05-11).** Record ctor application now routes through `infer_record_construct_ty` with `freshen_type_scheme` + per-field `unify_types_with_subst`; field access uses `resolve_record_field_ty` to apply the `type_params -> args` substitution; the ambiguity walker rejects shared-type-param mismatches via `find_generic_record_field_mismatch`. Next active sub-task per PLAN_GU §6 GU-S3 is constructor-name ambiguity resolution (qualified > scrutinee-pinned > local-shadows-imported > ambiguity diagnostic), followed by cross-module imports of generic types.
-  PLAN_GU.md §6 GU-S3 acceptance items for this sub-task: `Just 42 :
-  Maybe Int` typechecks, two `Just 42` / `Just "hi"` call sites in the
-  same module type-check independently, arity / type mismatches
-  surface through the existing function-call diagnostic path. Three
-  Codex plan-review rounds (2026-05-11) exposed five design holes
-  (Call arm ignores call-site unify; `are_compatible` doesn't bind
-  `Ty::Var`; `next_id=0` collides for nested ctors; rigid vs flexible
-  `Ty::Var` indistinguishable; `next_id` seed needs locals+globals
-  walk). The sub-task is split into **4 commits**:
+- **GU-S3 sub-tasks completed 2026-05-11.** Union ctor application
+  (CA-1/CA-2/CA-3a/CA-3b), constructor-pattern binder inference (CP),
+  and generic-record support (GR-1/GR-2/GR-3) have all landed. The
+  per-commit landed summaries below stay as the load-bearing
+  reference for the shared helpers each step introduced; the next
+  active sub-task is constructor-name ambiguity resolution (see the
+  "sub-task ordering" bullet further below).
 
   - **CA-1** ✅ landed: Rewrite `typecheck_check.rs::infer_expr_ty`
     `Expr::Call` arm to use call-site unify via the new `pub(crate) fn
-    infer_call_result_ty` entry in `typecheck_call.rs`. Includes a
-    temporary `erase_fresh_type_vars_to_unknown` compatibility step
-    (preserves the old curry-chain `Ty::Unknown` escape until CA-2 /
-    CA-3b land flexible-`__goby_fresh_ty_*` annotation unification).
-    Two pre-existing tests (`no_sugar_for_multi_field_constructor`,
+    infer_call_result_ty` entry in `typecheck_call.rs`. Initially
+    shipped with a temporary `erase_fresh_type_vars_to_unknown`
+    compatibility step (removed in CA-3b). Two pre-existing tests
+    (`no_sugar_for_multi_field_constructor`,
     `typechecks_int_to_string_as_named_map_callback`) were rewritten
-    against the now-precise call-site behaviour. General precision
-    improvement; no ctor registration change.
+    against the now-precise call-site behaviour.
   - **CA-2** ✅ landed: `typecheck_unify::unifies_with_annotation` +
     helpers (`is_flexible_fresh_ty_var`, `max_fresh_ty_id_in_ty`).
     Treats `Ty::Var` whose name starts with `__goby_fresh_ty_` as
@@ -227,41 +224,34 @@ Red / ignored:
     removed — `unifies_with_annotation` (CA-2) and shared `next_id`
     (CA-3a) make leaked fresh names bind correctly at annotation
     sites.
-  - **CA-2**: Add a `unifies_with_annotation` helper that binds
-    only flexible (`__goby_fresh_ty_*` prefix) `Ty::Var`, leaves
-    rigid `a` rigid. Swap `typecheck_stmt.rs` return-type comparison
-    to it. `are_compatible` untouched.
-  - **CA-3a**: Thread `next_id: &mut usize` through `infer_expr_ty`
-    and through `typecheck_call.rs::resolve_function_value_ty` so a
-    single inference walk shares one counter. `check_expr` wrapper
-    seeds `next_id = next_fresh_ty_id_seed(env)` (locals + globals
-    walk, one-past-max contract). Plumbing only, behaviour unchanged.
-  - **CA-3b**: Drop the `is_generic -> Ty::Unknown` placeholder in
-    `inject_type_constructors` Union arm. Add Var/Qualified-arm
-    ctor-template freshen in `infer_expr_ty`. Make
-    `instantiate_ty_with_fresh_type_vars` idempotent on
-    `__goby_fresh_ty_*` prefix to avoid double-freshen. Share a
-    `CTOR_SOURCE_PREFIX/SUFFIX` constant between build.rs and a new
-    `TypeEnv::is_ctor_binding(name)`. Tests pin the acceptance
-    shapes (`Just 42`, `Nothing`, nested `Just Nothing`,
-    `Pair 1 "x"`, two `Just`s in one module, `[Nothing, Just 1]`,
-    non-generic regressions, qualified ctors, wrong-type/arity
-    reject).
-
-  Planning artefacts:
-  `~/.claude/workspaces/home_yoshitsugu_src_github.com_yoshitsugu_goby/implementation-plan.md`
-  and `progress-log.md`. Execution starts in the next session from
-  CA-1, one commit per dev-flow Step 3-7 cycle. Acceptance bar is
-  `cargo test -p goby-core --lib` green at each commit, baseline
-  948 passed / 2 ignored.
-
-  Deferred follow-ups (out of scope for this sub-task; tracked in
-  `progress-log.md`): Pipeline (`42 |> Just`) / MethodCall ctor
-  lookup, ctor-as-value (`map xs Just`), case-pattern ctor binder
-  inference, generic record support, cross-module imports of
-  generic unions, ambiguity validation, IR-lowering generic-ctor
-  unsupported path, expected-type-driven bare ctor disambiguation,
-  generic ctor arity / wrong-arg diagnostic wording.
+  - **CP** ✅ landed: `env_with_case_pattern_bindings` (with a new
+    `*_using` entry that threads the caller's `&mut next_id`) drives
+    constructor-pattern binders through
+    `resolve_ctor_pattern_binder_tys` — scheme freshen
+    `[result_template, ...arg_types]` + `unify_types_with_subst`
+    against scrutinee + `apply_type_substitution`. New
+    `TypeEnv::lookup_union_variant(type_qualifier, ctor)` (sorted
+    first-match on bare lookup) backs the variant lookup. Wildcard
+    binders, unknown ctors, and wrong-arity all fall back to
+    `Ty::Unknown` to preserve the legacy tolerant walker. `Expr::Case`
+    arm passes the same `next_id` into both the pattern walker and
+    the arm-body inference so pattern-binder freshens and arm-body
+    generic ctor freshens cannot collide.
+  - **GR (GR-1/GR-2/GR-3)** ✅ landed: Record-side analogue of
+    CA-3b + CP. `inject_type_constructors` Record arm drops the
+    `is_generic -> Ty::Unknown` placeholder (GR-1).
+    `Expr::RecordConstruct` is now `infer_record_construct_ty`:
+    scheme freshen `[result_template, ...field_tys_sorted_by_name]`
+    + per-field `unify_types_with_subst` + `apply_type_substitution`,
+    so `Box(value: 42)` returns `Ty::Con { name: "Box", args: [Int] }`
+    (GR-2). `Expr::Qualified` field access resolves through
+    `resolve_record_field_ty`, applying a `type_params -> args`
+    substitution to the declared field template so `v.value` on
+    `v : Box Int` returns `Int` (GR-3). The ambiguity walker
+    detects shared-type-param mismatches across fields via
+    `find_generic_record_field_mismatch` (Codex pass-1 follow-up).
+    The old `TypeEnv::record_field_ty` is removed in favour of the
+    new helper.
 
   An adjacent existing-behaviour quirk surfaced during D-6 Pass 2
   remains open: when `clause_name` is already qualified (`Eff.op`),
