@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-11 (Track GU-S3 union ctor application sub-tasks CA-1 + CA-2 landed; `typecheck_unify::unifies_with_annotation` introduces rigid/flexible `Ty::Var` distinction for declaration return-type comparison. CA-3a/CA-3b pending).
+Last updated: 2026-05-11 (Track GU-S3 union ctor application sub-tasks CA-1 + CA-2 + CA-3a landed; `infer_expr_ty` now threads `next_id` through call resolver / lambda body / case arms via the new `typecheck_unify::next_fresh_ty_id_seed`. CA-3b pending).
 
 ## Current Focus
 
@@ -71,6 +71,16 @@ commit `df57c32`):
 - `cargo nextest run -p goby-wasm`: not re-run for CA-2 — typecheck-side
   only.
 
+**All-green (post GU-S3 CA-3a `next_id` plumbing, 2026-05-11)**:
+
+- `cargo test -p goby-core --lib`: 964 passed / 2 ignored (up from 962
+  via two new `typecheck_check::tests` plumbing pins — env seed from
+  locals + globals, and shared `next_id` advance through `Expr::Call`).
+- `cargo test -p goby-lsp`: 56 passed.
+- `cargo check --workspace`: warning-free.
+- `cargo nextest run -p goby-wasm`: not re-run for CA-3a — pure
+  plumbing.
+
 Red / ignored:
 
 - Pre-existing `#[ignore]`d perceus / compile_tests entries (see
@@ -126,6 +136,18 @@ Red / ignored:
     is seeded from both `max_fresh_ty_id_in_ty` and `max_fresh_row_id`
     so `unify_effect_rows`-created row vars do not collide. Existing
     `are_compatible` callers untouched.
+  - **CA-3a** ✅ landed: `infer_expr_ty` now takes `&mut next_id` and
+    threads it through every recursive arm + `infer_block_expr_ty`.
+    `check_expr` wrapper seeds via the new
+    `typecheck_unify::next_fresh_ty_id_seed(env)` (locals + Resolved
+    globals walk, one-past-max contract covering both `__goby_fresh_ty_*`
+    and `__goby_fresh_row_*`). `infer_call_result_ty` takes `&mut next_id`
+    so the call resolver shares the same counter as the surrounding
+    `Expr::Call` arm. Internal callers `resolve_function_value_ty`,
+    `infer_lambda_ty_against_expected`, `validate_call_chain`,
+    `infer_call_effects_at_site`, and `infer_expr_binding_ty` were
+    migrated. Pure plumbing, behaviour unchanged (existing 962 tests
+    still pass).
   - **CA-2**: Add a `unifies_with_annotation` helper that binds
     only flexible (`__goby_fresh_ty_*` prefix) `Ty::Var`, leaves
     rigid `a` rigid. Swap `typecheck_stmt.rs` return-type comparison

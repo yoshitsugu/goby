@@ -172,27 +172,29 @@ pub(crate) fn infer_expr_binding_ty(expr: &Expr, env: &TypeEnv) -> Ty {
     let Some(_) = ordinary_call_target_and_args(expr) else {
         return check_expr(expr, env);
     };
-    let mut next_id = 0;
+    // CA-3a: env から seed して、env に既に存在する fresh 名と衝突
+    // しないようにする (Codex pass-3 指摘の locals+globals walk)。
+    let mut next_id = crate::typecheck_unify::next_fresh_ty_id_seed(env);
     resolve_function_value_ty(expr, env, &mut next_id)
 }
 
 /// CA-1 (GU-S3 union ctor application): `check_expr` 経由で `Expr::Call` を
 /// 評価するときに、callee の `Ty::Fun.result` を素朴に返すのではなく、call-site
 /// で引数を unify した結果の戻り型を返す。`resolve_function_value_ty` を
-/// `next_id = 0` で走らせる薄い entry。
+/// 経由する。
 ///
-/// 後続の CA-3a で `infer_expr_ty` が `next_id` を持つようになったら、その
-/// counter を共有する形に置き換える予定。本コミットでは plumbing 変更なし
-/// のため、ローカル counter を起こす。
+/// CA-3a: caller (`infer_expr_ty`) が保持する `next_id` を共有する形に
+/// 変更。これにより call resolver が起こした fresh 名と `infer_expr_ty`
+/// 他の経路で生まれる fresh 名が干渉しない (= 後続 CA-3b で nested
+/// ctor が独立した fresh スコープを持つ前提)。
 ///
 /// **CA-1 互換措置**: `resolve_function_value_ty` の結果に `__goby_fresh_ty_*`
 /// prefix の `Ty::Var` が残った場合、それを `Ty::Unknown` に潰す。これは旧
 /// `check_expr(Call)` arm (`Ty::Fun { result, .. } => *result, _ => Ty::Unknown`)
 /// が、curry chain の途中で `Ty::Fun.result` が `Ty::Var` に潰れた瞬間以降の
-/// call result を `Ty::Unknown` で処理していた挙動と等価。CA-2 で
-/// `unifies_with_annotation` (flexible `__goby_fresh_ty_*` を bind 可能) が
-/// 導入された後、CA-3b で削除する予定。
-pub(crate) fn infer_call_result_ty(expr: &Expr, env: &TypeEnv) -> Ty {
+/// call result を `Ty::Unknown` で処理していた挙動と等価。CA-3b で削除する
+/// 予定。
+pub(crate) fn infer_call_result_ty(expr: &Expr, env: &TypeEnv, next_id: &mut usize) -> Ty {
     // Codex pass-1 指摘: ordinary な call chain でない call (e.g. `(if c then f
     // else g) 1`、`(blk) 1` のように callee が `Var`/`Qualified`/`Lambda` に
     // 還元できないもの) はそのまま `resolve_function_value_ty` に渡すと、
@@ -202,8 +204,7 @@ pub(crate) fn infer_call_result_ty(expr: &Expr, env: &TypeEnv) -> Ty {
     if ordinary_call_target_and_args(expr).is_none() {
         return Ty::Unknown;
     }
-    let mut next_id = 0;
-    let ty = resolve_function_value_ty(expr, env, &mut next_id);
+    let ty = resolve_function_value_ty(expr, env, next_id);
     erase_fresh_type_vars_to_unknown(&ty)
 }
 
@@ -265,7 +266,8 @@ fn validate_call_chain(
     {
         return Ok(());
     }
-    let mut next_id = 0;
+    // CA-3a: env から seed して既存 fresh 名と衝突しないようにする。
+    let mut next_id = crate::typecheck_unify::next_fresh_ty_id_seed(env);
     let root_ty = resolve_function_value_ty(target, env, &mut next_id);
     let Ty::Fun { params, .. } =
         instantiate_ty_with_fresh_type_vars_for_call_site(&root_ty, &mut next_id)
@@ -594,7 +596,10 @@ fn infer_lambda_ty_against_expected(
             nested_ty
         }
         _ => {
-            let inferred = check_expr(body, &child_env);
+            // CA-3a: lambda body の推論で `next_id` を共有する。これにより
+            // body 内の `Expr::Call` が起こす fresh 名が outer call resolver
+            // の counter と整合する。
+            let inferred = crate::typecheck_check::infer_expr_ty(body, &child_env, next_id);
             if matches!(
                 child_env.resolve_alias(&expected_rest_ty, 0),
                 Ty::Fun { .. }
@@ -662,8 +667,11 @@ pub(crate) fn infer_call_effects_at_site(
     {
         return None;
     }
-    let mut next_id = 0usize;
-    let target_ty = check_expr(target, env);
+    // CA-3a: `infer_call_effects_at_site` は外部 caller (`typecheck_effect`)
+    // から呼ばれる別ルート。`infer_expr_ty` を共有 counter で呼ぶことで、
+    // target 推論内の Call と本関数の subst 操作が同じ scope を持つ。
+    let mut next_id = crate::typecheck_unify::next_fresh_ty_id_seed(env);
+    let target_ty = crate::typecheck_check::infer_expr_ty(target, env, &mut next_id);
     let Ty::Fun {
         params, effects, ..
     } = instantiate_ty_with_fresh_type_vars_for_call_site(&target_ty, &mut next_id)
@@ -864,9 +872,12 @@ fn ordinary_call_target_and_args(expr: &Expr) -> Option<(&Expr, Vec<&Expr>)> {
 
 fn resolve_function_value_ty(expr: &Expr, env: &TypeEnv, next_id: &mut usize) -> Ty {
     let Some((target, args)) = ordinary_call_target_and_args(expr) else {
-        return check_expr(expr, env);
+        // CA-3a: `infer_expr_ty` 経由で `next_id` を共有。`check_expr` wrapper
+        // は env から seed し直すため、ここで使うと resolver が起こした
+        // counter が破棄される。
+        return crate::typecheck_check::infer_expr_ty(expr, env, next_id);
     };
-    let target_ty = check_expr(target, env);
+    let target_ty = crate::typecheck_check::infer_expr_ty(target, env, next_id);
     let Ty::Fun {
         params,
         result,

@@ -9,13 +9,23 @@ use crate::typecheck_render::ty_name;
 use crate::typecheck_span::best_available_expr_span;
 use crate::typecheck_unify::ty_contains_type_var;
 
+/// CA-3a: 公開 wrapper。`next_id` を `next_fresh_ty_id_seed(env)` で
+/// seed して `infer_expr_ty` を呼び出す。outer caller (`typecheck_stmt.rs` 等)
+/// が `check_expr` を呼ぶたびに、`env` 内の既存 `__goby_fresh_ty_*` /
+/// `__goby_fresh_row_*` と衝突しない初期値が得られる。
 pub(crate) fn check_expr(expr: &Expr, env: &TypeEnv) -> Ty {
-    infer_expr_ty(expr, env)
+    let mut next_id = crate::typecheck_unify::next_fresh_ty_id_seed(env);
+    infer_expr_ty(expr, env, &mut next_id)
 }
 
-fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
+/// CA-3a: `next_id` を取る版の expression 型推論本体。`Expr::Call` arm が
+/// `typecheck_call::infer_call_result_ty` に counter を渡し、call resolver
+/// 経由で生まれる fresh 名と本関数の他の経路で生まれる fresh 名が干渉
+/// しないようにする。本コミットでは plumbing 変更のみで挙動不変
+/// (各 arm の振る舞いは CA-1/CA-2 と同じ)。
+pub(crate) fn infer_expr_ty(expr: &Expr, env: &TypeEnv, next_id: &mut usize) -> Ty {
     match expr {
-        Expr::Spanned { expr, .. } => infer_expr_ty(expr, env),
+        Expr::Spanned { expr, .. } => infer_expr_ty(expr, env, next_id),
         Expr::IntLit(_) => Ty::Int,
         Expr::FloatLit(_) => Ty::Float,
         Expr::BoolLit(_) => Ty::Bool,
@@ -25,12 +35,12 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
             if elements.is_empty() {
                 return Ty::List(Box::new(Ty::Unknown));
             }
-            let mut item_ty = check_expr(&elements[0], env);
+            let mut item_ty = infer_expr_ty(&elements[0], env, next_id);
             for item in &elements[1..] {
-                item_ty = merge_branch_type(env, item_ty, check_expr(item, env));
+                item_ty = merge_branch_type(env, item_ty, infer_expr_ty(item, env, next_id));
             }
             if let Some(tail) = spread {
-                let tail_ty = check_expr(tail, env);
+                let tail_ty = infer_expr_ty(tail, env, next_id);
                 if let Ty::List(tail_inner) = env.resolve_alias(&tail_ty, 0) {
                     item_ty = merge_branch_type(env, item_ty, *tail_inner);
                 }
@@ -41,7 +51,10 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
             if items.is_empty() {
                 return Ty::Unit;
             }
-            let tys: Vec<Ty> = items.iter().map(|i| check_expr(i, env)).collect();
+            let tys: Vec<Ty> = items
+                .iter()
+                .map(|i| infer_expr_ty(i, env, next_id))
+                .collect();
             Ty::Tuple(tys)
         }
         Expr::Var { name, .. } => env.lookup(name),
@@ -80,7 +93,7 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
                 let Some(expected_ty) = record.fields.get(name) else {
                     return Ty::Unknown;
                 };
-                let actual_ty = check_expr(value, env);
+                let actual_ty = infer_expr_ty(value, env, next_id);
                 if actual_ty != Ty::Unknown && !env.are_compatible(expected_ty, &actual_ty) {
                     return Ty::Unknown;
                 }
@@ -91,7 +104,7 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
             }
         }
         Expr::UnaryOp { op, expr } => {
-            let inner = check_expr(expr, env);
+            let inner = infer_expr_ty(expr, env, next_id);
             match (op, &inner) {
                 (crate::ast::UnaryOpKind::Not, Ty::Bool) => Ty::Bool,
                 (_, Ty::Unknown) => Ty::Unknown,
@@ -99,8 +112,8 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
             }
         }
         Expr::BinOp { op, left, right } => {
-            let lt = check_expr(left, env);
-            let rt = check_expr(right, env);
+            let lt = infer_expr_ty(left, env, next_id);
+            let rt = infer_expr_ty(right, env, next_id);
             match (op, &lt, &rt) {
                 (BinOpKind::Or, Ty::Bool, Ty::Bool) => Ty::Bool,
                 (BinOpKind::And, Ty::Bool, Ty::Bool) => Ty::Bool,
@@ -144,13 +157,15 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
                     fields: vec![(field_name, *arg.clone())],
                     span: None,
                 };
-                return check_expr(&rewritten, env);
+                return infer_expr_ty(&rewritten, env, next_id);
             }
             // CA-1: callee の `Ty::Fun.result` 直返しでは call-site unify が
             // 反映されないため、`typecheck_call::infer_call_result_ty` を経由
             // して引数を unify した結果を返す。後続 CA-3b で `Just 42` が
             // `Maybe Int` に具体化される前提となる経路。
-            crate::typecheck_call::infer_call_result_ty(expr, env)
+            // CA-3a: `next_id` を共有して call resolver と本関数の他の経路
+            // が同じ counter を見るようにする。
+            crate::typecheck_call::infer_call_result_ty(expr, env, next_id)
         }
         Expr::MethodCall {
             receiver, method, ..
@@ -172,7 +187,7 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
         }
         Expr::Lambda { param, body } => {
             let child_env = env.with_local(param, Ty::Unknown);
-            let result = check_expr(body, &child_env);
+            let result = infer_expr_ty(body, &child_env, next_id);
             Ty::Fun {
                 params: vec![Ty::Unknown],
                 result: Box::new(result),
@@ -186,16 +201,16 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
         },
         Expr::With { .. } => Ty::Unknown,
         Expr::Resume { value } => {
-            let _ = check_expr(value, env);
+            let _ = infer_expr_ty(value, env, next_id);
             Ty::Unknown
         }
-        Expr::Block(stmts) => infer_block_expr_ty(stmts, env),
+        Expr::Block(stmts) => infer_block_expr_ty(stmts, env, next_id),
         Expr::Case { scrutinee, arms } => {
-            let scrutinee_ty = check_expr(scrutinee, env);
+            let scrutinee_ty = infer_expr_ty(scrutinee, env, next_id);
             let mut merged: Option<Ty> = None;
             for arm in arms {
                 let arm_env = env_with_case_pattern_bindings(env, &arm.pattern, &scrutinee_ty);
-                let arm_ty = check_expr(&arm.body, &arm_env);
+                let arm_ty = infer_expr_ty(&arm.body, &arm_env, next_id);
                 merged = Some(match merged {
                     Some(prev) => merge_branch_type(env, prev, arm_ty),
                     None => arm_ty,
@@ -208,14 +223,14 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
             then_expr,
             else_expr,
         } => {
-            let _ = check_expr(condition, env);
-            let then_ty = check_expr(then_expr, env);
-            let else_ty = check_expr(else_expr, env);
+            let _ = infer_expr_ty(condition, env, next_id);
+            let then_ty = infer_expr_ty(then_expr, env, next_id);
+            let else_ty = infer_expr_ty(else_expr, env, next_id);
             merge_branch_type(env, then_ty, else_ty)
         }
         Expr::ListIndex { list, index } => {
-            let list_ty = env.resolve_alias(&check_expr(list, env), 0);
-            let _index_ty = check_expr(index, env);
+            let list_ty = env.resolve_alias(&infer_expr_ty(list, env, next_id), 0);
+            let _index_ty = infer_expr_ty(index, env, next_id);
             match list_ty {
                 Ty::List(elem_ty) => *elem_ty,
                 Ty::Unknown => Ty::Unknown,
@@ -469,23 +484,23 @@ pub(crate) fn branch_types_compatible(env: &TypeEnv, left: &Ty, right: &Ty) -> b
     }
 }
 
-fn infer_block_expr_ty(stmts: &[Stmt], env: &TypeEnv) -> Ty {
+fn infer_block_expr_ty(stmts: &[Stmt], env: &TypeEnv, next_id: &mut usize) -> Ty {
     let mut local_env = env.clone();
     let mut last_expr_ty = Ty::Unknown;
     let mut has_tail_expr = false;
     for stmt in stmts {
         match stmt {
             Stmt::Binding { name, value, .. } | Stmt::MutBinding { name, value, .. } => {
-                let ty = check_expr(value, &local_env);
+                let ty = infer_expr_ty(value, &local_env, next_id);
                 local_env.locals.insert(name.clone(), ty);
                 has_tail_expr = false;
             }
             Stmt::Assign { value, .. } => {
-                let _ = check_expr(value, &local_env);
+                let _ = infer_expr_ty(value, &local_env, next_id);
                 has_tail_expr = false;
             }
             Stmt::Expr(expr, _) => {
-                last_expr_ty = check_expr(expr, &local_env);
+                last_expr_ty = infer_expr_ty(expr, &local_env, next_id);
                 has_tail_expr = true;
             }
         }
@@ -633,7 +648,7 @@ mod tests {
     use crate::typecheck::typecheck_module;
     use crate::typecheck_env::{RecordTypeInfo, Ty, TypeEnv};
 
-    use super::check_expr;
+    use super::{check_expr, infer_expr_ty};
 
     #[test]
     fn resolves_record_field_access_for_alias_receiver_type() {
@@ -933,6 +948,97 @@ main =
                 other
             ),
         }
+    }
+
+    #[test]
+    fn check_expr_seeds_next_id_from_env_locals_and_globals() {
+        // GU-S3 CA-3a: `check_expr` wrapper は `next_fresh_ty_id_seed(env)`
+        // で seed する。env の locals / globals に既存の `__goby_fresh_ty_N`
+        // が含まれていたら、新規 fresh は N+1 以上を取る (= 衝突しない)。
+        // ここでは `add` の partial application で counter が回り、結果型
+        // (`Int -> Int`) は fresh 名を含まないため挙動は不変。env に既存
+        // fresh 名を含めても外向きの戻り値は同じ。
+        let mut globals = HashMap::new();
+        globals.insert(
+            "add".to_string(),
+            crate::typecheck_env::GlobalBinding::Resolved {
+                ty: Ty::Fun {
+                    params: vec![Ty::Int, Ty::Int],
+                    result: Box::new(Ty::Int),
+                    effects: crate::typecheck_env::EffectRow::closed_empty(),
+                },
+                source: "test".to_string(),
+            },
+        );
+        let mut locals = HashMap::new();
+        locals.insert(
+            "spilled".to_string(),
+            Ty::Var("__goby_fresh_ty_7".to_string()),
+        );
+        let env = TypeEnv {
+            globals,
+            locals,
+            ..TypeEnv::empty()
+        };
+        let expr = Expr::Call {
+            callee: Box::new(Expr::Var {
+                name: "add".to_string(),
+                span: None,
+            }),
+            arg: Box::new(Expr::IntLit(1)),
+            span: None,
+        };
+        match check_expr(&expr, &env) {
+            Ty::Fun { params, result, .. } => {
+                assert_eq!(params, vec![Ty::Int]);
+                assert_eq!(*result, Ty::Int);
+            }
+            other => panic!("expected `Int -> Int` partial app, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn infer_expr_ty_advances_shared_next_id_through_nested_calls() {
+        // GU-S3 CA-3a: `Expr::Call` arm が `next_id` を `infer_call_result_ty`
+        // に渡すことで、ネストした Call の resolver 経由 freshening が同じ
+        // counter を共有する。
+        // `add` ctor を `Var "a"` 由来のテンプレートを持つ偽装 ctor として
+        // 登録し、call resolver の `instantiate_ty_with_fresh_type_vars_for_call_site`
+        // が `__goby_fresh_ty_N` を作る挙動を pin。next_id は 0 → 1 (a の
+        // freshening 1 件 + apply_type_substitution で消費) と進む。
+        let mut globals = HashMap::new();
+        globals.insert(
+            "id".to_string(),
+            crate::typecheck_env::GlobalBinding::Resolved {
+                ty: Ty::Fun {
+                    params: vec![Ty::Var("a".to_string())],
+                    result: Box::new(Ty::Var("a".to_string())),
+                    effects: crate::typecheck_env::EffectRow::closed_empty(),
+                },
+                source: "test".to_string(),
+            },
+        );
+        let env = TypeEnv {
+            globals,
+            ..TypeEnv::empty()
+        };
+        // `id 1` — `a` は `Int` に bind され、結果は `Int`。
+        let expr = Expr::Call {
+            callee: Box::new(Expr::Var {
+                name: "id".to_string(),
+                span: None,
+            }),
+            arg: Box::new(Expr::IntLit(1)),
+            span: None,
+        };
+        let mut next_id = 0;
+        assert_eq!(infer_expr_ty(&expr, &env, &mut next_id), Ty::Int);
+        // resolver の `instantiate_ty_with_fresh_type_vars_for_call_site`
+        // が `a` を 1 つ freshen するので next_id が前進している。
+        assert!(
+            next_id > 0,
+            "next_id must advance past 0 after freshening `a`"
+        );
     }
 
     #[test]

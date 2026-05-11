@@ -550,6 +550,31 @@ pub(crate) fn max_fresh_ty_id_in_ty(ty: &Ty) -> usize {
     acc
 }
 
+/// CA-3a helper: `infer_expr_ty` を呼ぶ wrapper (`check_expr`) が
+/// `next_id` の初期値を計算するための seed 関数。
+///
+/// `env.locals.values()` と `env.globals.values()` (の `Resolved.ty`) の
+/// 両方を walk して、その中に現れる `__goby_fresh_ty_N` および
+/// `__goby_fresh_row_N` の **最大値 + 1 (one past max)** を返す。
+///
+/// 既存の binding に残っている fresh 名と衝突しないようにするために
+/// 必要。**locals に加えて globals も walk** するのは Codex pass-3 指摘
+/// (locals 単独 walk だと別 binding 間で `next_id` が再利用される)。
+pub(crate) fn next_fresh_ty_id_seed(env: &TypeEnv) -> usize {
+    let mut acc = 0usize;
+    for ty in env.locals.values() {
+        acc = acc.max(max_fresh_ty_id_in_ty(ty));
+        acc = acc.max(crate::typecheck_env::max_fresh_row_id(ty));
+    }
+    for binding in env.globals.values() {
+        if let crate::typecheck_env::GlobalBinding::Resolved { ty, .. } = binding {
+            acc = acc.max(max_fresh_ty_id_in_ty(ty));
+            acc = acc.max(crate::typecheck_env::max_fresh_row_id(ty));
+        }
+    }
+    acc
+}
+
 pub(crate) fn instantiate_ty_with_fresh_type_vars(
     ty: &Ty,
     ty_mapping: &mut HashMap<String, String>,
