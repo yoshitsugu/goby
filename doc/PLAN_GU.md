@@ -792,13 +792,19 @@ follow the same fresh-instantiation rule as union constructors.
      deferred follow-up; the `MissingQualifiedCtor` / `Ambiguous`
      paths still fire because they do not depend on scrutinee
      pinning.
-  3. **Deferred until imported-union registration lands**: local
-     declarations shadow imported declarations. `CtorCandidate` has
-     a future-proofed `origin: CtorOrigin { Local }` field, but
-     `inject_imported_type_constructors` currently registers
-     records only (PLAN_GU §6 GU-S2d). Once imported unions are
-     registered, AR-1 will extend the resolver with the
-     local-shadows-imported step. (D-3)
+  3. **Local-shadows-imported (partial)**: imported unions and
+     imported generic records are now registered by
+     `inject_imported_type_constructors` (GU-S3 IU, 2026-05-11),
+     and `CtorCandidate.origin` carries `Local` /
+     `Imported { source_module }` via the new `UnionTypeInfo.origin`
+     field. The IU shadow guard already drops imported registrations
+     entirely when a local declaration uses the same type name or
+     ctor name (so `union_types` stays clean). The resolver-level
+     **`local-over-imported` filter on the `Ambiguous` walker** is
+     the next AR sub-task — it kicks in only for the
+     imported-vs-imported case and the not-yet-implemented
+     constructor-only selective import (`import maybe (Just,
+     Nothing)`). (D-3)
   4. Otherwise, if exactly one constructor matches by name across
      the locally-visible set, use it. ✅ Landed in AR-1.
   5. Otherwise, emit a diagnostic naming all candidate types and
@@ -814,6 +820,17 @@ follow the same fresh-instantiation rule as union constructors.
   application sites lands.
 - Cross-module use of generic unions and generic records
   (`typecheck_validate.rs`, `typecheck_build.rs::inject_imported_*`).
+  ✅ **GU-S3 IU landed 2026-05-11** for the `import <mod> (Type)`
+  surface. Imported generic union ctors (bare + qualified) and
+  imported generic record ctors / field access typecheck end-to-end
+  via the IU shadow guard + AST-level local-name snapshot. Two
+  follow-ups remain pinned as `#[ignore]` regression tests in
+  `typecheck_build::shadow_guard_tests`: imported-vs-imported
+  same-name union (last-writer-wins on `union_types`) and
+  effect-member-vs-imported-ctor name collision (silent
+  `Ambiguous`). Constructor-only selective import
+  (`import maybe (Just)`) is still rejected by
+  `typecheck_validate.rs` and is queued as a separate task.
 - Diagnostic wording for arity / type mismatches on constructor
   application and patterns (reuse existing function-call diagnostic
   where possible — see `typecheck_diag.rs`).

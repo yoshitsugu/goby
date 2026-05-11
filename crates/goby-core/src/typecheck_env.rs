@@ -171,6 +171,12 @@ pub(crate) struct UnionTypeInfo {
     /// Variant arg type templates carry these as `Ty::Var(name)`.
     pub(crate) type_params: Vec<String>,
     pub(crate) variants: Vec<UnionVariantInfo>,
+    /// GU-S3 IU-1: where this union came from. `Local` for unions
+    /// declared in the current module, `Imported { source_module }` for
+    /// unions injected by `inject_imported_type_constructors`.
+    /// `resolve_ctor_without_pin` plumbs this into `CtorCandidate.origin`
+    /// so the future AR `local-shadows-imported` rule can branch on it.
+    pub(crate) origin: CtorOrigin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -240,6 +246,13 @@ pub(crate) struct CtorCandidate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CtorOrigin {
     Local,
+    /// GU-S3 IU-1: union injected by
+    /// `typecheck_build::inject_imported_type_constructors` from another
+    /// module. `source_module` is the resolved module path (e.g.
+    /// `goby/maybe`).
+    Imported {
+        source_module: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -432,11 +445,9 @@ impl TypeEnv {
                 // 守るために、他の union に存在するかどうかで分岐する。
                 // - 他 union にも無い → `Unknown` (silent)。
                 // - 他 union にある → 真の pin 衝突なので `DoesNotBelong`。
-                let ctor_known_elsewhere = self
-                    .union_types
-                    .iter()
-                    .any(|(name, other)| name != scrut_name
-                        && other.variants.iter().any(|v| v.ctor == ctor));
+                let ctor_known_elsewhere = self.union_types.iter().any(|(name, other)| {
+                    name != scrut_name && other.variants.iter().any(|v| v.ctor == ctor)
+                });
                 if ctor_known_elsewhere {
                     return CtorLookupResult::DoesNotBelongToScrutinee {
                         requested: None,
@@ -457,7 +468,11 @@ impl TypeEnv {
             // Codex pass-2 (AR-2) と同じ silent fallback ロジックを適用:
             // record 型 scrutinee に対して、ctor がどの union にも宣言が
             // 無ければ silent、ある union で宣言されていれば pin 衝突。
-            if self.record_types.values().any(|r| r.type_name == scrut_name) {
+            if self
+                .record_types
+                .values()
+                .any(|r| r.type_name == scrut_name)
+            {
                 let ctor_known_elsewhere = self
                     .union_types
                     .values()
@@ -512,7 +527,10 @@ impl TypeEnv {
                     .into_iter()
                     .map(|n| CtorCandidate {
                         type_name: n.to_string(),
-                        origin: CtorOrigin::Local,
+                        // GU-S3 IU-1: thread per-union origin so a future
+                        // local-shadows-imported AR rule can branch on it
+                        // without re-querying the env.
+                        origin: self.union_types[n].origin.clone(),
                     })
                     .collect(),
             },
@@ -891,6 +909,90 @@ mod effect_row_tests {
     }
 }
 
+/// GU-S3 IU-3: pin that `is_ctor_binding` accepts both the local
+/// (`type `T` constructor`) and the imported
+/// (`type `T` from `MOD` constructor`) source-string forms emitted by
+/// `typecheck_build`. The detector matches by `starts_with(PREFIX) &&
+/// ends_with(SUFFIX)` only, so any future drift in either side's format
+/// must trip these pins.
+#[cfg(test)]
+mod is_ctor_binding_tests {
+    use super::*;
+
+    fn env_with_global(name: &str, source: &str) -> TypeEnv {
+        let mut env = TypeEnv::empty();
+        env.globals.insert(
+            name.to_string(),
+            GlobalBinding::Resolved {
+                ty: Ty::Unknown,
+                source: source.to_string(),
+            },
+        );
+        env
+    }
+
+    #[test]
+    fn local_ctor_source_returns_true() {
+        let env = env_with_global("Just", "type `Maybe` constructor");
+        assert!(env.is_ctor_binding("Just"));
+    }
+
+    #[test]
+    fn imported_ctor_source_returns_true() {
+        // GU-S3 IU-2/IU-3: the imported source string includes a
+        // ` from `<MOD>`` infix; `is_ctor_binding` still accepts it
+        // because the prefix/suffix contract holds.
+        let env = env_with_global("Just", "type `Maybe` from `goby/maybe` constructor");
+        assert!(env.is_ctor_binding("Just"));
+    }
+
+    #[test]
+    fn non_ctor_source_returns_false() {
+        let env = env_with_global("just_a_value", "declaration `just_a_value`");
+        assert!(!env.is_ctor_binding("just_a_value"));
+    }
+
+    #[test]
+    fn local_overrides_global_ctor() {
+        let mut env = env_with_global("Just", "type `Maybe` constructor");
+        env.locals.insert("Just".to_string(), Ty::Int);
+        assert!(!env.is_ctor_binding("Just"));
+    }
+
+    #[test]
+    fn ambiguous_with_all_ctor_sources_returns_true() {
+        // Local + imported both registered as ctor sources (e.g. when a
+        // future relaxation drops the IU-2 shadow guard) should still
+        // count as ctor binding.
+        let mut env = TypeEnv::empty();
+        env.globals.insert(
+            "Just".to_string(),
+            GlobalBinding::Ambiguous {
+                sources: vec![
+                    "type `Maybe` constructor".to_string(),
+                    "type `Maybe` from `goby/maybe` constructor".to_string(),
+                ],
+            },
+        );
+        assert!(env.is_ctor_binding("Just"));
+    }
+
+    #[test]
+    fn ambiguous_mixed_with_non_ctor_source_returns_false() {
+        let mut env = TypeEnv::empty();
+        env.globals.insert(
+            "Just".to_string(),
+            GlobalBinding::Ambiguous {
+                sources: vec![
+                    "type `Maybe` constructor".to_string(),
+                    "declaration `Just`".to_string(),
+                ],
+            },
+        );
+        assert!(!env.is_ctor_binding("Just"));
+    }
+}
+
 /// GU-S3 constructor-name ambiguity resolution pins for `TypeEnv::resolve_ctor`.
 ///
 /// These cover the rule table from PLAN_GU §6 — qualified > scrutinee-pinned >
@@ -914,6 +1016,23 @@ mod resolve_ctor_tests {
             type_name: name.to_string(),
             type_params: type_params.iter().map(|s| s.to_string()).collect(),
             variants,
+            origin: CtorOrigin::Local,
+        }
+    }
+
+    fn imported_union(
+        name: &str,
+        source_module: &str,
+        type_params: Vec<&str>,
+        variants: Vec<UnionVariantInfo>,
+    ) -> UnionTypeInfo {
+        UnionTypeInfo {
+            type_name: name.to_string(),
+            type_params: type_params.iter().map(|s| s.to_string()).collect(),
+            variants,
+            origin: CtorOrigin::Imported {
+                source_module: source_module.to_string(),
+            },
         }
     }
 
@@ -1208,6 +1327,72 @@ mod resolve_ctor_tests {
                 }
             }
             other => panic!("expected Ambiguous, got {:?}", debug_label(&other)),
+        }
+    }
+
+    #[test]
+    fn resolved_imported_union_returns_imported_origin_in_candidate() {
+        // GU-S3 IU-1: when `union_types` carries an imported origin, the
+        // ambiguity-walker payload propagates it via
+        // `CtorCandidate.origin`. This is the hook the future AR
+        // `local-shadows-imported` rule will branch on without re-querying
+        // the env. The resolved (non-ambiguous) path returns
+        // `CtorLookupResult::Resolved { union, .. }` whose `union.origin`
+        // serves the same purpose.
+        let env = env_with_unions(vec![
+            union(
+                "Result",
+                vec!["a", "b"],
+                vec![variant("Err", 0, vec![Ty::Var("b".to_string())])],
+            ),
+            imported_union(
+                "ParseResult",
+                "goby/parse",
+                vec!["a"],
+                vec![variant("Err", 0, vec![Ty::Str])],
+            ),
+        ]);
+        match env.resolve_ctor(None, "Err", None) {
+            CtorLookupResult::Ambiguous { candidates, .. } => {
+                let mut by_name: std::collections::HashMap<&str, &CtorOrigin> = Default::default();
+                for c in &candidates {
+                    by_name.insert(c.type_name.as_str(), &c.origin);
+                }
+                assert_eq!(by_name.get("Result"), Some(&&CtorOrigin::Local));
+                assert_eq!(
+                    by_name.get("ParseResult"),
+                    Some(&&CtorOrigin::Imported {
+                        source_module: "goby/parse".to_string(),
+                    })
+                );
+            }
+            other => panic!("expected Ambiguous, got {:?}", debug_label(&other)),
+        }
+    }
+
+    #[test]
+    fn resolved_imported_union_unique_returns_imported_origin_via_union_field() {
+        // Resolved path: the unique-match arm returns a `union` reference;
+        // its `origin` carries `Imported` for the AR follow-up.
+        let env = env_with_unions(vec![imported_union(
+            "Maybe",
+            "goby/maybe",
+            vec!["a"],
+            vec![
+                variant("Just", 0, vec![Ty::Var("a".to_string())]),
+                variant("Nothing", 1, vec![]),
+            ],
+        )]);
+        match env.resolve_ctor(None, "Just", None) {
+            CtorLookupResult::Resolved { union, .. } => {
+                assert_eq!(
+                    union.origin,
+                    CtorOrigin::Imported {
+                        source_module: "goby/maybe".to_string(),
+                    }
+                );
+            }
+            other => panic!("expected Resolved, got {:?}", debug_label(&other)),
         }
     }
 

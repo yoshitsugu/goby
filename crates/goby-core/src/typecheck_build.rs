@@ -9,8 +9,8 @@ use crate::{
     typecheck_annotation::strip_effect_clause,
     typecheck_diag::err_name_ambiguous,
     typecheck_env::{
-        CTOR_SOURCE_PREFIX, CTOR_SOURCE_SUFFIX, EffectRow, GlobalBinding, ImportedEffectDecl,
-        RecordTypeInfo, Ty, TypeEnv, UnionTypeInfo, UnionVariantInfo,
+        CTOR_SOURCE_PREFIX, CTOR_SOURCE_SUFFIX, CtorOrigin, EffectRow, GlobalBinding,
+        ImportedEffectDecl, RecordTypeInfo, Ty, TypeEnv, UnionTypeInfo, UnionVariantInfo,
     },
     typecheck_types::{ty_from_annotation, ty_from_type_expr},
     typecheck_validate::{
@@ -141,13 +141,26 @@ pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
         &collect_imported_effect_declarations(module, stdlib_root),
         &mut globals,
     );
-    inject_imported_type_constructors(module, &mut globals, &mut record_types, stdlib_root);
+    // GU-S3 IU-2: register **local** type constructors first, then
+    // imported. The imported pass uses the now-populated `union_types` /
+    // `globals` to skip any name that would collide with a local
+    // declaration; this preserves the legacy "local wins" semantics that
+    // the previous import-first ordering broke (`insert_global_symbol`
+    // collapses different sources into `Ambiguous`, which leaks `Ty::Unknown`
+    // through `lookup`).
     inject_type_constructors(
         module,
         &mut globals,
         &mut type_aliases,
         &mut record_types,
         &mut union_types,
+    );
+    inject_imported_type_constructors(
+        module,
+        &mut globals,
+        &mut record_types,
+        &mut union_types,
+        stdlib_root,
     );
     inject_effect_symbols(module, &mut globals);
 
@@ -242,12 +255,74 @@ fn inject_imported_effect_symbols(
     }
 }
 
+/// GU-S3 IU-2/IU-3: render the `source` field of an **imported** ctor
+/// `GlobalBinding`. Final shape:
+/// `` "type `<TYPE>` from `<MOD>` constructor" ``.
+///
+/// Both `CTOR_SOURCE_PREFIX` (`` "type `" ``) and `CTOR_SOURCE_SUFFIX`
+/// (`` "` constructor" ``) already include one backtick at the
+/// type-name boundary, so the imported-form infix is built from the same
+/// const but with the type-name section closed before ` from ``<MOD>`` and
+/// reopened by `CTOR_SOURCE_SUFFIX`. This keeps `is_ctor_binding`
+/// (which only looks at the prefix/suffix) happy for imported sources.
+fn ctor_source_imported(type_name: &str, source_module: &str) -> String {
+    // Codex pass-1 follow-up: encode the prefix/suffix backtick contract
+    // so a future drift in `CTOR_SOURCE_PREFIX` / `CTOR_SOURCE_SUFFIX`
+    // (e.g. dropping the wrapping `` ` ``) trips immediately in debug
+    // builds rather than silently producing a malformed source string
+    // that still satisfies the loose `is_ctor_binding` predicate.
+    debug_assert!(
+        CTOR_SOURCE_PREFIX.ends_with('`') && CTOR_SOURCE_SUFFIX.starts_with('`'),
+        "ctor source prefix/suffix must wrap the type name in backticks"
+    );
+    format!(
+        "{}{}` from `{}{}",
+        CTOR_SOURCE_PREFIX, type_name, source_module, CTOR_SOURCE_SUFFIX
+    )
+}
+
 fn inject_imported_type_constructors(
     module: &Module,
     globals: &mut HashMap<String, GlobalBinding>,
     record_types: &mut HashMap<String, RecordTypeInfo>,
+    union_types: &mut HashMap<String, UnionTypeInfo>,
     stdlib_root: &Path,
 ) {
+    // GU-S3 IU-2 shadow guard: collect local type names and ctor names
+    // from the **AST** (Codex pass-1 follow-up). Walking
+    // `module.type_declarations` directly is more robust than reading
+    // back `union_types` / `record_types` because:
+    //   - `record_types` is keyed on **constructor**, not type_name, so
+    //     deriving local type names from it loses ones whose constructor
+    //     was overwritten elsewhere;
+    //   - `type_aliases` (e.g. `type Maybe = Int`) lives in a separate
+    //     map; missing it would let an imported `Maybe` union slip past
+    //     the guard and shadow the local alias semantically.
+    // The imported pass uses these sets to skip any name a local
+    // declaration already owns, preserving "local wins" without a
+    // special `local-shadows-imported` axis in `resolve_ctor`.
+    let mut local_type_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut local_ctor_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for ty_decl in &module.type_declarations {
+        match ty_decl {
+            TypeDeclaration::Alias { name, .. } => {
+                local_type_names.insert(name.clone());
+            }
+            TypeDeclaration::Union { name, variants, .. } => {
+                local_type_names.insert(name.clone());
+                for v in variants {
+                    local_ctor_names.insert(v.ctor.clone());
+                }
+            }
+            TypeDeclaration::Record {
+                name, constructor, ..
+            } => {
+                local_type_names.insert(name.clone());
+                local_ctor_names.insert(constructor.clone());
+            }
+        }
+    }
+
     let resolver = StdlibResolver::new(stdlib_root.to_path_buf());
     for import in effective_imports(module, &resolver) {
         let Ok(resolved) = resolver.resolve_module(&import.module_path) else {
@@ -264,7 +339,12 @@ fn inject_imported_type_constructors(
                         fields,
                     },
                 ) if names.iter().any(|selected| selected == name) => {
-                    let is_generic = !type_params.is_empty();
+                    // Shadow guard: a local declaration with the same
+                    // type name OR a local ctor with the same constructor
+                    // name wins; skip the imported registration entirely.
+                    if local_type_names.contains(name) || local_ctor_names.contains(constructor) {
+                        continue;
+                    }
                     let mut field_map = HashMap::new();
                     let params: Vec<Ty> = fields
                         .iter()
@@ -277,28 +357,21 @@ fn inject_imported_type_constructors(
                         field_map.insert(field_name.clone(), field_ty);
                     }
                     let result = union_or_record_result_template(name, type_params);
-                    // Same template-leakage hazard as the local
-                    // generic-record path; defer the real signature to
-                    // the freshening pass by registering `Ty::Unknown`
-                    // for now.
-                    let ctor_ty = if is_generic {
-                        Ty::Unknown
-                    } else {
-                        Ty::Fun {
-                            params,
-                            result: Box::new(result),
-                            effects: EffectRow::closed_empty(),
-                        }
+                    // GU-S3 IU-2: drop the legacy `is_generic -> Ty::Unknown`
+                    // placeholder. CA-3b/GR-1 already make
+                    // `infer_expr_ty` Var/Qualified/RecordConstruct freshen
+                    // ctor lookups via `freshen_type_scheme`, so registering
+                    // the real `Ty::Fun { params, result }` template is now
+                    // safe and lets imported generic records (e.g.
+                    // `import box (Box); Box(value: 42) : Box Int`) infer
+                    // a concrete type instead of leaking `Ty::Unknown`.
+                    let ctor_ty = Ty::Fun {
+                        params,
+                        result: Box::new(result),
+                        effects: EffectRow::closed_empty(),
                     };
-                    insert_global_symbol(
-                        globals,
-                        constructor.clone(),
-                        ctor_ty,
-                        format!(
-                            "import type `{}` ({}) from `{}`",
-                            name, constructor, import.module_path
-                        ),
-                    );
+                    let source = ctor_source_imported(name, &import.module_path);
+                    insert_global_symbol(globals, constructor.clone(), ctor_ty, source);
                     record_types.insert(
                         constructor.clone(),
                         RecordTypeInfo {
@@ -309,10 +382,96 @@ fn inject_imported_type_constructors(
                         },
                     );
                 }
+                (
+                    crate::ImportKind::Selective(names),
+                    TypeDeclaration::Union {
+                        name,
+                        type_params,
+                        variants,
+                    },
+                ) if names.iter().any(|selected| selected == name) => {
+                    // Shadow guard: a local declaration with the same
+                    // type name wins; skip the entire imported union
+                    // registration so neither `union_types` nor `globals`
+                    // see it.
+                    if local_type_names.contains(name) {
+                        continue;
+                    }
+                    // Per-variant ctor shadow check. If **any** variant's
+                    // ctor name collides with a local ctor, skip the
+                    // entire imported union registration (Codex pass-1
+                    // follow-up): otherwise `union_types` would still
+                    // carry the imported union and `resolve_ctor_without_pin`
+                    // would walk it, turning a local-only `Just` lookup
+                    // into `Ambiguous { Local Maybe, Imported Maybe }`.
+                    if variants.iter().any(|v| local_ctor_names.contains(&v.ctor)) {
+                        continue;
+                    }
+                    let result_template = union_or_record_result_template(name, type_params);
+                    let mut variant_infos = Vec::with_capacity(variants.len());
+                    let source = ctor_source_imported(name, &import.module_path);
+                    for (idx, variant) in variants.iter().enumerate() {
+                        let arg_types: Vec<Ty> = variant
+                            .args
+                            .iter()
+                            .map(|annotation| ty_from_annotation(annotation))
+                            .collect();
+                        let ctor_ty = if arg_types.is_empty() {
+                            result_template.clone()
+                        } else {
+                            Ty::Fun {
+                                params: arg_types.clone(),
+                                result: Box::new(result_template.clone()),
+                                effects: EffectRow::closed_empty(),
+                            }
+                        };
+                        insert_global_symbol(
+                            globals,
+                            format!("{}.{}", name, variant.ctor),
+                            ctor_ty.clone(),
+                            source.clone(),
+                        );
+                        insert_global_symbol(
+                            globals,
+                            variant.ctor.clone(),
+                            ctor_ty,
+                            source.clone(),
+                        );
+                        variant_infos.push(UnionVariantInfo {
+                            ctor: variant.ctor.clone(),
+                            variant_index: idx as u32,
+                            arg_types,
+                        });
+                    }
+                    union_types.insert(
+                        name.clone(),
+                        UnionTypeInfo {
+                            type_name: name.clone(),
+                            type_params: type_params.clone(),
+                            variants: variant_infos,
+                            origin: CtorOrigin::Imported {
+                                source_module: import.module_path.clone(),
+                            },
+                        },
+                    );
+                }
                 _ => {}
             }
         }
     }
+}
+
+/// GU-S3 IU-3 test helper: returns true iff `source` is the **local**
+/// ctor source rendered by `ctor_source(name)` — i.e. has no
+/// ` from `<MOD>`` infix. The shadow-guard collection moved to walking
+/// the AST directly (Codex pass-1 follow-up), so this helper is now
+/// only consumed by `ctor_source_tests` to pin the source-string shape
+/// contract.
+#[cfg(test)]
+fn is_local_ctor_source(source: &str) -> bool {
+    source.starts_with(CTOR_SOURCE_PREFIX)
+        && source.ends_with(CTOR_SOURCE_SUFFIX)
+        && !source.contains("` from `")
 }
 
 pub(crate) fn inject_type_constructors(
@@ -381,6 +540,7 @@ pub(crate) fn inject_type_constructors(
                         type_name: name.clone(),
                         type_params: type_params.clone(),
                         variants: variant_infos,
+                        origin: CtorOrigin::Local,
                     },
                 );
             }
@@ -484,6 +644,379 @@ pub(crate) fn insert_global_symbol(
                 sources.push(source);
             }
             globals.insert(symbol, GlobalBinding::Ambiguous { sources });
+        }
+    }
+}
+
+#[cfg(test)]
+mod ctor_source_tests {
+    use super::*;
+    use crate::typecheck_env::TypeEnv;
+
+    #[test]
+    fn local_ctor_source_format_matches_is_ctor_binding() {
+        // GU-S3 IU-3: pin the local ctor source string against the
+        // `is_ctor_binding` detector. Drift in either side breaks the
+        // ctor lookup path used by `infer_expr_ty` Var/Qualified arms.
+        let source = ctor_source("Maybe");
+        assert_eq!(source, "type `Maybe` constructor");
+        assert!(is_local_ctor_source(&source));
+        let mut env = TypeEnv::empty();
+        env.globals.insert(
+            "Just".to_string(),
+            GlobalBinding::Resolved {
+                ty: Ty::Unknown,
+                source,
+            },
+        );
+        assert!(env.is_ctor_binding("Just"));
+    }
+
+    #[test]
+    fn imported_ctor_source_format_matches_is_ctor_binding() {
+        // GU-S3 IU-2/IU-3: imported ctor source must satisfy
+        // `is_ctor_binding` (so resolver freshen path triggers) AND
+        // must NOT be classified as local (so the IU-2 shadow guard
+        // can distinguish local from imported sources).
+        let source = ctor_source_imported("Maybe", "goby/maybe");
+        assert_eq!(source, "type `Maybe` from `goby/maybe` constructor");
+        assert!(!is_local_ctor_source(&source));
+        let mut env = TypeEnv::empty();
+        env.globals.insert(
+            "Just".to_string(),
+            GlobalBinding::Resolved {
+                ty: Ty::Unknown,
+                source,
+            },
+        );
+        assert!(env.is_ctor_binding("Just"));
+    }
+
+    #[test]
+    fn local_and_imported_ctor_sources_are_distinct() {
+        // Different `source` strings ensure `insert_global_symbol`
+        // would produce `Ambiguous` if both fired for the same symbol
+        // — the IU-2 shadow guard prevents that, but the underlying
+        // distinguishability is what makes the guard non-vacuous.
+        let local = ctor_source("Maybe");
+        let imported = ctor_source_imported("Maybe", "goby/maybe");
+        assert_ne!(local, imported);
+    }
+}
+
+#[cfg(test)]
+mod shadow_guard_tests {
+    //! GU-S3 IU-2 (Codex pass-1): integration-shape pins for the imported
+    //! type-constructor pass. They build a small in-memory `Module` plus
+    //! an on-disk stdlib module and check that the local-shadow guard
+    //! suppresses the imported registration entirely (no ctor in
+    //! `globals`, no entry in `union_types`, the local origin survives).
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use crate::ast::{Module, TypeDeclaration, UnionVariant};
+    use crate::typecheck_env::CtorOrigin;
+    use crate::{ImportDecl, ImportKind};
+
+    use super::*;
+
+    struct TempDirGuard {
+        path: PathBuf,
+    }
+
+    impl TempDirGuard {
+        fn new(label: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be monotonic enough for tests")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "goby_shadow_guard_{}_{}_{}",
+                label,
+                std::process::id(),
+                nanos
+            ));
+            fs::create_dir_all(&path).expect("temp directory should be creatable");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDirGuard {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn empty_module_with_imports_and_types(
+        imports: Vec<ImportDecl>,
+        types: Vec<TypeDeclaration>,
+    ) -> Module {
+        Module {
+            imports,
+            type_declarations: types,
+            effect_declarations: vec![],
+            embed_declarations: vec![],
+            declarations: vec![],
+        }
+    }
+
+    fn write_module(stdlib_root: &std::path::Path, module_path: &str, contents: &str) {
+        let path = stdlib_root.join(format!("{}.gb", module_path));
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("dir should be creatable");
+        }
+        fs::write(path, contents).expect("module should be writable");
+    }
+
+    fn import_selective(module_path: &str, names: &[&str]) -> ImportDecl {
+        ImportDecl {
+            module_path: module_path.to_string(),
+            module_path_span: None,
+            kind: ImportKind::Selective(names.iter().map(|s| s.to_string()).collect()),
+            kind_span: None,
+        }
+    }
+
+    #[test]
+    fn local_alias_with_same_type_name_skips_imported_union() {
+        // Pass-1 (1): `type Maybe = Int` must shadow `import (Maybe)` so
+        // the imported union is not registered.
+        let sandbox = TempDirGuard::new("alias_skips_imported");
+        let stdlib_root = sandbox.path.join("stdlib");
+        fs::create_dir_all(stdlib_root.join("goby")).expect("dir");
+        write_module(
+            &stdlib_root,
+            "goby/maybe",
+            "type Maybe a = Just(a) | Nothing\n",
+        );
+        let module = empty_module_with_imports_and_types(
+            vec![import_selective("goby/maybe", &["Maybe"])],
+            vec![TypeDeclaration::Alias {
+                name: "Maybe".to_string(),
+                target: "Int".to_string(),
+            }],
+        );
+        let env = build_type_env(&module, &stdlib_root);
+        assert!(
+            !env.union_types.contains_key("Maybe"),
+            "imported union must be skipped when a local alias shadows the type name"
+        );
+        assert!(!env.globals.contains_key("Just"));
+        assert!(!env.globals.contains_key("Maybe.Just"));
+    }
+
+    #[test]
+    fn local_union_skips_imported_union_keeping_local_origin() {
+        // Pass-1 (3): the local `Maybe` keeps `origin: Local`, the
+        // imported `Maybe` is dropped entirely, and `globals["Just"]`
+        // is the local-source ctor (not `Ambiguous`).
+        let sandbox = TempDirGuard::new("local_skips_imported");
+        let stdlib_root = sandbox.path.join("stdlib");
+        fs::create_dir_all(stdlib_root.join("goby")).expect("dir");
+        write_module(
+            &stdlib_root,
+            "goby/maybe",
+            "type Maybe a = Just(a) | Nothing\n",
+        );
+        let module = empty_module_with_imports_and_types(
+            vec![import_selective("goby/maybe", &["Maybe"])],
+            vec![TypeDeclaration::Union {
+                name: "Maybe".to_string(),
+                type_params: vec!["a".to_string()],
+                variants: vec![
+                    UnionVariant {
+                        ctor: "Just".to_string(),
+                        args: vec!["a".to_string()],
+                    },
+                    UnionVariant {
+                        ctor: "Nothing".to_string(),
+                        args: vec![],
+                    },
+                ],
+            }],
+        );
+        let env = build_type_env(&module, &stdlib_root);
+        let info = env
+            .union_types
+            .get("Maybe")
+            .expect("local `Maybe` must remain");
+        assert_eq!(info.origin, CtorOrigin::Local);
+        let just = env.globals.get("Just").expect("local `Just` must remain");
+        match just {
+            GlobalBinding::Resolved { source, .. } => {
+                assert_eq!(source, &ctor_source("Maybe"), "local source expected");
+            }
+            other => panic!("expected Resolved local Just, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn local_ctor_only_skips_entire_imported_union() {
+        // Pass-1 (2): when only the ctor name (`Just`) collides — the
+        // local type name is different — the *entire* imported union
+        // must still be skipped. Otherwise `union_types` carries the
+        // imported union and `resolve_ctor_without_pin` walks it,
+        // turning a local-only `Just` lookup into ambiguous.
+        let sandbox = TempDirGuard::new("ctor_only_collide");
+        let stdlib_root = sandbox.path.join("stdlib");
+        fs::create_dir_all(stdlib_root.join("goby")).expect("dir");
+        write_module(
+            &stdlib_root,
+            "goby/maybe",
+            "type Maybe a = Just(a) | Nothing\n",
+        );
+        let module = empty_module_with_imports_and_types(
+            vec![import_selective("goby/maybe", &["Maybe"])],
+            vec![TypeDeclaration::Union {
+                name: "MyOption".to_string(),
+                type_params: vec!["a".to_string()],
+                variants: vec![UnionVariant {
+                    ctor: "Just".to_string(),
+                    args: vec!["a".to_string()],
+                }],
+            }],
+        );
+        let env = build_type_env(&module, &stdlib_root);
+        assert!(
+            !env.union_types.contains_key("Maybe"),
+            "imported `Maybe` must be skipped when any of its variants collides with a local ctor"
+        );
+        assert_eq!(env.union_types.len(), 1);
+        assert!(env.union_types.contains_key("MyOption"));
+    }
+
+    #[test]
+    #[ignore = "GU-S3 IU follow-up: effect member names share the value namespace with ctors. \
+                A local `effect E\\n  Just : ...` would currently mix into `globals[\"Just\"]` \
+                with the imported ctor as Ambiguous, and `ensure_no_ambiguous_globals` does not \
+                catch it because the predicate only fires on `import \\`` sources. Tracked as \
+                a follow-up — needs either a same-namespace collision diagnostic or a \
+                lowercase-only restriction on effect members."]
+    fn local_effect_member_with_ctor_name_should_collide_with_imported_union() {
+        // Codex pass-2 (1): pin the known hole. Today this is silently
+        // accepted; once the follow-up lands, the test should fail to
+        // typecheck (or return an `Ambiguous` diagnostic) and the
+        // `#[ignore]` is removed.
+        let sandbox = TempDirGuard::new("effect_ctor_collide");
+        let stdlib_root = sandbox.path.join("stdlib");
+        fs::create_dir_all(stdlib_root.join("goby")).expect("dir");
+        write_module(
+            &stdlib_root,
+            "goby/maybe",
+            "type Maybe a = Just(a) | Nothing\n",
+        );
+        // Synthesised module with a CamelCase effect member `Just`.
+        // This must not silently coexist with imported `Just`.
+        let module = Module {
+            imports: vec![import_selective("goby/maybe", &["Maybe"])],
+            type_declarations: vec![],
+            effect_declarations: vec![crate::ast::EffectDecl {
+                name: "E".to_string(),
+                type_params: vec![],
+                members: vec![crate::ast::EffectMember {
+                    name: "Just".to_string(),
+                    type_annotation: "Int -> Unit".to_string(),
+                    span: crate::Span::point(1, 1),
+                }],
+                span: crate::Span::point(1, 1),
+            }],
+            embed_declarations: vec![],
+            declarations: vec![],
+        };
+        let env = build_type_env(&module, &stdlib_root);
+        // Today: `Just` ends up as `Ambiguous`. The follow-up should
+        // make this either be rejected at build_type_env time, or
+        // disambiguate with a clear diagnostic.
+        match env.globals.get("Just") {
+            Some(GlobalBinding::Ambiguous { .. }) => {
+                panic!("expected non-ambiguous `Just` after the follow-up lands")
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    #[ignore = "GU-S3 IU follow-up: imported-vs-imported same-name union (e.g. two `Maybe` \
+                modules selectively imported) currently last-writer-wins on `union_types` \
+                because the IU shadow guard only protects against local-vs-imported. Tracked \
+                as a follow-up — needs ambiguity-on-collision detection at the imported pass."]
+    fn imported_vs_imported_same_name_union_should_be_ambiguous() {
+        // Codex pass-2 (2): pin the known scope-out behaviour. The
+        // follow-up should turn this into a deterministic diagnostic
+        // rather than the current silent last-writer-wins.
+        let sandbox = TempDirGuard::new("imported_vs_imported");
+        let stdlib_root = sandbox.path.join("stdlib");
+        fs::create_dir_all(stdlib_root.join("goby")).expect("dir");
+        write_module(
+            &stdlib_root,
+            "goby/maybe_a",
+            "type Maybe a = Just(a) | Nothing\n",
+        );
+        write_module(
+            &stdlib_root,
+            "goby/maybe_b",
+            "type Maybe a = Just(a) | Nothing\n",
+        );
+        let module = empty_module_with_imports_and_types(
+            vec![
+                import_selective("goby/maybe_a", &["Maybe"]),
+                import_selective("goby/maybe_b", &["Maybe"]),
+            ],
+            vec![],
+        );
+        let env = build_type_env(&module, &stdlib_root);
+        // After the follow-up: the two imports should produce a
+        // diagnostic or an Ambiguous `union_types` axis. Today only one
+        // wins.
+        let info = env
+            .union_types
+            .get("Maybe")
+            .expect("at least one union should land");
+        match &info.origin {
+            CtorOrigin::Imported { source_module } => {
+                assert!(
+                    source_module == "goby/maybe_a",
+                    "the follow-up should not allow last-writer-wins; once it lands, expect a diagnostic instead"
+                );
+            }
+            other => panic!("expected Imported origin, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn no_local_collision_registers_imported_union() {
+        // Negative control: with no local `Maybe` / `Just`, the
+        // imported union lands in env with `origin: Imported`.
+        let sandbox = TempDirGuard::new("no_collision_registers");
+        let stdlib_root = sandbox.path.join("stdlib");
+        fs::create_dir_all(stdlib_root.join("goby")).expect("dir");
+        write_module(
+            &stdlib_root,
+            "goby/maybe",
+            "type Maybe a = Just(a) | Nothing\n",
+        );
+        let module = empty_module_with_imports_and_types(
+            vec![import_selective("goby/maybe", &["Maybe"])],
+            vec![],
+        );
+        let env = build_type_env(&module, &stdlib_root);
+        let info = env
+            .union_types
+            .get("Maybe")
+            .expect("imported `Maybe` must register");
+        assert_eq!(
+            info.origin,
+            CtorOrigin::Imported {
+                source_module: "goby/maybe".to_string(),
+            }
+        );
+        let just = env.globals.get("Just").expect("imported `Just` global");
+        match just {
+            GlobalBinding::Resolved { source, .. } => {
+                assert_eq!(source, &ctor_source_imported("Maybe", "goby/maybe"));
+            }
+            other => panic!("expected Resolved imported Just, got {:?}", other),
         }
     }
 }

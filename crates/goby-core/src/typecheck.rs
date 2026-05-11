@@ -4841,4 +4841,215 @@ main =
             "second error should be from 'b'"
         );
     }
+
+    // ----------------------------------------------------------------
+    // GU-S3 IU-4 — cross-module imported generic unions / records
+    //
+    // Sandbox layout: `<sandbox>/stdlib/goby/<MOD>.gb` declares a
+    // generic type, `<sandbox>/user/main.gb` imports it. Verifies the
+    // IU-2 Union arm + record `is_generic -> Ty::Unknown` removal +
+    // shadow guard end-to-end.
+    // ----------------------------------------------------------------
+
+    fn write_stdlib_module(stdlib_root: &std::path::Path, module_path: &str, contents: &str) {
+        let path = stdlib_root.join(format!("{}.gb", module_path));
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("module dir should be creatable");
+        }
+        fs::write(path, contents).expect("module fixture should be writable");
+    }
+
+    fn write_main(sandbox_root: &std::path::Path, contents: &str) -> std::path::PathBuf {
+        let main = sandbox_root.join("user/main.gb");
+        if let Some(parent) = main.parent() {
+            fs::create_dir_all(parent).expect("user dir should be creatable");
+        }
+        fs::write(&main, contents).expect("user main should be writable");
+        main
+    }
+
+    /// Minimal prelude so any test invoking `print` / `println` survives
+    /// implicit-prelude injection. Tests that don't use Print can pass
+    /// `None` for `with_prelude` via `setup_iu_sandbox_no_prelude`.
+    fn setup_iu_sandbox(label: &str) -> (TempDirGuard, std::path::PathBuf) {
+        let sandbox = TempDirGuard::new(label);
+        let stdlib_root = sandbox.path.join("stdlib");
+        fs::create_dir_all(stdlib_root.join("goby")).expect("stdlib/goby should be creatable");
+        fs::write(
+            stdlib_root.join("goby/prelude.gb"),
+            "effect Print\n  print : String -> Unit\n  println : String -> Unit\n@embed Print __goby_embeded_effect_stdout_handler\n",
+        )
+        .expect("prelude should be writable");
+        (sandbox, stdlib_root)
+    }
+
+    #[test]
+    fn imported_generic_union_bare_ctor_application_typechecks() {
+        // GU-S3 IU-2: imported `Maybe a = Just(a) | Nothing` lets bare
+        // `Just 42 : Maybe Int` typecheck end-to-end.
+        let (sandbox, stdlib_root) = setup_iu_sandbox("iu_bare_ctor");
+        write_stdlib_module(
+            &stdlib_root,
+            "goby/maybe",
+            "type Maybe a = Just(a) | Nothing\n",
+        );
+        let source = "\
+import goby/maybe (Maybe)
+v : Maybe Int
+v = Just 42
+";
+        let main = write_main(&sandbox.path, source);
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&main), Some(&stdlib_root))
+            .expect("imported `Just 42 : Maybe Int` should typecheck");
+    }
+
+    #[test]
+    fn imported_generic_union_qualified_ctor_typechecks() {
+        // GU-S3 IU-2: qualified `Maybe.Just 42` resolves through the
+        // `Type.Ctor` global registered by the imported Union arm.
+        let (sandbox, stdlib_root) = setup_iu_sandbox("iu_qualified_ctor");
+        write_stdlib_module(
+            &stdlib_root,
+            "goby/maybe",
+            "type Maybe a = Just(a) | Nothing\n",
+        );
+        let source = "\
+import goby/maybe (Maybe)
+v : Maybe Int
+v = Maybe.Just 42
+";
+        let main = write_main(&sandbox.path, source);
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&main), Some(&stdlib_root))
+            .expect("imported `Maybe.Just 42` should typecheck");
+    }
+
+    #[test]
+    fn imported_generic_union_nullary_ctor_typechecks() {
+        let (sandbox, stdlib_root) = setup_iu_sandbox("iu_nullary_ctor");
+        write_stdlib_module(
+            &stdlib_root,
+            "goby/maybe",
+            "type Maybe a = Just(a) | Nothing\n",
+        );
+        let source = "\
+import goby/maybe (Maybe)
+v : Maybe Int
+v = Nothing
+w : Maybe Int
+w = Maybe.Nothing
+";
+        let main = write_main(&sandbox.path, source);
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&main), Some(&stdlib_root))
+            .expect("imported `Nothing` and `Maybe.Nothing` should typecheck");
+    }
+
+    #[test]
+    fn imported_generic_union_pattern_binder_inference_typechecks() {
+        // GU-S3 IU-2 + CP: case pattern binder `x` against an imported
+        // generic union infers `Int` correctly.
+        let (sandbox, stdlib_root) = setup_iu_sandbox("iu_pattern_binder");
+        write_stdlib_module(
+            &stdlib_root,
+            "goby/maybe",
+            "type Maybe a = Just(a) | Nothing\n",
+        );
+        let source = "\
+import goby/maybe (Maybe)
+unwrap : Maybe Int -> Int
+unwrap m =
+  case m
+    Just(x) -> x + 1
+    Nothing -> 0
+";
+        let main = write_main(&sandbox.path, source);
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&main), Some(&stdlib_root))
+            .expect("imported pattern binder should typecheck");
+    }
+
+    #[test]
+    fn imported_generic_union_two_call_sites_independent_freshen_typechecks() {
+        // GU-S3 IU-2 + CA-3b: imported ctor template freshens
+        // independently per call site.
+        let (sandbox, stdlib_root) = setup_iu_sandbox("iu_two_call_sites");
+        write_stdlib_module(
+            &stdlib_root,
+            "goby/maybe",
+            "type Maybe a = Just(a) | Nothing\n",
+        );
+        let source = "\
+import goby/maybe (Maybe)
+ints : Maybe Int
+ints = Just 1
+strs : Maybe String
+strs = Just \"x\"
+";
+        let main = write_main(&sandbox.path, source);
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&main), Some(&stdlib_root))
+            .expect("two imported `Just` call sites should freshen independently");
+    }
+
+    #[test]
+    fn imported_generic_union_local_shadows_imported_skips_imported() {
+        // GU-S3 IU-2 shadow guard: when the user redeclares `Maybe` /
+        // `Just` locally, the imported registration is skipped so
+        // `globals` does not collapse `Just` into `Ambiguous`. The local
+        // definition stands and `Just 42 : Maybe Int` still typechecks.
+        let (sandbox, stdlib_root) = setup_iu_sandbox("iu_local_shadows");
+        write_stdlib_module(
+            &stdlib_root,
+            "goby/maybe",
+            "type Maybe a = Just(a) | Nothing\n",
+        );
+        let source = "\
+import goby/maybe (Maybe)
+type Maybe a = Just(a) | Nothing
+v : Maybe Int
+v = Just 42
+";
+        let main = write_main(&sandbox.path, source);
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&main), Some(&stdlib_root))
+            .expect("local `Maybe` should shadow imported `Maybe` cleanly");
+    }
+
+    #[test]
+    fn imported_generic_record_ctor_no_longer_unknown() {
+        // GU-S3 IU-2 record-arm fix: previous `is_generic -> Ty::Unknown`
+        // placeholder leaked through to the call-site, so `Box(value: 42)`
+        // could not pin `Box Int`. With the real `Ty::Fun` template
+        // registered, the imported generic record ctor freshens correctly.
+        let (sandbox, stdlib_root) = setup_iu_sandbox("iu_record_box");
+        write_stdlib_module(&stdlib_root, "goby/box", "type Box a = Box(value: a)\n");
+        let source = "\
+import goby/box (Box)
+b : Box Int
+b = Box(value: 42)
+";
+        let main = write_main(&sandbox.path, source);
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&main), Some(&stdlib_root))
+            .expect("imported generic record ctor should typecheck against `Box Int`");
+    }
+
+    #[test]
+    fn imported_generic_record_field_access_typechecks() {
+        // GU-S3 IU-2 + GR-3: field access `b.value` on a freshly-built
+        // imported `Box Int` returns `Int`.
+        let (sandbox, stdlib_root) = setup_iu_sandbox("iu_record_field");
+        write_stdlib_module(&stdlib_root, "goby/box", "type Box a = Box(value: a)\n");
+        let source = "\
+import goby/box (Box)
+peek : Box Int -> Int
+peek b = b.value
+";
+        let main = write_main(&sandbox.path, source);
+        let module = parse_module(source).expect("should parse");
+        typecheck_module_with_context(&module, Some(&main), Some(&stdlib_root))
+            .expect("imported `Box Int` field access should typecheck as `Int`");
+    }
 }

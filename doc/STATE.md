@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-11 (Track GU-S3 constructor-name ambiguity resolution (AR-1/AR-2/AR-3) landed on top of GR. Same-ctor unions disambiguated by qualifier (`Maybe.Just` / `Result.Ok`), by scrutinee pin in patterns (`case (r : Result Int String) / Ok x -> ...` resolves to `Result.Ok`), and by dedicated diagnostics for the unsatisfiable cases (`constructor `T.Ctor` does not belong to scrutinee type `U`` D-2; `qualified constructor `T.Ctor` is not declared by any union type`; `constructor `Ctor` is ambiguous; candidates: …` with `TypeName.Ctor` suggestion). Wired for both pattern arms (via `resolve_ctor_pattern_binders`) and application sites (via `ensure_ctor_resolution` in the existing ambiguity walker). Cross-module imported-union ctor support and expected-type-driven application-site disambiguation remain queued under PLAN_GU §6 GU-S3 follow-ups).
+Last updated: 2026-05-11 (Track GU-S3 cross-module imported unions (IU-1/IU-2/IU-3/IU-4) landed on top of AR. `inject_imported_type_constructors` now registers generic unions in addition to records via the new IU-2 Union arm, with an AST-derived shadow guard (`local_type_names` / `local_ctor_names` from `module.type_declarations`, alias included) that drops the imported registration entirely on local-name collision (per-variant ctor collision skips the whole imported union, so `union_types` never carries an imported-conflicting entry). `UnionTypeInfo.origin: CtorOrigin { Local | Imported { source_module } }` (IU-1) is the new axis the AR `local-over-imported` follow-up will branch on without re-querying the env; `resolve_ctor_without_pin` already threads it into `CtorCandidate.origin`. The imported ctor `source` string format (IU-3) — `` "type `<TYPE>` from `<MOD>` constructor" `` — preserves the `is_ctor_binding` prefix/suffix contract so freshening still triggers, with a `debug_assert` on the prefix/suffix backtick contract. Existing imported records dropped their legacy `is_generic -> Ty::Unknown` placeholder in the same diff, so `import box (Box); Box(value: 42) : Box Int` now infers concretely. Two known holes pinned as `#[ignore]` regression tests in `typecheck_build::shadow_guard_tests`: imported-vs-imported same-name union, and effect-member-vs-imported-ctor name collision. Selective import of constructor names (`import maybe (Just)`) is still rejected by `typecheck_validate.rs` and tracked as a separate follow-up).
 
 ## Current Focus
 
@@ -10,8 +10,9 @@ placeholder) landed earlier; on top of that, GU-S3 has now
 absorbed D-6 (`freshen_type_scheme` extraction), the union ctor
 application split (CA-1/CA-2/CA-3a/CA-3b), constructor-pattern
 binder inference (CP), generic-record support (GR-1/GR-2/GR-3),
-and **constructor-name ambiguity resolution (AR-1/AR-2/AR-3)**,
-all on 2026-05-11. As a result, generic ctor applications
+**constructor-name ambiguity resolution (AR-1/AR-2/AR-3)**, and
+**cross-module imported unions (IU-1/IU-2/IU-3/IU-4)**, all on
+2026-05-11. As a result, generic ctor applications
 (`Just 42 : Maybe Int`, `Box(value: 42) : Box Int`, `Pair 1 "x"
 : Pair Int String`), generic field access (`v.value : Int` for
 `v : Box Int`), generic ctor patterns (`case xs Just(x) -> x
@@ -186,6 +187,41 @@ resolution, 2026-05-11)**:
   875 passed / 12 skipped — AR is typecheck-side only, unchanged
   from the GR baseline.
 
+**All-green (post GU-S3 IU cross-module imported unions, 2026-05-11)**:
+
+- `cargo test -p goby-core --lib`: 1052 passed / 4 ignored (up
+  from 1029 with +23 new pins; +2 newly-ignored Codex pass-2
+  regression markers).
+  - IU-1 (`CtorOrigin::Imported { source_module }` +
+    `UnionTypeInfo.origin`): `resolve_ctor_tests` extends to 17
+    cases, +2 `imported_origin` pins for the `Resolved` /
+    `Ambiguous` paths.
+  - IU-2 (`build_type_env` ordering swap +
+    `inject_imported_type_constructors` Union arm + AST-derived
+    shadow guard + per-variant ctor-collision skip + record-arm
+    `is_generic -> Ty::Unknown` removal): 4 new
+    `typecheck_build::shadow_guard_tests` cases — alias / local
+    union / ctor-only collide / negative control — pin
+    `union_types.origin` and the local-source `globals[ctor]`
+    shape; 2 additional `#[ignore]` pins for the Codex pass-2
+    holes (effect-member-vs-imported-ctor, imported-vs-imported
+    same-name union).
+  - IU-3 (`ctor_source_imported` + `is_local_ctor_source`):
+    6 new `is_ctor_binding_tests` (local / imported / non-ctor /
+    locals-shadow / Ambiguous-all-ctor / Ambiguous-mixed) plus
+    3 `ctor_source_tests` (local format, imported format,
+    distinctness).
+  - IU-4 (cross-module acceptance): 8 new `typecheck::tests`
+    `TempDirGuard` cases — bare ctor / qualified / nullary
+    bare+qualified / pattern binder / two-call-site freshen /
+    local-shadows-imported end-to-end / imported generic record
+    ctor (ex-Unknown regression) / imported generic record
+    field access.
+- `cargo test -p goby-lsp`: 56 passed.
+- `cargo check --workspace`: warning-free.
+- `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`:
+  875 passed / 12 skipped — IU is typecheck-side only.
+
 Red / ignored:
 
 - Pre-existing `#[ignore]`d perceus / compile_tests entries (see
@@ -211,15 +247,18 @@ Red / ignored:
 
 - **GU-S3 sub-tasks completed 2026-05-11.** Union ctor application
   (CA-1/CA-2/CA-3a/CA-3b), constructor-pattern binder inference (CP),
-  generic-record support (GR-1/GR-2/GR-3), and constructor-name
-  ambiguity resolution (AR-1/AR-2/AR-3) have all landed. The
+  generic-record support (GR-1/GR-2/GR-3), constructor-name
+  ambiguity resolution (AR-1/AR-2/AR-3), and **cross-module
+  imported unions (IU-1/IU-2/IU-3/IU-4)** have all landed. The
   per-commit landed summaries below stay as the load-bearing
   reference for the shared helpers each step introduced; the next
-  active sub-tasks are cross-module imported-union ctor support
-  (depends on `inject_imported_type_constructors` registering
-  unions, currently registers records only) and expected-type-
-  driven application-site disambiguation (see the "sub-task
-  ordering" bullet further below).
+  active sub-tasks are AR `local-over-imported` resolver filter
+  (now unblocked because `CtorOrigin::Imported` ships in
+  `UnionTypeInfo.origin` via IU-1), expected-type-driven
+  application-site disambiguation, and the constructor-only
+  selective import (`import maybe (Just)`) validation extension
+  (currently rejected by `typecheck_validate.rs:36`). See the
+  "sub-task ordering" bullet further below.
 
   - **CA-1** ✅ landed: Rewrite `typecheck_check.rs::infer_expr_ty`
     `Expr::Call` arm to use call-site unify via the new `pub(crate) fn
@@ -301,6 +340,33 @@ Red / ignored:
     `find_generic_record_field_mismatch` (Codex pass-1 follow-up).
     The old `TypeEnv::record_field_ty` is removed in favour of the
     new helper.
+  - **IU (IU-1/IU-2/IU-3/IU-4)** ✅ landed: cross-module imported
+    unions (and the long-pending imported-records `is_generic ->
+    Ty::Unknown` cleanup). IU-1 adds
+    `CtorOrigin::Imported { source_module: String }` and
+    `UnionTypeInfo.origin: CtorOrigin`; `resolve_ctor_without_pin`
+    threads `union.origin.clone()` into `CtorCandidate.origin`.
+    IU-2 swaps `build_type_env`'s call order so
+    `inject_type_constructors` (local) runs before
+    `inject_imported_type_constructors`, and adds a Union arm
+    plus an AST-derived shadow guard
+    (`local_type_names` / `local_ctor_names` walked from
+    `module.type_declarations` — alias included per Codex pass-1).
+    A per-variant ctor-collision check skips the **entire**
+    imported union (so `union_types` never holds a partial
+    imported entry that could leak into `resolve_ctor_without_pin`,
+    Codex pass-1). IU-3 introduces `ctor_source_imported`, format
+    `` "type `<TYPE>` from `<MOD>` constructor" ``, with a
+    `debug_assert` on the prefix/suffix backtick contract.
+    `is_local_ctor_source` (now `#[cfg(test)]`) backs the
+    distinguishability pin. IU-4 adds 8 cross-module
+    `TempDirGuard` acceptance tests and 4 in-process
+    `shadow_guard_tests` (alias / local union / ctor-only collide /
+    negative control) plus 2 `#[ignore]` regression markers for
+    Codex pass-2 holes (effect member vs imported ctor; imported
+    vs imported same-name union). Constructor-only selective
+    import (`import maybe (Just)`) remains rejected by
+    `typecheck_validate.rs:36` — separate follow-up.
 
   An adjacent existing-behaviour quirk surfaced during D-6 Pass 2
   remains open: when `clause_name` is already qualified (`Eff.op`),
@@ -356,35 +422,40 @@ Red / ignored:
      returns `1 + child` for both arms to match. Two unit tests in
      `gen_lower::emit::tests` pin the spill-count contract.
 
-- **Track GU-S3 sub-task ordering (post union + CP + GR + AR).**
+- **Track GU-S3 sub-task ordering (post union + CP + GR + AR + IU).**
   D-6 `freshen_type_scheme` extraction, **union ctor application**
   (CA-1/CA-2/CA-3a/CA-3b), **constructor-pattern binder inference** (CP),
-  **generic-record support** (GR-1/GR-2/GR-3), and **constructor-name
-  ambiguity resolution** (AR-1/AR-2/AR-3) are all complete (2026-05-11).
+  **generic-record support** (GR-1/GR-2/GR-3), **constructor-name
+  ambiguity resolution** (AR-1/AR-2/AR-3), and **cross-module imported
+  unions** (IU-1/IU-2/IU-3/IU-4) are all complete (2026-05-11).
   The remaining queued sub-tasks, in the order they will be picked up:
-  cross-module imports of generic unions and records (via
-  `inject_imported_type_constructors`, which currently registers
-  records only — imported unions are intentionally deferred per
-  PLAN_GU §6 GU-S2d); local-shadows-imported disambiguation (depends
-  on imported-union registration so the `CtorOrigin::Imported` axis is
-  populated); generic-record field access on global / function-return
-  receivers (locals-only short-cut today); expected-type-driven
-  application-site disambiguation (`x : OnePair Int; x = Same 0`
-  should resolve to `OnePair.Same` even when another union declares
-  `Same`); a dedicated wrong-arity / unknown-pattern-ctor diagnostic
-  at the pattern walker; the deferred AR-2 lambda-param scrutinee
-  threading (today's `ensure_no_ambiguous_refs_in_expr::Expr::Lambda`
-  arm introduces the param into the walker's local env with
-  `Ty::Unknown`, so the scrutinee-pinned D-2 path silently passes
-  for `f = (r) -> case r ...` even when `f` is annotated). See
-  `doc/PLAN_GU.md` §6 GU-S3 for the deliverable list. Deferred
-  CA-3b / CP / GR follow-ups (tracked in `progress-log.md`): Pipeline
-  (`42 |> Just`) / MethodCall ctor lookup, ctor-as-value (`map xs Just`),
-  expected-type-driven bare ctor disambiguation, generic ctor arity /
-  wrong-arg diagnostic wording (currently silent-passes on extra args),
-  pattern-side wrong-arity diagnostic (currently silent fallback to
-  `Ty::Unknown`), PC-shaped function-typed record fields with effect
-  rows.
+  AR `local-over-imported` resolver filter (now unblocked because
+  `CtorOrigin::Imported` lives on `UnionTypeInfo.origin` and is
+  threaded into `CtorCandidate.origin` by IU-1); imported-vs-imported
+  same-name union diagnostic (today silent last-writer-wins, pinned
+  as an `#[ignore]` regression test in
+  `typecheck_build::shadow_guard_tests`); effect-member-vs-imported-ctor
+  name collision (same Ambiguous-mixed hole, also pinned as
+  `#[ignore]`); constructor-only selective import
+  (`import maybe (Just)`) — extend `typecheck_validate.rs:36`
+  acceptance set with union-variant ctor names; generic-record field
+  access on global / function-return receivers (locals-only short-cut
+  today); expected-type-driven application-site disambiguation
+  (`x : OnePair Int; x = Same 0` should resolve to `OnePair.Same`
+  even when another union declares `Same`); a dedicated wrong-arity
+  / unknown-pattern-ctor diagnostic at the pattern walker; the
+  deferred AR-2 lambda-param scrutinee threading (today's
+  `ensure_no_ambiguous_refs_in_expr::Expr::Lambda` arm introduces
+  the param into the walker's local env with `Ty::Unknown`, so the
+  scrutinee-pinned D-2 path silently passes for `f = (r) -> case r ...`
+  even when `f` is annotated). See `doc/PLAN_GU.md` §6 GU-S3 for the
+  deliverable list. Deferred CA-3b / CP / GR follow-ups (tracked in
+  `progress-log.md`): Pipeline (`42 |> Just`) / MethodCall ctor
+  lookup, ctor-as-value (`map xs Just`), expected-type-driven bare
+  ctor disambiguation, generic ctor arity / wrong-arg diagnostic
+  wording (currently silent-passes on extra args), pattern-side
+  wrong-arity diagnostic (currently silent fallback to `Ty::Unknown`),
+  PC-shaped function-typed record fields with effect rows.
 
 **Queued behind GU:**
 

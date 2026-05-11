@@ -1716,6 +1716,7 @@ fst p =
                     arg_types: vec![],
                 },
             ],
+            origin: crate::typecheck_env::CtorOrigin::Local,
         };
         let mut union_types = HashMap::new();
         union_types.insert("Maybe".to_string(), union_info);
@@ -1768,6 +1769,7 @@ fst p =
                 variant_index: 0,
                 arg_types: vec![Ty::Var("a".to_string())],
             }],
+            origin: crate::typecheck_env::CtorOrigin::Local,
         };
         let mut union_types = HashMap::new();
         union_types.insert("Maybe".to_string(), union_info);
@@ -1807,6 +1809,7 @@ fst p =
                 variant_index: 0,
                 arg_types: vec![Ty::Int],
             }],
+            origin: crate::typecheck_env::CtorOrigin::Local,
         };
         let mut union_types = HashMap::new();
         union_types.insert("Box".to_string(), union_info);
@@ -1856,6 +1859,7 @@ fst p =
                 variant_index: 0,
                 arg_types: vec![Ty::Var("a".to_string())],
             }],
+            origin: crate::typecheck_env::CtorOrigin::Local,
         };
         let mut union_types = HashMap::new();
         union_types.insert("Maybe".to_string(), union_info);
@@ -1896,6 +1900,7 @@ fst p =
                 variant_index: 0,
                 arg_types: vec![Ty::Var("a".to_string())],
             }],
+            origin: crate::typecheck_env::CtorOrigin::Local,
         };
         let mut union_types = HashMap::new();
         union_types.insert("Maybe".to_string(), union_info);
@@ -1952,6 +1957,7 @@ fst p =
                 variant_index: 0,
                 arg_types: vec![Ty::Var("a".to_string()), Ty::Var("b".to_string())],
             }],
+            origin: crate::typecheck_env::CtorOrigin::Local,
         };
         let mut union_types = HashMap::new();
         union_types.insert("Pair".to_string(), union_info);
@@ -2004,6 +2010,7 @@ fst p =
                 variant_index: 0,
                 arg_types: vec![Ty::Var("a".to_string())],
             }],
+            origin: crate::typecheck_env::CtorOrigin::Local,
         };
         let mut union_types = HashMap::new();
         union_types.insert("Maybe".to_string(), union_info);
@@ -2224,9 +2231,8 @@ unwrap r =
     Result.Err _ -> 0
 ";
         let module = parse_module(source).expect("should parse");
-        let err = typecheck_module(&module).expect_err(
-            "`Maybe.Just(x) -> ...` against a `Result` scrutinee should be rejected",
-        );
+        let err = typecheck_module(&module)
+            .expect_err("`Maybe.Just(x) -> ...` against a `Result` scrutinee should be rejected");
         assert!(
             err.message.contains("does not belong"),
             "diagnostic should mention 'does not belong'; got: {}",
@@ -2263,8 +2269,7 @@ to_int m =
         let err = typecheck_module(&module)
             .expect_err("`Unknown.Just x -> ...` should be rejected (no such type)");
         assert!(
-            err.message
-                .contains("qualified constructor `Unknown.Just`"),
+            err.message.contains("qualified constructor `Unknown.Just`"),
             "diagnostic should mention the qualified form; got: {}",
             err.message
         );
@@ -2413,6 +2418,7 @@ f = (r) -> case r
                         variant_index: 0,
                         arg_types: vec![Ty::Var("a".to_string())],
                     }],
+                    origin: crate::typecheck_env::CtorOrigin::Local,
                 },
             );
         };
@@ -2439,8 +2445,7 @@ f = (r) -> case r
             diag.message
         );
         assert!(
-            diag.message.contains("`OnePair.Same`")
-                && diag.message.contains("`TwoPair.Same`"),
+            diag.message.contains("`OnePair.Same`") && diag.message.contains("`TwoPair.Same`"),
             "diagnostic should list both candidates with qualified form; got: {}",
             diag.message
         );
@@ -2470,9 +2475,8 @@ v =
     OnePair.Same x -> x
 ";
         let module = parse_module(source).expect("should parse");
-        let err = typecheck_module(&module).expect_err(
-            "bare ambiguous `Same 0` at application site should be rejected",
-        );
+        let err = typecheck_module(&module)
+            .expect_err("bare ambiguous `Same 0` at application site should be rejected");
         assert!(
             err.message.contains("is ambiguous"),
             "diagnostic should mention 'is ambiguous'; got: {}",
@@ -2503,8 +2507,7 @@ v = Unknown.Just 42
         let err = typecheck_module(&module)
             .expect_err("`Unknown.Just 42` should be rejected (no such union type)");
         assert!(
-            err.message
-                .contains("qualified constructor `Unknown.Just`"),
+            err.message.contains("qualified constructor `Unknown.Just`"),
             "diagnostic should mention the qualified form; got: {}",
             err.message
         );
