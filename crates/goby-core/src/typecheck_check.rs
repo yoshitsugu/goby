@@ -146,11 +146,11 @@ fn infer_expr_ty(expr: &Expr, env: &TypeEnv) -> Ty {
                 };
                 return check_expr(&rewritten, env);
             }
-            let callee_ty = check_expr(callee, env);
-            match callee_ty {
-                Ty::Fun { result, .. } => *result,
-                _ => Ty::Unknown,
-            }
+            // CA-1: callee の `Ty::Fun.result` 直返しでは call-site unify が
+            // 反映されないため、`typecheck_call::infer_call_result_ty` を経由
+            // して引数を unify した結果を返す。後続 CA-3b で `Just 42` が
+            // `Maybe Int` に具体化される前提となる経路。
+            crate::typecheck_call::infer_call_result_ty(expr, env)
         }
         Expr::MethodCall {
             receiver, method, ..
@@ -877,5 +877,95 @@ main =
             right: Box::new(Expr::IntLit(2)),
         };
         assert_eq!(check_expr(&expr, &env), Ty::Int);
+    }
+
+    // ---- GU-S3 CA-1: `Expr::Call` arm が call-site unify を経由することを pin ----
+    //
+    // 旧 `match callee_ty { Ty::Fun { result, .. } => *result, _ => Ty::Unknown }`
+    // は partial application / multi-arg ctor を粗く unwrap して latent な
+    // 不正パターンを `Ty::Unknown` 経由で素通ししていた。新 entry
+    // `typecheck_call::infer_call_result_ty` は `resolve_function_value_ty` を
+    // 経由するので、partial application は残り params を `Ty::Fun` として返し、
+    // 引数不一致は `Ty::Unknown` を返す。本コミットでは、CA-2/CA-3b で
+    // ctor 登録 template を入れる前段としての挙動を以下で固定する。
+
+    #[test]
+    fn call_partial_application_returns_function_type_not_final_result() {
+        // GU-S3 CA-1: 2-引数関数を 1 引数だけ与えて部分適用すると、戻り値
+        // 型は「残り params -> result」の `Ty::Fun` として返る。旧
+        // `match callee_ty { Ty::Fun { result, .. } => *result, _ =>
+        // Ty::Unknown }` は最終 result (`Int`) を返してしまい partial
+        // application を識別できなかった。AST 直書きで `check_expr` の
+        // 戻り値を assert することで、`infer_call_result_ty` 経由の
+        // partial application 挙動を pin する。
+        let mut globals = HashMap::new();
+        globals.insert(
+            "add".to_string(),
+            crate::typecheck_env::GlobalBinding::Resolved {
+                ty: Ty::Fun {
+                    params: vec![Ty::Int, Ty::Int],
+                    result: Box::new(Ty::Int),
+                    effects: crate::typecheck_env::EffectRow::closed_empty(),
+                },
+                source: "test".to_string(),
+            },
+        );
+        let env = TypeEnv {
+            globals,
+            ..TypeEnv::empty()
+        };
+        let expr = Expr::Call {
+            callee: Box::new(Expr::Var {
+                name: "add".to_string(),
+                span: None,
+            }),
+            arg: Box::new(Expr::IntLit(1)),
+            span: None,
+        };
+        let result = check_expr(&expr, &env);
+        match result {
+            Ty::Fun { params, result, .. } => {
+                assert_eq!(params, vec![Ty::Int]);
+                assert_eq!(*result, Ty::Int);
+            }
+            other => panic!(
+                "expected `Int -> Int` partial application type, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn call_invalid_arg_type_yields_unknown_through_resolver() {
+        // GU-S3 CA-1: `resolve_function_value_ty` で引数型が unify できない
+        // call は `Ty::Unknown` を返す。`check_expr` を AST 直書きで呼んで
+        // 戻り値そのものを assert する。`validate_call_chain` 経路を経ない
+        // 単独評価で、`infer_call_result_ty` の `Ty::Unknown` 帰着を pin。
+        let mut globals = HashMap::new();
+        globals.insert(
+            "add".to_string(),
+            crate::typecheck_env::GlobalBinding::Resolved {
+                ty: Ty::Fun {
+                    params: vec![Ty::Int, Ty::Int],
+                    result: Box::new(Ty::Int),
+                    effects: crate::typecheck_env::EffectRow::closed_empty(),
+                },
+                source: "test".to_string(),
+            },
+        );
+        let env = TypeEnv {
+            globals,
+            ..TypeEnv::empty()
+        };
+        // `add True` — Bool を Int 期待 param に渡す、partial application。
+        let expr = Expr::Call {
+            callee: Box::new(Expr::Var {
+                name: "add".to_string(),
+                span: None,
+            }),
+            arg: Box::new(Expr::BoolLit(true)),
+            span: None,
+        };
+        assert_eq!(check_expr(&expr, &env), Ty::Unknown);
     }
 }

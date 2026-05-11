@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-11 (Track GU-S3 union ctor application sub-task planning complete after three Codex plan reviews; 4-commit split CA-1/CA-2/CA-3a/CA-3b ready to execute, implementation not yet started).
+Last updated: 2026-05-11 (Track GU-S3 union ctor application sub-task CA-1 landed; `Expr::Call` arm now routes through `typecheck_call::infer_call_result_ty` so call-site unify is reflected in the result type. CA-2/CA-3a/CA-3b pending).
 
 ## Current Focus
 
@@ -50,6 +50,17 @@ commit `df57c32`):
 - `cargo test -p goby-lsp`: 56 passed.
 - `cargo check --workspace`: warning-free.
 
+**All-green (post GU-S3 CA-1 `Expr::Call` call-site unify, 2026-05-11)**:
+
+- `cargo test -p goby-core --lib`: 950 passed / 2 ignored (up from 948
+  via two new `typecheck_check::tests` AST-level pins of partial-
+  application and invalid-arg call paths; two pre-existing tests
+  rewritten to match the new precise behaviour).
+- `cargo test -p goby-lsp`: 56 passed.
+- `cargo check --workspace`: warning-free.
+- `cargo nextest run -p goby-wasm`: not re-run for CA-1 — the change is
+  pure typecheck-side and emit-side baselines remain valid until CA-3b.
+
 Red / ignored:
 
 - Pre-existing `#[ignore]`d perceus / compile_tests entries (see
@@ -73,22 +84,27 @@ Red / ignored:
   checking, generic-record ctor application, generic-record field
   access, cross-module imports of generic types) route through.
 
-- **Active sub-task: union ctor application (planning complete,
-  implementation pending).** PLAN_GU.md §6 GU-S3 acceptance items
-  for this sub-task: `Just 42 : Maybe Int` typechecks, two `Just 42`
-  / `Just "hi"` call sites in the same module type-check
-  independently, arity / type mismatches surface through the
-  existing function-call diagnostic path. Three Codex plan-review
-  rounds (2026-05-11) exposed five design holes (Call arm ignores
-  call-site unify; `are_compatible` doesn't bind `Ty::Var`;
-  `next_id=0` collides for nested ctors; rigid vs flexible
+- **Active sub-task: union ctor application (CA-1 landed, CA-2 next).**
+  PLAN_GU.md §6 GU-S3 acceptance items for this sub-task: `Just 42 :
+  Maybe Int` typechecks, two `Just 42` / `Just "hi"` call sites in the
+  same module type-check independently, arity / type mismatches
+  surface through the existing function-call diagnostic path. Three
+  Codex plan-review rounds (2026-05-11) exposed five design holes
+  (Call arm ignores call-site unify; `are_compatible` doesn't bind
+  `Ty::Var`; `next_id=0` collides for nested ctors; rigid vs flexible
   `Ty::Var` indistinguishable; `next_id` seed needs locals+globals
-  walk). The sub-task is now split into **4 commits**:
+  walk). The sub-task is split into **4 commits**:
 
-  - **CA-1**: Rewrite `typecheck_check.rs::infer_expr_ty` `Expr::Call`
-    arm to use call-site unify via a new `pub(crate)` entry in
-    `typecheck_call.rs`. General precision improvement; no ctor
-    registration change.
+  - **CA-1** ✅ landed: Rewrite `typecheck_check.rs::infer_expr_ty`
+    `Expr::Call` arm to use call-site unify via the new `pub(crate) fn
+    infer_call_result_ty` entry in `typecheck_call.rs`. Includes a
+    temporary `erase_fresh_type_vars_to_unknown` compatibility step
+    (preserves the old curry-chain `Ty::Unknown` escape until CA-2 /
+    CA-3b land flexible-`__goby_fresh_ty_*` annotation unification).
+    Two pre-existing tests (`no_sugar_for_multi_field_constructor`,
+    `typechecks_int_to_string_as_named_map_callback`) were rewritten
+    against the now-precise call-site behaviour. General precision
+    improvement; no ctor registration change.
   - **CA-2**: Add a `unifies_with_annotation` helper that binds
     only flexible (`__goby_fresh_ty_*` prefix) `Ty::Var`, leaves
     rigid `a` rigid. Swap `typecheck_stmt.rs` return-type comparison

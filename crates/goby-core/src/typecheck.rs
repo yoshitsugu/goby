@@ -1934,12 +1934,22 @@ main =
 
     #[test]
     fn typechecks_int_to_string_as_named_map_callback() {
+        // GU-S3 CA-1: the original form `print (map xs i.to_string)` was a
+        // latent false positive — `map`'s return `List b` was silently
+        // demoted to `Ty::Unknown` through the old curry-chain unwrap, and
+        // the `print : String -> ...` argument check skipped the resulting
+        // `List String` / `String` mismatch. With call-site unify the
+        // mismatch is visible. Pin what the test name actually claims:
+        // `i.to_string` is usable as a named callback to `map`, producing
+        // a `List String` that the declared return type accepts.
         let source = "\
 import goby/int as i
 import goby/list ( map )
+strings : List Int -> List String
+strings xs = map xs i.to_string
 main : Unit -> Unit
 main =
-  print (map [1, 20, -3] i.to_string)
+  ys = strings [1, 20, -3]
 ";
         let module = parse_module(source).expect("should parse");
         typecheck_module(&module).expect("int.to_string should typecheck as named map callback");
@@ -4367,9 +4377,12 @@ main =
 
     #[test]
     fn no_sugar_for_multi_field_constructor() {
-        // `raise Pair("a")` when Pair has two fields should NOT be treated as RecordConstruct.
-        // It falls through to Expr::Call, type is Unknown → arg type check skipped → Ok.
-        // (No false positive: we do not fabricate an error for multi-field positional.)
+        // GU-S3 CA-1: `Pair("a")` against a 2-field record ctor is a partial
+        // application (`String -> Pair`), not a multi-field positional sugar.
+        // The pre-CA-1 implementation returned `Ty::Unknown` through a curry
+        // chain quirk and silently accepted the call; with call-site unify
+        // it now surfaces as a real argument-type mismatch at `op`. Pin the
+        // reject side so the latent partial-application escape stays closed.
         let source = "
 type Pair = Pair(first: String, second: String)
 
@@ -4385,8 +4398,17 @@ main =
     op Pair(\"a\")
 ";
         let module = parse_module(source).expect("should parse");
-        // Multi-field positional is not sugar — type is Unknown, no error expected.
-        typecheck_module(&module).expect("multi-field positional should not raise false error");
+        let err = typecheck_module(&module)
+            .expect_err("multi-field positional partial should be rejected by call-site unify");
+        // Codex pass-1: 将来 multi-field positional / partial constructor 専用
+        // 診断を入れる可能性があるため、現在の汎用 function-call 診断文言の
+        // 厳密一致は要求しない。reject されること + `Pair` がメッセージ
+        // に登場することだけ pin する。
+        assert!(
+            err.message.contains("Pair"),
+            "unexpected message: {}",
+            err.message
+        );
     }
 
     #[test]
