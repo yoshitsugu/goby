@@ -185,15 +185,11 @@ pub(crate) fn infer_expr_binding_ty(expr: &Expr, env: &TypeEnv) -> Ty {
 ///
 /// CA-3a: caller (`infer_expr_ty`) が保持する `next_id` を共有する形に
 /// 変更。これにより call resolver が起こした fresh 名と `infer_expr_ty`
-/// 他の経路で生まれる fresh 名が干渉しない (= 後続 CA-3b で nested
-/// ctor が独立した fresh スコープを持つ前提)。
-///
-/// **CA-1 互換措置**: `resolve_function_value_ty` の結果に `__goby_fresh_ty_*`
-/// prefix の `Ty::Var` が残った場合、それを `Ty::Unknown` に潰す。これは旧
-/// `check_expr(Call)` arm (`Ty::Fun { result, .. } => *result, _ => Ty::Unknown`)
-/// が、curry chain の途中で `Ty::Fun.result` が `Ty::Var` に潰れた瞬間以降の
-/// call result を `Ty::Unknown` で処理していた挙動と等価。CA-3b で削除する
-/// 予定。
+/// 他の経路で生まれる fresh 名が干渉しない。CA-3b で Var/Qualified arm が
+/// ctor を `freshen_type_scheme` で freshen するようになり、本関数の
+/// 戻り値に `__goby_fresh_ty_*` を含む `Ty::Fun`/`Ty::Con` がそのまま
+/// 残るのが正常経路 (`unifies_with_annotation` が flexible 変数として
+/// bind する前提)。
 pub(crate) fn infer_call_result_ty(expr: &Expr, env: &TypeEnv, next_id: &mut usize) -> Ty {
     // Codex pass-1 指摘: ordinary な call chain でない call (e.g. `(if c then f
     // else g) 1`、`(blk) 1` のように callee が `Var`/`Qualified`/`Lambda` に
@@ -204,37 +200,7 @@ pub(crate) fn infer_call_result_ty(expr: &Expr, env: &TypeEnv, next_id: &mut usi
     if ordinary_call_target_and_args(expr).is_none() {
         return Ty::Unknown;
     }
-    let ty = resolve_function_value_ty(expr, env, next_id);
-    erase_fresh_type_vars_to_unknown(&ty)
-}
-
-/// CA-1 互換措置 (上記 rustdoc 参照)。`__goby_fresh_ty_*` prefix の `Ty::Var` を
-/// `Ty::Unknown` に潰す純粋関数。`Ty::Fun` / `Ty::Con` / `Ty::List` / `Ty::Tuple`
-/// の中も再帰的に走査する。`__goby_fresh_row_*` は effect row のもので、
-/// `Ty::Var` 経路では現れないため対象外。
-fn erase_fresh_type_vars_to_unknown(ty: &Ty) -> Ty {
-    match ty {
-        Ty::Var(name) if name.starts_with("__goby_fresh_ty_") => Ty::Unknown,
-        Ty::List(inner) => Ty::List(Box::new(erase_fresh_type_vars_to_unknown(inner))),
-        Ty::Tuple(items) => Ty::Tuple(items.iter().map(erase_fresh_type_vars_to_unknown).collect()),
-        Ty::Fun {
-            params,
-            result,
-            effects,
-        } => Ty::Fun {
-            params: params
-                .iter()
-                .map(erase_fresh_type_vars_to_unknown)
-                .collect(),
-            result: Box::new(erase_fresh_type_vars_to_unknown(result)),
-            effects: effects.clone(),
-        },
-        Ty::Con { name, args } => Ty::Con {
-            name: name.clone(),
-            args: args.iter().map(erase_fresh_type_vars_to_unknown).collect(),
-        },
-        _ => ty.clone(),
-    }
+    resolve_function_value_ty(expr, env, next_id)
 }
 
 fn check_ordinary_call_arg_types_in_stmt(

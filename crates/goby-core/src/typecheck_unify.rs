@@ -583,6 +583,19 @@ pub(crate) fn instantiate_ty_with_fresh_type_vars(
 ) -> Ty {
     match ty {
         Ty::Var(name) => {
+            // GU-S3 CA-3b: idempotent 化。Var の name が既に
+            // `__goby_fresh_ty_*` prefix を持つなら "already-freshened" と
+            // 見なしてそのまま返す。これは Var/Qualified arm で ctor を
+            // 一度 freshen した後、call resolver の
+            // `instantiate_ty_with_fresh_type_vars_for_call_site` がさらに
+            // freshen しようとすると二重 freshen で `__goby_fresh_ty_N` が
+            // 別の `__goby_fresh_ty_M` に書き換わり、subst の不変条件が
+            // 崩れるのを防ぐため。`freshen_type_scheme` の
+            // "declaration-side templates 用" コントラクトとも整合する
+            // (prefix 付き名は既に declaration scope を抜けている)。
+            if is_flexible_fresh_ty_var(name) {
+                return Ty::Var(name.clone());
+            }
             let fresh = ty_mapping.entry(name.clone()).or_insert_with(|| {
                 let id = *next_id;
                 *next_id += 1;

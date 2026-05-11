@@ -9,8 +9,8 @@ use crate::{
     typecheck_annotation::strip_effect_clause,
     typecheck_diag::err_name_ambiguous,
     typecheck_env::{
-        EffectRow, GlobalBinding, ImportedEffectDecl, RecordTypeInfo, Ty, TypeEnv, UnionTypeInfo,
-        UnionVariantInfo,
+        CTOR_SOURCE_PREFIX, CTOR_SOURCE_SUFFIX, EffectRow, GlobalBinding, ImportedEffectDecl,
+        RecordTypeInfo, Ty, TypeEnv, UnionTypeInfo, UnionVariantInfo,
     },
     typecheck_types::{ty_from_annotation, ty_from_type_expr},
     typecheck_validate::{
@@ -18,6 +18,14 @@ use crate::{
     },
     types::parse_type_expr,
 };
+
+/// GU-S3 CA-3b: render the `source` field of a ctor `GlobalBinding`. The
+/// detector `TypeEnv::is_ctor_binding` matches on the same
+/// `CTOR_SOURCE_PREFIX` / `CTOR_SOURCE_SUFFIX` constants, so updates to the
+/// rendering must go through this helper to keep both sides in sync.
+fn ctor_source(type_name: &str) -> String {
+    format!("{}{}{}", CTOR_SOURCE_PREFIX, type_name, CTOR_SOURCE_SUFFIX)
+}
 
 pub(crate) fn build_type_env(module: &Module, stdlib_root: &Path) -> TypeEnv {
     let mut globals = HashMap::new();
@@ -324,7 +332,6 @@ pub(crate) fn inject_type_constructors(
                 type_params,
                 variants,
             } => {
-                let is_generic = !type_params.is_empty();
                 let result_template = union_or_record_result_template(name, type_params);
                 let mut variant_infos = Vec::with_capacity(variants.len());
                 for (idx, variant) in variants.iter().enumerate() {
@@ -333,18 +340,15 @@ pub(crate) fn inject_type_constructors(
                         .iter()
                         .map(|annotation| ty_from_annotation(annotation))
                         .collect();
-                    // Generic union constructors carry `Ty::Var(...)`
-                    // templates that must be freshened per use site.
-                    // Until the freshening helper lands, register
-                    // generic constructors as `Ty::Unknown` to avoid the
-                    // unfreshened template leaking into unification
-                    // (which would reject e.g. `Just 42` against an
-                    // expected `Maybe Int`). Non-generic
-                    // unions are unaffected and keep the previous
-                    // direct-`Ty::Con` / `Ty::Fun` shapes.
-                    let ctor_ty = if is_generic {
-                        Ty::Unknown
-                    } else if arg_types.is_empty() {
+                    // GU-S3 CA-3b: previously, generic union ctors were
+                    // registered as `Ty::Unknown` to avoid the unfreshened
+                    // `Ty::Var` template leaking into unification. Now that
+                    // `infer_expr_ty` Var/Qualified arms freshen ctor lookups
+                    // through `freshen_type_scheme`, register the real
+                    // template directly. Non-generic ctors are unaffected
+                    // (`Ty::Con` for nullary, `Ty::Fun { params, result }`
+                    // for arg-bearing).
+                    let ctor_ty = if arg_types.is_empty() {
                         result_template.clone()
                     } else {
                         Ty::Fun {
@@ -357,13 +361,13 @@ pub(crate) fn inject_type_constructors(
                         globals,
                         variant.ctor.clone(),
                         ctor_ty.clone(),
-                        format!("type `{}` constructor", name),
+                        ctor_source(name),
                     );
                     insert_global_symbol(
                         globals,
                         format!("{}.{}", name, variant.ctor),
                         ctor_ty,
-                        format!("type `{}` constructor", name),
+                        ctor_source(name),
                     );
                     variant_infos.push(UnionVariantInfo {
                         ctor: variant.ctor.clone(),
@@ -415,13 +419,13 @@ pub(crate) fn inject_type_constructors(
                     globals,
                     constructor.clone(),
                     ctor_ty.clone(),
-                    format!("type `{}` constructor", name),
+                    ctor_source(name),
                 );
                 insert_global_symbol(
                     globals,
                     format!("{}.{}", name, constructor),
                     ctor_ty,
-                    format!("type `{}` constructor", name),
+                    ctor_source(name),
                 );
                 record_types.insert(
                     constructor.clone(),

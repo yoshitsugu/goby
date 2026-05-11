@@ -1,6 +1,6 @@
 # Goby Project State Snapshot
 
-Last updated: 2026-05-11 (Track GU-S3 union ctor application sub-tasks CA-1 + CA-2 + CA-3a landed; `infer_expr_ty` now threads `next_id` through call resolver / lambda body / case arms via the new `typecheck_unify::next_fresh_ty_id_seed`. CA-3b pending).
+Last updated: 2026-05-11 (Track GU-S3 union ctor application 4-commit split CA-1/CA-2/CA-3a/CA-3b complete; `Just 42 : Maybe Int`, `Nothing : Maybe Int`, `Pair 1 "x" : Pair Int String`, `Maybe.Just 42`, and nested `Just Nothing : Maybe (Maybe Int)` all type-check. Two independent `Just` call sites in the same module type-check independently as required by PLAN_GU §6 GU-S3. Next sub-task: constructor-pattern type checking with binder inference).
 
 ## Current Focus
 
@@ -81,6 +81,28 @@ commit `df57c32`):
 - `cargo nextest run -p goby-wasm`: not re-run for CA-3a — pure
   plumbing.
 
+**All-green (post GU-S3 CA-3b union ctor application, 2026-05-11)**:
+
+- `cargo test -p goby-core --lib`: 975 passed / 2 ignored (up from
+  964; 11 new `typecheck_check::tests` acceptance + regression pins
+  for generic union ctor application — `Just 42 : Maybe Int`,
+  `Nothing : Maybe Int`, two independent `Just` call sites in one
+  module, nested `Just Nothing : Maybe (Maybe Int)`, two-parameter
+  `Pair 1 "x" : Pair Int String`, qualified `Maybe.Just 42`,
+  qualified nullary `Maybe.Nothing`, non-generic regression x2
+  (`Red : Color`, `Box 42 : Box`), wrong-arg-type reject, and a
+  documenting test for the pre-existing wrong-arity silent-pass
+  behaviour). CA-1's `erase_fresh_type_vars_to_unknown`
+  compatibility step is removed in the same commit; CA-2
+  `unifies_with_annotation` + CA-3a `next_id` plumbing make it
+  unnecessary.
+- `cargo test -p goby-lsp`: 56 passed.
+- `cargo check --workspace`: warning-free.
+- `cargo nextest run -p goby-wasm -E 'not test(fold_m5_string_accumulator)'`:
+  875 passed / 12 skipped — the generic ctor registration change
+  reaches the wasm backend boundary (`UnsupportedCasePattern` /
+  `LowerError::UnsupportedForm` paths are untouched), no regression.
+
 Red / ignored:
 
 - Pre-existing `#[ignore]`d perceus / compile_tests entries (see
@@ -104,7 +126,7 @@ Red / ignored:
   checking, generic-record ctor application, generic-record field
   access, cross-module imports of generic types) route through.
 
-- **Active sub-task: union ctor application (CA-1/CA-2/CA-3a landed, CA-3b next).**
+- **Active sub-task: union ctor application ✅ DONE (CA-1/CA-2/CA-3a/CA-3b all landed 2026-05-11).** Next active sub-task per PLAN_GU §6 GU-S3 is constructor-pattern type checking with binder inference.
   PLAN_GU.md §6 GU-S3 acceptance items for this sub-task: `Just 42 :
   Maybe Int` typechecks, two `Just 42` / `Just "hi"` call sites in the
   same module type-check independently, arity / type mismatches
@@ -148,6 +170,27 @@ Red / ignored:
     `infer_call_effects_at_site`, and `infer_expr_binding_ty` were
     migrated. Pure plumbing, behaviour unchanged (existing 962 tests
     still pass).
+  - **CA-3b** ✅ landed: `inject_type_constructors` no longer maps
+    generic union ctors to `Ty::Unknown`; the real `Ty::Fun { params:
+    arg_types, result: result_template }` template (or the bare
+    `result_template` for nullary ctors) is registered, exactly like
+    the non-generic case. `typecheck_check.rs::infer_expr_ty` Var
+    and Qualified arms route ctor lookups through a new
+    `lookup_and_maybe_freshen_ctor` helper, which calls
+    `freshen_type_scheme(&[ty], next_id)` only when
+    `is_ctor_binding(name)` is true *and* the template still contains
+    a `Ty::Var` (so non-generic ctors stay no-op). To prevent the
+    call-site resolver from re-freshening the already-freshened
+    template, `instantiate_ty_with_fresh_type_vars`'s `Ty::Var(name)`
+    arm becomes idempotent on the `__goby_fresh_ty_` prefix.
+    `TypeEnv::is_ctor_binding(name)` detects ctor sources via shared
+    constants `CTOR_SOURCE_PREFIX` / `CTOR_SOURCE_SUFFIX` (used by
+    both `typecheck_build::ctor_source` and the detector), preserving
+    the locals-shadowing-wins behaviour modeled on `is_effect_op`.
+    CA-1's `erase_fresh_type_vars_to_unknown` compatibility step is
+    removed — `unifies_with_annotation` (CA-2) and shared `next_id`
+    (CA-3a) make leaked fresh names bind correctly at annotation
+    sites.
   - **CA-2**: Add a `unifies_with_annotation` helper that binds
     only flexible (`__goby_fresh_ty_*` prefix) `Ty::Var`, leaves
     rigid `a` rigid. Swap `typecheck_stmt.rs` return-type comparison
@@ -238,18 +281,21 @@ Red / ignored:
      returns `1 + child` for both arms to match. Two unit tests in
      `gen_lower::emit::tests` pin the spill-count contract.
 
-- **Track GU-S3 sub-task ordering (post D-6).** D-6
-  `freshen_type_scheme` extraction is complete; **union ctor
-  application** is the in-flight sub-task (split into CA-1/CA-2/
-  CA-3a/CA-3b, see above; planning complete, implementation
-  pending). Queued after union ctor application: constructor-
-  pattern type-check with binder inference, generic-record ctor
-  application, generic-record field access (including PC-shaped
-  function-typed fields with effect rows), constructor-name
-  ambiguity resolution (qualified > scrutinee-pinned >
-  local-shadows-imported > ambiguity diagnostic), cross-module
-  imports of generic unions and records. See `doc/PLAN_GU.md` §6
-  GU-S3 for the deliverable list.
+- **Track GU-S3 sub-task ordering (post union ctor application).** D-6
+  `freshen_type_scheme` extraction and **union ctor application**
+  (CA-1/CA-2/CA-3a/CA-3b) are both complete (2026-05-11). The
+  remaining queued sub-tasks, in the order they will be picked up:
+  constructor-pattern type-check with binder inference, generic-record
+  ctor application, generic-record field access (including PC-shaped
+  function-typed fields with effect rows), constructor-name ambiguity
+  resolution (qualified > scrutinee-pinned > local-shadows-imported >
+  ambiguity diagnostic), cross-module imports of generic unions and
+  records. See `doc/PLAN_GU.md` §6 GU-S3 for the deliverable list.
+  Deferred CA-3b follow-ups (tracked in
+  `progress-log.md`): Pipeline (`42 |> Just`) / MethodCall ctor
+  lookup, ctor-as-value (`map xs Just`), expected-type-driven bare
+  ctor disambiguation, generic ctor arity / wrong-arg diagnostic
+  wording (currently silent-passes on extra args).
 
 **Queued behind GU:**
 

@@ -144,6 +144,16 @@ pub(crate) enum GlobalBinding {
     Ambiguous { sources: Vec<String> },
 }
 
+/// GU-S3 CA-3b: shared constants tying constructor-binding `source` strings
+/// in `typecheck_build` to the `is_ctor_binding` detector in `TypeEnv`.
+/// A constructor binding's `source` is rendered as
+/// `format!("{}{}{}", CTOR_SOURCE_PREFIX, type_name, CTOR_SOURCE_SUFFIX)`,
+/// e.g. `` "type `Maybe` constructor" ``. The detector matches by
+/// `starts_with(PREFIX) && ends_with(SUFFIX)` so both sides stay in sync
+/// through these constants and the test suite pins the wiring.
+pub(crate) const CTOR_SOURCE_PREFIX: &str = "type `";
+pub(crate) const CTOR_SOURCE_SUFFIX: &str = "` constructor";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RecordTypeInfo {
     pub(crate) type_name: String,
@@ -238,6 +248,32 @@ impl TypeEnv {
             .values()
             .find(|info| info.type_name == type_name)
             .and_then(|info| info.fields.get(field).cloned())
+    }
+
+    /// GU-S3 CA-3b: returns true when the global `name` is bound to a type
+    /// constructor (union variant ctor or record constructor) registered via
+    /// `typecheck_build::inject_type_constructors`. The detector matches the
+    /// `source` shape `format!("{PREFIX}{type_name}{SUFFIX}")` rendered by
+    /// `insert_global_symbol`; both sides share `CTOR_SOURCE_PREFIX` /
+    /// `CTOR_SOURCE_SUFFIX` to avoid drifting string literals.
+    ///
+    /// Locals shadowing the same name are treated as non-ctor (the local
+    /// binding wins for lookup purposes, mirroring `is_effect_op`).
+    /// `Ambiguous` entries are only ctors when **every** source matches the
+    /// prefix/suffix, so a constructor name shadowing an imported value
+    /// stays non-ctor.
+    pub(crate) fn is_ctor_binding(&self, name: &str) -> bool {
+        if self.locals.contains_key(name) {
+            return false;
+        }
+        let is_ctor_source = |source: &str| -> bool {
+            source.starts_with(CTOR_SOURCE_PREFIX) && source.ends_with(CTOR_SOURCE_SUFFIX)
+        };
+        match self.globals.get(name) {
+            Some(GlobalBinding::Resolved { source, .. }) => is_ctor_source(source),
+            Some(GlobalBinding::Ambiguous { sources }) => sources.iter().all(|s| is_ctor_source(s)),
+            None => false,
+        }
     }
 
     pub(crate) fn is_effect_op(&self, name: &str) -> bool {

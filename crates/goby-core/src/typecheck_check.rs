@@ -57,7 +57,7 @@ pub(crate) fn infer_expr_ty(expr: &Expr, env: &TypeEnv, next_id: &mut usize) -> 
                 .collect();
             Ty::Tuple(tys)
         }
-        Expr::Var { name, .. } => env.lookup(name),
+        Expr::Var { name, .. } => lookup_and_maybe_freshen_ctor(env, name, next_id),
         Expr::Qualified {
             receiver, member, ..
         } => {
@@ -76,7 +76,8 @@ pub(crate) fn infer_expr_ty(expr: &Expr, env: &TypeEnv, next_id: &mut usize) -> 
                     return env.resolve_alias(&field_ty, 0);
                 }
             }
-            env.lookup(&format!("{}.{}", receiver, member))
+            let qualified = format!("{}.{}", receiver, member);
+            lookup_and_maybe_freshen_ctor(env, &qualified, next_id)
         }
         Expr::RecordConstruct {
             constructor,
@@ -238,6 +239,35 @@ pub(crate) fn infer_expr_ty(expr: &Expr, env: &TypeEnv, next_id: &mut usize) -> 
             }
         }
     }
+}
+
+/// GU-S3 CA-3b: ctor lookup を `freshen_type_scheme` で 1 回 freshen する。
+///
+/// non-generic ctor (例: `Red`, `Box`) は `ty_contains_type_var` が false の
+/// ため freshen は no-op、戻り値は lookup そのもの。generic ctor (例: `Just`,
+/// `Nothing` for `Maybe a`) は declaration-side `Ty::Var(a)` 等を含む
+/// `Ty::Fun { params, result }` または `Ty::Con { name, args }` で登録
+/// されているので、各 use site で fresh な `__goby_fresh_ty_N` に置換される。
+///
+/// 二重 freshen 回避は `instantiate_ty_with_fresh_type_vars` の Var arm で
+/// idempotent 化 (CA-3b 同コミット): prefix 一致の Var は no-op で返るので、
+/// 後続の call resolver `instantiate_ty_with_fresh_type_vars_for_call_site`
+/// が同じ Var を再度 freshen しようとしても影響しない。
+///
+/// locals shadowing は `is_ctor_binding` が `locals.contains_key(name)` で
+/// 先に false を返すため、ローカル束縛で同名 binding がある場合は freshen
+/// しない (= 通常の `env.lookup(name)`)。
+fn lookup_and_maybe_freshen_ctor(env: &TypeEnv, name: &str, next_id: &mut usize) -> Ty {
+    let ty = env.lookup(name);
+    if !env.is_ctor_binding(name) {
+        return ty;
+    }
+    if !crate::typecheck_unify::ty_contains_type_var(&ty) {
+        return ty;
+    }
+    crate::typecheck_unify::freshen_type_scheme(&[ty], next_id)
+        .pop()
+        .expect("freshen_type_scheme always returns one ty per template")
 }
 
 fn is_equality_comparable(env: &TypeEnv, left: &Ty, right: &Ty) -> bool {
@@ -1073,5 +1103,171 @@ main =
             span: None,
         };
         assert_eq!(check_expr(&expr, &env), Ty::Unknown);
+    }
+
+    // ---- GU-S3 CA-3b: generic union ctor application を pin ----
+
+    #[test]
+    fn typechecks_generic_union_ctor_just_int_against_maybe_int() {
+        // GU-S3 CA-3b acceptance: `Just 42 : Maybe Int` が typecheck される。
+        let source = "\
+type Maybe a = Just(a) | Nothing
+v : Maybe Int
+v = Just 42
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("`Just 42 : Maybe Int` should typecheck");
+    }
+
+    #[test]
+    fn typechecks_generic_union_nullary_ctor_against_maybe_int() {
+        // GU-S3 CA-3b acceptance: `Nothing : Maybe Int` が typecheck される。
+        // Nothing は nullary なので Var arm の freshen が `Ty::Con { name:
+        // "Maybe", args: [__goby_fresh_ty_0] }` を返し、`Maybe Int` 注釈
+        // との `unifies_with_annotation` で `Int` に bind される。
+        let source = "\
+type Maybe a = Just(a) | Nothing
+v : Maybe Int
+v = Nothing
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("`Nothing : Maybe Int` should typecheck");
+    }
+
+    #[test]
+    fn typechecks_two_independent_just_call_sites_in_same_module() {
+        // GU-S3 CA-3b 必須要件 (Codex pass-3): `Just 1 : Maybe Int` と
+        // `Just "x" : Maybe String` を同一モジュール内で独立に typecheck。
+        // 各 call site で `freshen_type_scheme` が異なる `__goby_fresh_ty_N`
+        // を取り、互いの bind が干渉しない。
+        let source = "\
+type Maybe a = Just(a) | Nothing
+ints : Maybe Int
+ints = Just 1
+strs : Maybe String
+strs = Just \"x\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("two `Just` call sites should typecheck independently");
+    }
+
+    #[test]
+    fn typechecks_nested_generic_union_ctor_just_nothing() {
+        // GU-S3 CA-3b acceptance: `Just Nothing : Maybe (Maybe Int)`。
+        // ネストした ctor 適用で内側 `Nothing` と外側 `Just` がそれぞれ別
+        // scope の fresh 名を取る。
+        let source = "\
+type Maybe a = Just(a) | Nothing
+v : Maybe (Maybe Int)
+v = Just Nothing
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("`Just Nothing : Maybe (Maybe Int)` should typecheck");
+    }
+
+    #[test]
+    fn typechecks_generic_union_with_two_type_parameters() {
+        // GU-S3 CA-3b acceptance: 多パラメータ template (`Pair Int String`)。
+        let source = "\
+type Pair a b = Pair(a, b)
+v : Pair Int String
+v = Pair 1 \"x\"
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("`Pair 1 \"x\" : Pair Int String` should typecheck");
+    }
+
+    #[test]
+    fn typechecks_qualified_generic_union_ctor() {
+        // GU-S3 CA-3b: `Maybe.Just 42 : Maybe Int` (Qualified arm)。
+        let source = "\
+type Maybe a = Just(a) | Nothing
+v : Maybe Int
+v = Maybe.Just 42
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("`Maybe.Just 42 : Maybe Int` should typecheck");
+    }
+
+    #[test]
+    fn typechecks_qualified_generic_union_nullary_ctor() {
+        // GU-S3 CA-3b: `Maybe.Nothing : Maybe Int` (Qualified arm, nullary)。
+        let source = "\
+type Maybe a = Just(a) | Nothing
+v : Maybe Int
+v = Maybe.Nothing
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("`Maybe.Nothing : Maybe Int` should typecheck");
+    }
+
+    #[test]
+    fn non_generic_union_ctor_still_typechecks_as_before() {
+        // GU-S3 CA-3b regression: non-generic union ctor は freshen 経路を
+        // 通らず (ty_contains_type_var が false)、挙動完全不変。
+        let source = "\
+type Color = Red | Blue
+v : Color
+v = Red
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("non-generic ctor `Red : Color` should still typecheck");
+    }
+
+    #[test]
+    fn non_generic_arg_bearing_union_ctor_still_typechecks_as_before() {
+        // GU-S3 CA-3b regression: arg-bearing non-generic ctor も挙動不変。
+        let source = "\
+type Box = Box(Int)
+v : Box
+v = Box 42
+";
+        let module = parse_module(source).expect("should parse");
+        typecheck_module(&module).expect("`Box 42 : Box` should still typecheck");
+    }
+
+    #[test]
+    fn rejects_generic_union_ctor_with_wrong_arg_type() {
+        // GU-S3 CA-3b 必須要件 (Codex pass-3): generic ctor の wrong-type
+        // が reject される。文言の厳密一致は要求しない (CA-1 と同じく汎用
+        // function-call 診断を再利用)。
+        let source = "\
+type Maybe a = Just(a) | Nothing
+v : Maybe Int
+v = Just \"oops\"
+";
+        let module = parse_module(source).expect("should parse");
+        let err = typecheck_module(&module)
+            .expect_err("`Just \"oops\" : Maybe Int` should be rejected by call-site unify");
+        // CA-3b 時点では具体的な reject 経路 (validate_call_chain のような
+        // call validator が拾うか、return-type unification が拾うか) は
+        // 実装の都合で揺れる。reject されることだけを pin。
+        assert!(
+            !err.message.is_empty(),
+            "should produce a non-empty error message"
+        );
+    }
+
+    #[test]
+    fn generic_union_ctor_extra_args_currently_pass_silently() {
+        // GU-S3 CA-3b deferred (Codex pass-3 で out-of-scope 化された
+        // "generic ctor の arity/wrong-arg diagnostic 文言改善")。`Just 1 2`
+        // のように params 数を超える引数を渡すと、`validate_call_chain` の
+        // `args.get(idx)` が `None` を返した時点で `Ok(())` で抜ける現状
+        // 挙動 (= silent pass) は GU-S3 以前からの既存挙動。本テストは
+        // CA-3b で挙動を変えていないことの regression pin。reject 化は
+        // 後続サブタスクで取り組む。
+        let source = "\
+type Maybe a = Just(a) | Nothing
+v : Maybe Int
+v = Just 1 2
+";
+        let module = parse_module(source).expect("should parse");
+        // 現状 silent pass する。CA-3b 後続で reject 化されたら本テストは
+        // 反転 (expect_err に書き換え) する。
+        typecheck_module(&module).expect(
+            "wrong-arity generic ctor application currently passes silently (pre-existing \
+             validator gap; reject is a deferred follow-up)",
+        );
     }
 }
